@@ -24,8 +24,10 @@ import {
   WRITE_CAPABILITIES
 } from '../shared/types.js';
 import type { SwarmState } from '../shared/session.js';
+import type { Locale } from '../shared/i18n/index.js';
 import { $, ago, el, icon, run, shortAgo, toast } from './dom.js';
 import { chatApply, chatSettingsPatch, chatVisible, initChat } from './chat.js';
+import { applyStaticTranslations } from './i18n.js';
 
 declare global {
   interface Window {
@@ -343,7 +345,7 @@ function toolsOn(next: AppState): number {
 let settingsSaveQueue: Promise<void> = Promise.resolve();
 let requestedSettings: SettingsPatch | null = null;
 
-function save(over: { readOnly?: boolean; theme?: 'light' | 'dark' } = {}): Promise<void> {
+function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; locale?: Locale } = {}): Promise<void> {
   if (applying || !state) return Promise.resolve();
 
   const previous: AppState['config'] = requestedSettings
@@ -374,7 +376,8 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark' } = {}): Prom
       autoConnect: $<HTMLInputElement>('autoConnect').checked,
       minimizeToTray: $<HTMLInputElement>('minimizeToTray').checked,
       privacyScreenshots: $<HTMLInputElement>('privacyScreenshots').checked,
-      theme: over.theme ?? previous.ui.theme
+      theme: over.theme ?? previous.ui.theme,
+      locale: over.locale ?? previous.ui.locale ?? 'en'
     },
     ...chatPatch
   };
@@ -669,6 +672,8 @@ function apply(next: AppState): void {
   // ---- theme
   const dark = config.ui.theme === 'dark';
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const locale: Locale = config.ui.locale === 'th' ? 'th' : 'en';
+  applyValue($<HTMLSelectElement>('localeSelect'), locale, previousState?.config.ui.locale ?? 'en');
   $('themeIcon').setAttribute('href', dark ? '#i-sun' : '#i-moon');
   $('themeBtn').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
 
@@ -876,6 +881,7 @@ function apply(next: AppState): void {
     : 'Recent activity only. File contents and credentials are never recorded.';
 
   chatApply(next, previousState?.config);
+  applyStaticTranslations(document, locale);
 
   applying = false;
 }
@@ -1295,6 +1301,13 @@ async function runChecks(): Promise<void> {
 $('runChecks').addEventListener('click', () => void runChecks());
 $('closeChecks').addEventListener('click', () => {
   $('checksBox').hidden = true;
+});
+
+$('localeSelect').addEventListener('change', () => {
+  if (!state) return;
+  const locale: Locale = $<HTMLSelectElement>('localeSelect').value === 'th' ? 'th' : 'en';
+  applyStaticTranslations(document, locale);
+  void save({ locale });
 });
 
 $('themeBtn').addEventListener('click', () => {

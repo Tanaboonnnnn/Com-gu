@@ -30,6 +30,7 @@ import {
   MAX_GOAL_SYSTEM_PROMPT_CHARS
 } from '../shared/goal.js';
 import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
+import { t, type MessageKey } from '../shared/i18n/index.js';
 import { $, ago, clockTime, compactNumber, el, icon, run, toast } from './dom.js';
 
 const api = window.api;
@@ -86,6 +87,11 @@ interface Deps {
 
 let deps: Deps;
 let visible = false;
+
+function tr(key: MessageKey, values?: Record<string, string | number>): string {
+  const locale = (deps?.state() as Partial<AppState> | null | undefined)?.config?.ui?.locale === 'th' ? 'th' : 'en';
+  return t(locale, key, values);
+}
 
 let sessions: SessionSummary[] = [];
 let pressure = new Map<string, TokenPressure>();
@@ -188,18 +194,17 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   if (summary.id === activeId && summary.endedAt === null) row.classList.add('is-live');
 
   const top = el('div', 'sess-top');
-  const title = el('b', '', summary.title || 'Untitled session');
+  const title = el('b', '', summary.title || tr('sessions.untitled'));
   title.title = summary.title;
   const when = el('em', '', ago(summary.updatedAt));
   top.append(title, when);
 
   const bits: string[] = [
-    `${summary.userMessages} message${summary.userMessages === 1 ? '' : 's'}`,
-    `${summary.toolCalls} tool${summary.toolCalls === 1 ? '' : 's'}`
+    tr('sessions.messageCount', { count: summary.userMessages }),
+    tr('sessions.toolCount', { count: summary.toolCalls })
   ];
-  if (summary.errors > 0) bits.push(`${summary.errors} error${summary.errors === 1 ? '' : 's'}`);
-  if (summary.agents.length > 0)
-    bits.push(`${summary.agents.length} agent${summary.agents.length === 1 ? '' : 's'}`);
+  if (summary.errors > 0) bits.push(tr('sessions.errorCount', { count: summary.errors }));
+  if (summary.agents.length > 0) bits.push(tr('sessions.agentCount', { count: summary.agents.length }));
   const sub = el('div', 'sess-sub');
   for (const badge of sessionBadges(summary)) {
     sub.append(el('span', `chip${badge.tone ? ` ${badge.tone}` : ''}`, badge.text));
@@ -217,7 +222,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   const remove = document.createElement('button');
   remove.className = 'btn sess-del';
   remove.type = 'button';
-  remove.title = 'Delete this recorded session';
+  remove.title = tr('sessions.deleteTitle');
   remove.append(icon('i-trash'));
   remove.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -245,7 +250,7 @@ async function deleteSession(id: string): Promise<void> {
     detailLoadGeneration++;
     handoffLoadGeneration++;
   }
-  toast('Session deleted');
+  toast(tr('sessions.deleted'));
   await loadSessions();
 }
 
@@ -565,9 +570,9 @@ function toolBody(event: Extract<SessionEvent, { kind: 'tool_call' }>): HTMLElem
     raw.append(changes);
   }
 
-  raw.append(el('h4', '', 'Arguments'));
+  raw.append(el('h4', '', tr('chat.arguments')));
   raw.append(textBlock('pre', call.args.text, call.args.truncated, call.args.chars));
-  raw.append(el('h4', '', 'Result'));
+  raw.append(el('h4', '', tr('chat.result')));
   raw.append(textBlock('pre', call.result.text, call.result.truncated, call.result.chars));
 
   for (const asset of call.assets ?? []) {
@@ -584,7 +589,7 @@ function eventBody(event: SessionEvent): HTMLElement {
       return el('p', 'meta', `Session started — ${event.title}`);
     case 'user_message': {
       const box = el('div', 'said is-user');
-      box.append(el('b', '', 'You'));
+      box.append(el('b', '', tr('chat.you')));
       box.append(textBlock('msg', event.message.text, event.message.truncated, event.message.chars));
       return box;
     }
@@ -602,7 +607,7 @@ function eventBody(event: SessionEvent): HTMLElement {
       return line;
     }
     case 'turn_start':
-      return el('p', 'meta', 'Turn started');
+      return el('p', 'meta', tr('chat.turnStarted'));
     case 'turn_end': {
       const line = el(
         'p',
@@ -643,7 +648,7 @@ function eventBody(event: SessionEvent): HTMLElement {
         `Handoff saved — ${compactNumber(event.chars)} characters (${event.reason})`
       );
     default:
-      return el('p', 'meta', 'Unknown event');
+      return el('p', 'meta', tr('chat.unknownEvent'));
   }
 }
 
@@ -697,7 +702,7 @@ function paintAgentFilter(): void {
   };
   buttons.push(chip(null, 'All'));
   for (const agent of named) buttons.push(chip(agent, agent));
-  if (anyUnattributed) buttons.push(chip(UNATTRIBUTED, 'Unattributed'));
+  if (anyUnattributed) buttons.push(chip(UNATTRIBUTED, tr('chat.unattributed')));
   box.replaceChildren(...buttons);
   box.hidden = false;
 }
@@ -750,7 +755,7 @@ function boundedTimeline(source: SessionEvent[]): { shown: SessionEvent[]; omitt
 
 function paintDetail(): void {
   const summary = sessions.find((s) => s.id === selectedId) ?? null;
-  $('chatTitle').textContent = summary ? summary.title || 'Untitled session' : 'No session selected';
+  $('chatTitle').textContent = summary ? summary.title || tr('sessions.untitled') : tr('sessions.noneSelected');
 
   paintAgentFilter();
   const filtered = visibleEvents();
@@ -937,7 +942,7 @@ function paintSwarm(state: SwarmState): void {
         'hint',
         state.retainedHistory
           ? 'No workers are running. Reusable worker histories are parked and remain available to their prime chats; Clear swarm permanently removes them.'
-          : 'No agents. The prime agent creates workers with the agents tool’s spawn action.'
+          : tr('agents.none')
       )
     );
   } else {
@@ -1076,14 +1081,14 @@ async function loadGoalModels(reset: boolean): Promise<void> {
     goalModels = [];
     goalTotal = 0;
   }
-  $('goalModelsState').textContent = 'Loading models from OpenRouter…';
+  $('goalModelsState').textContent = tr('goal.loadingModels');
   $<HTMLButtonElement>('goalMore').disabled = true;
   const page = await run(api.listGoalModels(goalModels.length));
   goalLoading = false;
   if (!page) {
     // `run` has already shown the reason. Say what it means *here*: the list is empty and
     // the model in use has not changed.
-    $('goalModelsState').textContent = 'OpenRouter could not be reached. The model in use is unchanged.';
+    $('goalModelsState').textContent = tr('goal.openrouterUnavailable');
     $<HTMLButtonElement>('goalMore').disabled = goalModels.length === 0;
     return;
   }
@@ -1209,7 +1214,7 @@ function wireGoal(save: () => Promise<void>): void {
   $('goalPromptReset').addEventListener('click', async () => {
     $<HTMLTextAreaElement>('goalPrompt').value = DEFAULT_GOAL_SYSTEM_PROMPT;
     await save();
-    toast('Goal prompt restored to default');
+    toast(tr('goal.promptRestored'));
   });
   $<HTMLTextAreaElement>('goalObjectivePrompt').maxLength = MAX_GOAL_SYSTEM_PROMPT_CHARS;
   $('goalObjectivePromptEdit').addEventListener('click', () => {
@@ -1221,7 +1226,7 @@ function wireGoal(save: () => Promise<void>): void {
   $('goalObjectivePromptReset').addEventListener('click', async () => {
     $<HTMLTextAreaElement>('goalObjectivePrompt').value = DEFAULT_GOAL_OBJECTIVE_SYSTEM_PROMPT;
     await save();
-    toast('Goal driver prompt restored to default');
+    toast(tr('goal.driverRestored'));
   });
   // The catalogue is fetched on the first press and kept afterwards: the picker closing is
   // not a reason to spend another round trip on a list that changes weekly.
@@ -1257,14 +1262,14 @@ function wireGoal(save: () => Promise<void>): void {
       // Clear only the exact value that successfully crossed the secret-store boundary.
       if (input.value === submitted) input.value = '';
       applyGoal(next);
-      toast('OpenRouter key stored');
+      toast(tr('goal.keyStoredToast'));
     }
   });
   $('goalKeyRemove').addEventListener('click', async () => {
     const next = await run(api.setGoalKey(''));
     if (next) {
       applyGoal(next);
-      toast('OpenRouter key removed');
+      toast(tr('goal.keyRemovedToast'));
     }
   });
 }
@@ -1429,14 +1434,14 @@ export function initChat(next: Deps): void {
   $('copyHandoff').addEventListener('click', async () => {
     if (!handoff) return;
     const copied = await run(api.writeClipboard(handoff.text));
-    if (copied) toast('Handoff copied');
+    if (copied) toast(tr('chat.handoffCopied'));
   });
 
   $('swarmReset').addEventListener('click', async () => {
     const state = await run(api.resetSwarm());
     if (state) {
       paintSwarm(state);
-      toast('Swarm cleared');
+      toast(tr('chat.swarmCleared'));
     }
   });
 
@@ -1467,11 +1472,11 @@ export function initChat(next: Deps): void {
 
   $('bridgeUnpair').addEventListener('click', async () => {
     const state = await run(api.unpairExtension());
-    if (state) toast('Browser disconnected');
+    if (state) toast(tr('chat.browserDisconnected'));
   });
   $('bridgeFolder').addEventListener('click', async () => {
     const dir = await run(api.openExtensionFolder());
-    if (dir) toast('Extension folder opened');
+    if (dir) toast(tr('chat.extensionFolderOpened'));
   });
 
   api.onSessionChanged(scheduleReload);

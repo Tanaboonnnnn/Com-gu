@@ -39,7 +39,7 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
       screen: false, control: false, clipboardRead: false, clipboardWrite: false
     },
     tunnel: { kind: 'openai', tunnelId: 'tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', desktopTunnelId: '', binaryPath: '' },
-    ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light' },
+    ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light', locale: 'en' as const },
     sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
     compaction: { auto: true, autoTokens: 300000 },
     multiAgent: { enabled: false, maxWorkers: 2 },
@@ -114,6 +114,32 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   expect(w.document.activeElement).toBe(goalPrompt);
   expect(goalPrompt.value).toBe('USER IS STILL EDITING THIS PROMPT');
 
+  // Locale is a normal persisted UI setting. A focused select is user intent just like a
+  // focused text field: an unrelated state push must not snap it back underneath the user.
+  const locale = w.document.getElementById('localeSelect') as HTMLSelectElement;
+  locale.focus();
+  locale.value = 'th';
+  stateListener(structuredClone(state));
+  expect(w.document.activeElement).toBe(locale);
+  expect(locale.value).toBe('th');
+
+  // Once it is no longer dirty/focused, the app state is authoritative and switching locale
+  // must repaint the already-open renderer without a reload.
+  locale.blur();
+  const thaiState = structuredClone(state) as any;
+  thaiState.config.ui.locale = 'th';
+  stateListener(thaiState);
+  expect(locale.value).toBe('th');
+  expect(w.document.documentElement.lang).toBe('th');
+  expect(w.document.getElementById('liveState')!.textContent).toBe('ยังไม่ได้เชื่อมต่อ');
+
+  const englishState = structuredClone(state) as any;
+  englishState.config.ui.locale = 'en';
+  stateListener(englishState);
+  expect(locale.value).toBe('en');
+  expect(w.document.documentElement.lang).toBe('en');
+  expect(w.document.getElementById('liveState')!.textContent).toBe('Not connected');
+
   // The health card reports the live surface projection rather than a hand-maintained
   // denominator. Tool consolidation/additions should never leave the UI saying "of 9"
   // when nine is no longer the product's actual maximum.
@@ -162,7 +188,13 @@ it('serializes settings intent so rapid toggles and later UI changes cannot undo
       screen: true, control: true, clipboardRead: true, clipboardWrite: true
     },
     tunnel: { kind: 'openai', tunnelId: 'tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', desktopTunnelId: '', binaryPath: '' },
-    ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light' as 'light' | 'dark' },
+    ui: {
+      minimizeToTray: true,
+      autoConnect: false,
+      privacyScreenshots: false,
+      theme: 'light' as 'light' | 'dark',
+      locale: 'en' as 'en' | 'th'
+    },
     sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
     compaction: { auto: true, autoTokens: 300000 },
     multiAgent: { enabled: false, maxWorkers: 2 },
@@ -308,7 +340,7 @@ async function mountChat(
       screen: true, control: true, clipboardRead: true, clipboardWrite: true
     },
     tunnel: { kind: 'openai', tunnelId: 'tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', desktopTunnelId: '', binaryPath: '' },
-    ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light' as const },
+    ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light' as const, locale: 'en' as const },
     sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
     compaction: { auto: true, autoTokens: 300000 },
     multiAgent: { enabled: false, maxWorkers: 2 },

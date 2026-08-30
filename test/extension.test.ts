@@ -25,6 +25,59 @@ beforeAll(async () => {
 });
 
 describe('extension release metadata', () => {
+  it('loads the extension i18n runtime before content and popup code', async () => {
+    const dir = path.join(process.cwd(), 'extension');
+    const manifest = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')) as any;
+    expect(manifest.content_scripts[0].js.slice(0, 3)).toEqual(['i18n.js', 'chatgpt-dom.js', 'content.js']);
+
+    const popup = await fs.readFile(path.join(dir, 'popup.html'), 'utf8');
+    expect(popup.indexOf('src="i18n.js"')).toBeGreaterThan(-1);
+    expect(popup.indexOf('src="i18n.js"')).toBeLessThan(popup.indexOf('src="popup.js"'));
+    expect(backgroundSource).toContain("files: ['i18n.js']");
+    expect(backgroundSource.indexOf("files: ['i18n.js']")).toBeLessThan(
+      backgroundSource.indexOf("files: ['content.js']")
+    );
+  });
+
+  it('translates extension UI with matching catalogs and English fallback', async () => {
+    const source = await fs.readFile(path.join(process.cwd(), 'extension', 'i18n.js'), 'utf8');
+    const sandbox: any = {};
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(source, sandbox, { filename: 'i18n.js' });
+    const i18n = sandbox.CLF_I18N;
+    expect(Object.keys(i18n.TH).sort()).toEqual(Object.keys(i18n.EN).sort());
+    expect(i18n.t('th', 'popup.sessionCapture')).toBe('การบันทึกแชต');
+    expect(i18n.t('en', 'popup.sessionCapture')).toBe('Session capture');
+    expect(i18n.normalize('unknown')).toBe('en');
+    expect(i18n.t('th', 'popup.connectedPort', { port: 8765 })).toBe('เชื่อมต่อแล้ว · Port 8765');
+    expect(i18n.t('th', 'test.missing', { value: 'x' })).toBe('test.missing');
+    expect(i18n.t('th', 'composer.goalPlaceholder')).toContain('แชตนี้');
+    expect(i18n.source).toBeUndefined();
+  });
+
+  it('localizes popup-owned copy by semantic keys without walking or source-translating the DOM', async () => {
+    const dir = path.join(process.cwd(), 'extension');
+    const [html, popup] = await Promise.all([
+      fs.readFile(path.join(dir, 'popup.html'), 'utf8'),
+      fs.readFile(path.join(dir, 'popup.js'), 'utf8')
+    ]);
+
+    expect(html).toContain('data-i18n="popup.sessionCapture"');
+    expect(html).toContain('data-i18n="popup.chatgptTab"');
+    expect(html).toContain('data-i18n="common.copy"');
+    expect(popup).toContain("globalThis.CLF_I18N.t(locale, key, values)");
+    expect(popup).toContain("type: 'locale_get'");
+    expect(popup).not.toMatch(/createTreeWalker|NodeFilter\.SHOW_TEXT|\.source\s*\(/);
+  });
+
+  it('does not create an independent Chrome-storage locale preference', async () => {
+    const [popup, content] = await Promise.all([
+      fs.readFile(path.join(process.cwd(), 'extension', 'popup.js'), 'utf8'),
+      fs.readFile(path.join(process.cwd(), 'extension', 'content.js'), 'utf8')
+    ]);
+    expect(popup).not.toMatch(/storage\.local\.(?:get|set)\([^\n]*(?:locale|language)/i);
+    expect(content).not.toMatch(/storage\.local\.(?:get|set)\([^\n]*(?:locale|language)/i);
+  });
   it('keeps the app package, bundled extension and bridge protocol on the same release', async () => {
     const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf8')) as { version: string };
     const lock = JSON.parse(await fs.readFile(path.join(process.cwd(), 'package-lock.json'), 'utf8')) as {
@@ -677,6 +730,23 @@ describe('worker settings authority', () => {
     });
     expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/settings')).toBe(false);
   });
+
+  it('reads the desktop locale without requiring ChatGPT document ownership', async () => {
+    const calls: Array<{ path: string; method: string }> = [];
+    const fetch = vi.fn(async (input: string, init: Record<string, unknown> = {}) => {
+      const url = new URL(input);
+      const method = String(init.method || 'GET');
+      calls.push({ path: url.pathname, method });
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/settings') return response(200, { context: { locale: 'th' } });
+      return response(404, {});
+    });
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+
+    expect(await worker.send({ type: 'locale_get' })).toEqual({ ok: true, locale: 'th' });
+    expect(calls).toContainEqual({ path: '/settings', method: 'GET' });
+    expect(calls.some((call) => call.path === '/settings' && call.method === 'POST')).toBe(false);
+  });
 });
 
 // ------------------------------------------------------------ command delivery
@@ -784,9 +854,11 @@ describe('extension command delivery', () => {
       url: ['https://chatgpt.com/*', 'https://chat.openai.com/*']
     });
     expect(worker.scriptingExecuteScript.mock.calls).toEqual([
+      [{ target: { tabId: 41 }, files: ['i18n.js'] }],
       [{ target: { tabId: 41 }, files: ['chatgpt-dom.js'] }],
       [{ target: { tabId: 41 }, world: 'MAIN', files: ['fiber.js'] }],
       [{ target: { tabId: 41 }, files: ['content.js'] }],
+      [{ target: { tabId: 42 }, files: ['i18n.js'] }],
       [{ target: { tabId: 42 }, files: ['chatgpt-dom.js'] }],
       [{ target: { tabId: 42 }, world: 'MAIN', files: ['fiber.js'] }],
       [{ target: { tabId: 42 }, files: ['content.js'] }]

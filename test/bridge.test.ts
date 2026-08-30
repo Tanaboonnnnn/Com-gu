@@ -4133,6 +4133,32 @@ describe('the goal loop over the bridge', () => {
     expect((await request('GET', '/settings', { auth: null })).status).toBe(401);
   });
 
+  it('projects the desktop locale through the read-only settings context', async () => {
+    const baseConfig = defaultConfig();
+    await saveConfig({ ...baseConfig, ui: { ...baseConfig.ui, locale: 'th' } });
+    await pair();
+
+    const reply = await request('GET', '/settings');
+    expect(reply.status).toBe(200);
+    expect(reply.body.context.locale).toBe('th');
+
+    const conversationId = 'cafe0008-0000-4000-8000-000000000008';
+    const recorded = await request('POST', '/events', {
+      body: {
+        conversationId,
+        events: [{ kind: 'user_message', time: Date.now(), text: 'locale projection', messageId: 'locale-1' }]
+      }
+    });
+    expect(recorded.status).toBe(200);
+    const activity = await request('GET', `/activity?conversationId=${conversationId}`);
+    expect(activity.status).toBe(200);
+    expect(activity.body.context.locale).toBe('th');
+
+    const rejected = await request('POST', '/settings', { body: { locale: 'en' } });
+    expect(rejected.status).toBe(400);
+    expect(getConfig().ui.locale).toBe('th');
+  });
+
   /** Same credential rule as everywhere else on this server. */
   it('refuses every goal route without the bearer token', async () => {
     await pair();

@@ -20,6 +20,14 @@ let overwriteEnabled = true;
 let showTimes = false;
 let latest = { status: null, tab: null };
 let openedOnFailure = false;
+let locale = 'en';
+const tr = (key, values) => globalThis.CLF_I18N.t(locale, key, values);
+function localizePopup() {
+  document.documentElement.lang = locale;
+  for (const node of document.querySelectorAll('[data-i18n]')) {
+    node.textContent = tr(node.dataset.i18n);
+  }
+}
 
 // ------------------------------------------------------------------ formatting
 
@@ -212,17 +220,17 @@ function paintHeader(status) {
 
   $('pill').className = `pill ${ready ? '' : incompatible ? 'bad' : 'off'}`;
   $('state').textContent = incompatible
-    ? 'Version mismatch'
+    ? tr('common.versionMismatch')
     : off
-      ? 'Disconnected'
+      ? tr('common.disconnected')
       : !connected
-        ? 'App not running'
+        ? tr('common.appNotRunning')
         : ready
-          ? `Connected · Port ${status.port}`
-          : `Port ${status.port} · connecting`;
+          ? tr('popup.connectedPort', { port: status.port })
+          : tr('popup.connectingPort', { port: status.port });
 
   $('retryBtn').hidden = ready || incompatible;
-  $('retryBtn').textContent = off ? 'Connect' : 'Try again';
+  $('retryBtn').textContent = off ? tr('common.connect') : tr('common.tryAgain');
   $('unpairBtn').hidden = !paired || incompatible;
   return ready;
 }
@@ -304,11 +312,13 @@ function paintDetails(status, info) {
 }
 
 async function refresh() {
-  const [status, info] = await Promise.all([
+  const [status, info, localeReply] = await Promise.all([
     chrome.runtime.sendMessage({ type: 'status' }),
-    chrome.runtime.sendMessage({ type: 'tabStatus' }).catch(() => null)
+    chrome.runtime.sendMessage({ type: 'tabStatus' }).catch(() => null),
+    chrome.runtime.sendMessage({ type: 'locale_get' }).catch(() => null)
   ]);
   latest = { status, tab: info };
+  locale = localeReply && localeReply.ok === true && localeReply.locale === 'th' ? 'th' : 'en';
 
   const ready = paintHeader(status);
   const isChat = Boolean(info && info.isChat);
@@ -347,6 +357,7 @@ async function refresh() {
 
   paintAlert(status, info);
   paintDetails(status, info);
+  localizePopup();
 }
 
 // -------------------------------------------------------------------- controls

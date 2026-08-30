@@ -3171,13 +3171,20 @@ export function resumeJobFor(sessionId: string): ResumeJobView | null {
  * one the user set for automatic compaction, and it only means anything while `auto` is
  * on. The page decides which to show, but it is not allowed to invent any of them.
  */
-function contextView(autoAllowed = true): { auto: boolean; threshold: number; warn: number; limit: number } {
+function contextView(autoAllowed = true): {
+  auto: boolean;
+  threshold: number;
+  warn: number;
+  limit: number;
+  locale: 'en' | 'th';
+} {
   const config = getConfig();
   return {
     auto: autoAllowed && config.compaction.auto,
     threshold: config.compaction.autoTokens,
     warn: config.sessions.advisoryTokens,
-    limit: config.sessions.limitTokens
+    limit: config.sessions.limitTokens,
+    locale: config.ui.locale
   };
 }
 

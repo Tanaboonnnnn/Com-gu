@@ -19,11 +19,13 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chronological } from '../src/shared/chronology.js';
 
 let domSource = '';
+let i18nSource = '';
 let contentSource = '';
 
 beforeAll(async () => {
-  [domSource, contentSource] = await Promise.all([
+  [domSource, i18nSource, contentSource] = await Promise.all([
     fs.readFile(path.join(process.cwd(), 'extension', 'chatgpt-dom.js'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'extension', 'i18n.js'), 'utf8'),
     fs.readFile(path.join(process.cwd(), 'extension', 'content.js'), 'utf8')
   ]);
 });
@@ -285,6 +287,7 @@ async function harness(
     hook = api;
   };
 
+  window.eval(i18nSource);
   window.eval(domSource);
   window.eval(contentSource);
   if (!hook) throw new Error('content.js did not expose its test hook');
@@ -6329,6 +6332,42 @@ describe('the activity feed', () => {
 });
 
 describe('the Compact & resume control', () => {
+  it('rerenders app-owned controls when the desktop locale changes, without translating ChatGPT DOM', async () => {
+    let locale: 'en' | 'th' = 'en';
+    live = await harness(undefined, {
+      activity: () => ({
+        ok: true,
+        data: {
+          entries: [],
+          stream: [],
+          nextSince: 0,
+          pendingTools: 0,
+          job: null,
+          tokens: 120_000,
+          autoCompactReady: false,
+          context: { auto: false, threshold: 400_000, warn: 400_000, limit: 533_333, locale },
+          goal: { enabled: false, hasKey: true, model: 'deepseek/deepseek-v4-flash', objective: '', draft: null }
+        }
+      })
+    });
+    const pageText = live.document.createElement('p');
+    pageText.id = 'chatgpt-owned-copy';
+    pageText.textContent = 'Save';
+    live.document.querySelector('#thread')!.append(pageText);
+
+    await live.hook.pullActivity();
+    live.hook.injectControl();
+    live.hook.toggleMenu();
+    expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('Chat On Steroids settings');
+
+    locale = 'th';
+    await live.hook.pullActivity();
+    await settle();
+
+    expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('การตั้งค่า Chat On Steroids');
+    expect(live.document.querySelector('.clf-menu-action')?.textContent).toContain('ย่อบริบท');
+    expect(pageText.textContent).toBe('Save');
+  });
   /**
    * It used to remove itself here, and that was right while compaction was all it did: a
    * disabled "send a message first" button is not worth half a composer. A goal changed that.

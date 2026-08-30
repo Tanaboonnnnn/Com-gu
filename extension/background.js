@@ -1680,6 +1680,13 @@ const HANDLERS = {
     }
     return result;
   },
+  async locale_get() {
+    await load();
+    const result = await call('/settings', { method: 'GET' });
+    if (!result || result.ok !== true) return result;
+    const locale = result.data && result.data.context && result.data.context.locale === 'th' ? 'th' : 'en';
+    return { ok: true, locale };
+  },
   async unpair() {
     await load();
     // Invalidate any `/pair` already on the wire before changing the visible/persisted state.
@@ -2658,7 +2665,9 @@ async function restoreOpenChatgptTabs() {
       // was invalidated by an extension reload. Fall through to deterministic recovery.
     }
     try {
-      // Rebuild the isolated-world DOM adapter before the recorder that consumes it.
+      // Static content scripts load i18n before the adapter/recorder. Recovery after an
+      // extension reload must preserve the same dependency order for already-open tabs.
+      await chrome.scripting.executeScript({ target: { tabId: id }, files: ['i18n.js'] });
       await chrome.scripting.executeScript({ target: { tabId: id }, files: ['chatgpt-dom.js'] });
       // Keep the React/Fiber reader in ChatGPT's own world, exactly like the static manifest
       // declaration. An older helper may still answer too; the nonce/version gate in

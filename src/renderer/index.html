@@ -76,17 +76,24 @@
           <span id="headerSub">Not set up yet</span>
         </span>
         <span class="state">
+          <label class="locale-picker" title="Language">
+            <span class="sr-only" data-i18n="language.label">Language</span>
+            <select id="localeSelect" aria-label="Language">
+              <option value="en">EN</option>
+              <option value="th">ไทย</option>
+            </select>
+          </label>
           <button class="btn btn-icon" id="themeBtn" type="button" title="Switch to dark mode">
             <svg class="ico" viewBox="0 0 24 24"><use href="#i-moon" id="themeIcon" /></svg>
           </button>
           <span class="live" id="live">
             <span class="dot"></span>
-            <span id="liveState">Not connected</span>
+            <span id="liveState" data-i18n="status.notConnected">Not connected</span>
             <em id="liveNote"></em>
           </span>
           <button class="power off" id="connectBtn" type="button">
             <svg class="ico" viewBox="0 0 24 24"><use href="#i-power" /></svg>
-            <span id="connectLabel">Connect</span>
+            <span id="connectLabel" data-i18n="common.connect">Connect</span>
           </button>
         </span>
       </header>

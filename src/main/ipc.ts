@@ -97,7 +97,8 @@ const settingsPatch = z.object({
     minimizeToTray: z.boolean(),
     autoConnect: z.boolean(),
     privacyScreenshots: z.boolean(),
-    theme: z.enum(['light', 'dark'])
+    theme: z.enum(['light', 'dark']),
+    locale: z.enum(['en', 'th'])
   }),
   sessions: z.object({
     record: z.boolean(),
@@ -178,7 +179,8 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
         base.ui.privacyScreenshots,
         wanted.ui.privacyScreenshots
       ),
-      theme: pick(current.ui.theme, base.ui.theme, wanted.ui.theme)
+      theme: pick(current.ui.theme, base.ui.theme, wanted.ui.theme),
+      locale: pick(current.ui.locale, base.ui.locale, wanted.ui.locale)
     },
     sessions: {
       record: pick(current.sessions.record, base.sessions.record, wanted.sessions.record),

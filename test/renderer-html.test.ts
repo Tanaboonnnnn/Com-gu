@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 let dom: JSDOM;
 let renderedMessage: (html: string, fallback: string) => HTMLElement;
+let applyStaticTranslations: (root: ParentNode, locale: 'en' | 'th') => void;
 
 beforeAll(async () => {
   dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://local.test/' });
@@ -15,6 +16,7 @@ beforeAll(async () => {
     Node: dom.window.Node
   });
   ({ renderedMessage } = await import('../src/renderer/chat.js'));
+  ({ applyStaticTranslations } = await import('../src/renderer/i18n.js'));
 });
 
 afterAll(() => {
@@ -22,6 +24,17 @@ afterAll(() => {
 });
 
 describe('captured ChatGPT rendered HTML', () => {
+  it('localizes only explicitly keyed app UI and never arbitrary captured text', () => {
+    const host = dom.window.document.createElement('div');
+    host.innerHTML = '<p id="raw">Connect</p><span id="owned" data-i18n="common.connect">Connect</span>';
+    dom.window.document.body.append(host);
+
+    applyStaticTranslations(host, 'th');
+
+    expect(host.querySelector('#raw')?.textContent).toBe('Connect');
+    expect(host.querySelector('#owned')?.textContent).toBe('เชื่อมต่อ');
+  });
+
   it('keeps semantic Markdown structure while stripping executable attributes and unsafe links', () => {
     const rendered = renderedMessage(
       '<h2 onclick="alert(1)">Heading</h2><p><strong>bold</strong> and <em>italic</em></p>' +

@@ -334,6 +334,29 @@ describe('bounded IPC identities and OS launch results', () => {
 });
 
 describe('settings writes from more than one UI', () => {
+  it('saves locale through the normal three-way settings merge', async () => {
+    const base = defaultConfig();
+    await saveConfig(base);
+    const wanted = { ...base, ui: { ...base.ui, locale: 'th' as const } };
+
+    const reply = await save(wanted, base);
+
+    expect(reply.ok, reply.error).toBe(true);
+    expect(getConfig().ui.locale).toBe('th');
+  });
+
+  it('does not overwrite a newer locale when an unrelated stale settings snapshot is saved', async () => {
+    const stale = defaultConfig();
+    await saveConfig({ ...stale, ui: { ...stale.ui, locale: 'th' } });
+    const unrelated = { ...stale, ui: { ...stale.ui, theme: 'light' as const } };
+
+    const reply = await save(unrelated, stale);
+
+    expect(reply.ok, reply.error).toBe(true);
+    expect(getConfig().ui.locale).toBe('th');
+    expect(getConfig().ui.theme).toBe('light');
+  });
+
   it('does not let a stale renderer snapshot undo a newer extension setting', async () => {
     currentWindow = {
       setBackgroundColor: vi.fn(),

@@ -17,6 +17,21 @@ afterAll(async () => {
 });
 
 describe('settings migration', () => {
+  it('defaults older configs with no locale to English without changing other UI prefs', async () => {
+    const old = defaultConfig() as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
+    const { locale: _locale, ...oldUi } = old.ui;
+    await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify({ ...old, ui: oldUi }), 'utf8');
+
+    const loaded = await loadConfig();
+    expect(loaded.ui.locale).toBe('en');
+    expect(loaded.ui.theme).toBe(defaultConfig().ui.theme);
+  });
+
+  it('preserves a stored Thai locale', async () => {
+    await saveConfig({ ...defaultConfig(), ui: { ...defaultConfig().ui, locale: 'th' } });
+    expect((await loadConfig()).ui.locale).toBe('th');
+  });
+
   it('never leaves Goal enabled while session recording is off', async () => {
     const impossible = {
       ...defaultConfig(),

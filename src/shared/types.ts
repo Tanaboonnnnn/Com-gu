@@ -1,5 +1,7 @@
 /** Types shared between the main process and the renderer. No runtime logic here. */
 
+import type { Locale } from './i18n/types.js';
+
 /**
  * One capability per user-facing checkbox. Tools are only registered on the MCP
  * server when their capability is enabled, so a disabled capability is invisible
@@ -122,6 +124,7 @@ export interface UiPrefs {
   privacyScreenshots: boolean;
   /** Explicit choice, never inherited from the OS: the window looks how you left it. */
   theme: 'light' | 'dark';
+  locale: Locale;
 }
 
 /**

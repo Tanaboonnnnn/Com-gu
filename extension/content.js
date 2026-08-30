@@ -4795,6 +4795,8 @@
   const snapshotText = (entry) => (entry ? (entry.kind === 'page_tool' ? entry.label : entry.text) : undefined);
 
   let settingsPulling = false;
+  let uiLocale = 'en';
+  const ui = (key, values) => globalThis.CLF_I18N.t(uiLocale, key, values);
 
   /**
    * The two settings, read without a conversation to read them from.
@@ -4812,6 +4814,7 @@
       const reply = await ask({ type: 'settings_get' });
       if (!alive || CLF_DOM.conversationId() || !reply || reply.ok !== true || !reply.data) return;
       context = readContext(reply.data.context) || context;
+      uiLocale = context && context.locale === 'th' ? 'th' : 'en';
       if (reply.data.goal && typeof reply.data.goal === 'object') {
         goalConfig = { ...reply.data.goal, objective: pendingObjective };
       }
@@ -4853,6 +4856,7 @@
       }
       if (!current()) return;
       const data = reply.data;
+      uiLocale = data.context && data.context.locale === 'th' ? 'th' : 'en';
       // Popup-only. `sessionId` is the app saying it has a session for this exact chat,
       // which is the difference between "delivered" and "the app is actually recording it".
       observed.session = typeof data.sessionId === 'string' ? data.sessionId : null;
@@ -5372,7 +5376,7 @@
     const limit = number(raw.limit);
     const threshold = number(raw.threshold);
     if (limit <= 0) return null;
-    return { auto: raw.auto === true, threshold, warn, limit };
+    return { auto: raw.auto === true, threshold, warn, limit, locale: raw.locale === 'th' ? 'th' : 'en' };
   }
 
   /**
@@ -5638,7 +5642,7 @@
     root.className = 'clf-menu';
     root.dataset.clfMenu = '1';
     root.setAttribute('role', 'dialog');
-    root.setAttribute('aria-label', 'Chat On Steroids settings');
+    root.setAttribute('aria-label', ui('composer.settings'));
     root.hidden = true;
     (document.body || document.documentElement).append(root);
     return root;
@@ -5684,6 +5688,7 @@
       });
       if (reply && reply.ok === true && reply.data) {
         context = readContext(reply.data.context) || context;
+        uiLocale = context && context.locale === 'th' ? 'th' : 'en';
         if (reply.data.goal) goalConfig = { ...(goalConfig || {}), ...reply.data.goal };
       }
     } finally {
@@ -5874,6 +5879,7 @@
     if (!menuOpen) return void closeMenu();
     if (!control || !control.root.isConnected) return void closeMenu();
     const root = menuElement();
+    root.setAttribute('aria-label', ui('composer.settings'));
     const view = menuView();
     // Every repaint of this sheet is a rebuild, and one of them can now land while somebody
     // is halfway through typing a goal — an activity poll repaints it on its own cadence. The
@@ -5900,7 +5906,7 @@
       label.className = 'clf-menu-label';
       const name = document.createElement('span');
       name.className = 'clf-menu-name';
-      name.textContent = row.label;
+      name.textContent = row.key === 'autoCompact' ? ui('composer.compactAuto') : row.label;
       const note = document.createElement('span');
       note.className = 'clf-menu-note';
       note.textContent = row.note;
@@ -5924,7 +5930,12 @@
     const act = document.createElement('button');
     act.type = 'button';
     act.className = 'clf-menu-action';
-    act.textContent = view.action.label;
+    act.textContent =
+      view.action.action === 'cancel'
+        ? ui('composer.cancelCompact')
+        : view.action.action === 'none'
+          ? view.action.label
+          : ui('composer.compactResumeNow');
     act.disabled = view.action.action === 'none' || menuBusy;
     if (view.action.hint) act.setAttribute('data-clf-tip', view.action.hint);
     act.addEventListener('click', (event) => {
@@ -6007,7 +6018,7 @@
     input.dataset.clfGoalInput = '1';
     input.rows = 3;
     input.maxLength = MAX_OBJECTIVE_CHARS;
-    input.placeholder = 'What does this chat have to reach?';
+    input.placeholder = ui('composer.goalPlaceholder');
     input.value = menuDraft;
     input.disabled = objectiveBusy;
     input.addEventListener('keydown', (event) => {
@@ -6035,7 +6046,7 @@
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'clf-menu-goal-cancel';
-    cancel.textContent = 'Cancel';
+    cancel.textContent = ui('composer.cancel');
     cancel.disabled = objectiveBusy;
     cancel.addEventListener('click', (event) => {
       event.preventDefault();
@@ -6053,7 +6064,7 @@
       const clear = document.createElement('button');
       clear.type = 'button';
       clear.className = 'clf-menu-goal-clear';
-      clear.textContent = 'Clear';
+      clear.textContent = ui('composer.clear');
       clear.disabled = objectiveBusy;
       clear.addEventListener('click', (event) => {
         event.preventDefault();
@@ -6128,7 +6139,7 @@
     // Never disabled any more: it opens a sheet, and a sheet that explains why compaction is
     // unavailable is exactly what somebody clicking a dead button wanted to be told.
     control.button.disabled = false;
-    control.button.setAttribute('aria-label', 'Chat On Steroids settings');
+    control.button.setAttribute('aria-label', ui('composer.settings'));
     control.button.setAttribute('aria-haspopup', 'dialog');
     if (!control.button.hasAttribute('aria-expanded')) control.button.setAttribute('aria-expanded', 'false');
     // The meter only while the button is a button. During a run the control is saying what
@@ -6226,7 +6237,8 @@
             : 'ChatGPT is writing the handoff';
       // No bar: a compaction is one long wait with no named parts to it, and drawing an
       // empty track under it would say there are stages nobody is being shown.
-      return { stage, detail: '', body: '', kind: 'none', steps: [], at: 0, done: false };
+      const stageKey = job.stage === 'opening' ? 'composer.openingChat' : job.stage === 'waiting-for-browser' ? 'composer.waitingChrome' : 'composer.writingHandoff';
+      return { stage: ui(stageKey), detail: '', body: '', kind: 'none', steps: [], at: 0, done: false };
     }
     return goalStageView(goal);
   }
