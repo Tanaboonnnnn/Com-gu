@@ -24,14 +24,14 @@ jobs:
             runner: windows-2025
             script: dist:x64
             artifact: package-windows-x64
-            files: release/Chat-On-Steroids-Setup-x64.exe
+            files: release/ComGu-Setup-x64.exe
           - name: Windows arm64
             platform: win32
             arch: arm64
             runner: windows-11-arm
             script: dist:arm64
             artifact: package-windows-arm64
-            files: release/Chat-On-Steroids-Setup-arm64.exe
+            files: release/ComGu-Setup-arm64.exe
           - name: macOS x64
             platform: darwin
             arch: x64
@@ -39,8 +39,8 @@ jobs:
             script: dist:mac:x64
             artifact: package-macos-x64
             files: |
-              release/Chat-On-Steroids-macOS-x64.dmg
-              release/Chat-On-Steroids-macOS-x64.zip
+              release/ComGu-macOS-x64.dmg
+              release/ComGu-macOS-x64.zip
           - name: macOS arm64
             platform: darwin
             arch: arm64
@@ -48,8 +48,8 @@ jobs:
             script: dist:mac:arm64
             artifact: package-macos-arm64
             files: |
-              release/Chat-On-Steroids-macOS-arm64.dmg
-              release/Chat-On-Steroids-macOS-arm64.zip
+              release/ComGu-macOS-arm64.dmg
+              release/ComGu-macOS-arm64.zip
           - name: Linux x64
             platform: linux
             arch: x64
@@ -57,8 +57,8 @@ jobs:
             script: dist:linux:x64
             artifact: package-linux-x64
             files: |
-              release/Chat-On-Steroids-Linux-x64.AppImage
-              release/Chat-On-Steroids-Linux-x64.deb
+              release/ComGu-Linux-x64.AppImage
+              release/ComGu-Linux-x64.deb
           - name: Linux arm64
             platform: linux
             arch: arm64
@@ -66,8 +66,8 @@ jobs:
             script: dist:linux:arm64
             artifact: package-linux-arm64
             files: |
-              release/Chat-On-Steroids-Linux-arm64.AppImage
-              release/Chat-On-Steroids-Linux-arm64.deb
+              release/ComGu-Linux-arm64.AppImage
+              release/ComGu-Linux-arm64.deb
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
 
@@ -108,8 +108,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dmg="$PWD/release/Chat-On-Steroids-macOS-${{ matrix.arch }}.dmg"
-          zip="$PWD/release/Chat-On-Steroids-macOS-${{ matrix.arch }}.zip"
+          dmg="$PWD/release/ComGu-macOS-${{ matrix.arch }}.dmg"
+          zip="$PWD/release/ComGu-macOS-${{ matrix.arch }}.zip"
           test -f "$dmg"
           test -f "$zip"
           hdiutil verify "$dmg"
@@ -141,18 +141,18 @@ jobs:
           }
           trap cleanup EXIT
           hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
-          test -d "$mount_dir/Chat On Steroids.app"
+          test -d "$mount_dir/ComGu.app"
           test -L "$mount_dir/Applications"
           test "$(readlink "$mount_dir/Applications")" = /Applications
-          test -x "$mount_dir/Chat On Steroids.app/Contents/MacOS/Chat On Steroids"
-          test -f "$mount_dir/Chat On Steroids.app/Contents/Info.plist"
-          node scripts/smoke-macos-bundle.mjs '${{ matrix.arch }}' "$mount_dir/Chat On Steroids.app"
+          test -x "$mount_dir/ComGu.app/Contents/MacOS/ComGu"
+          test -f "$mount_dir/ComGu.app/Contents/Info.plist"
+          node scripts/smoke-macos-bundle.mjs '${{ matrix.arch }}' "$mount_dir/ComGu.app"
           # ditto is the macOS-native ZIP extractor and preserves executable modes/metadata.
           ditto -x -k "$zip" "$zip_dir"
-          test -d "$zip_dir/Chat On Steroids.app"
-          test -x "$zip_dir/Chat On Steroids.app/Contents/MacOS/Chat On Steroids"
-          test -f "$zip_dir/Chat On Steroids.app/Contents/Info.plist"
-          node scripts/smoke-macos-bundle.mjs '${{ matrix.arch }}' "$zip_dir/Chat On Steroids.app"
+          test -d "$zip_dir/ComGu.app"
+          test -x "$zip_dir/ComGu.app/Contents/MacOS/ComGu"
+          test -f "$zip_dir/ComGu.app/Contents/Info.plist"
+          node scripts/smoke-macos-bundle.mjs '${{ matrix.arch }}' "$zip_dir/ComGu.app"
 
       - name: Launch packaged macOS app normally
         if: matrix.platform == 'darwin'
@@ -163,7 +163,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deb="$PWD/release/Chat-On-Steroids-Linux-${{ matrix.arch }}.deb"
+          deb="$PWD/release/ComGu-Linux-${{ matrix.arch }}.deb"
           test -f "$deb"
           echo "Generated control metadata:"
           dpkg-deb --field "$deb" Package Version Architecture Depends
@@ -181,15 +181,15 @@ jobs:
           dpkg-query -W -f='${Status}\n' chat-on-steroids | grep -Fxq 'install ok installed'
           desktop=/usr/share/applications/com.chatonsteroids.app.desktop
           test -f "$desktop"
-          grep -Fxq 'Name=Chat On Steroids' "$desktop"
-          grep -Fxq 'Icon=chat-on-steroids' "$desktop"
+          grep -Fxq 'Name=ComGu' "$desktop"
+          grep -Fxq 'Icon=comgu' "$desktop"
           grep -Fxq 'StartupWMClass=com.chatonsteroids.app' "$desktop"
           # electron-builder's DEB postinstall registers /usr/bin through update-alternatives.
           # Prove package integration is present, then anchor the full runtime smoke at the
           # package-owned resolved binary rather than assuming an /opt product-directory spelling.
-          test -L /usr/bin/chat-on-steroids
-          ELECTRON_RUN_AS_NODE=1 /usr/bin/chat-on-steroids -e "if(process.platform!=='linux'||process.arch!=='${{ matrix.arch }}')process.exit(9); console.log('deb-runtime-ok')" | grep -Fxq 'deb-runtime-ok'
-          installed_executable="$(readlink -f /usr/bin/chat-on-steroids)"
+          test -L /usr/bin/comgu
+          ELECTRON_RUN_AS_NODE=1 /usr/bin/comgu -e "if(process.platform!=='linux'||process.arch!=='${{ matrix.arch }}')process.exit(9); console.log('deb-runtime-ok')" | grep -Fxq 'deb-runtime-ok'
+          installed_executable="$(readlink -f /usr/bin/comgu)"
           test -x "$installed_executable"
           dpkg-query -S "$installed_executable" | grep -Eq '^chat-on-steroids:'
           node scripts/smoke-packaged-runtime.mjs --platform linux --arch '${{ matrix.arch }}' --root "$(dirname "$installed_executable")"
@@ -213,7 +213,7 @@ jobs:
           XDG_CACHE_HOME="$deb_smoke_root/cache" \
           XDG_DATA_HOME="$deb_smoke_root/data" \
           XDG_STATE_HOME="$deb_smoke_root/state" \
-          CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a /usr/bin/chat-on-steroids >deb-gui.log 2>&1
+          CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a /usr/bin/comgu >deb-gui.log 2>&1
           status=$?
           set -e
           cat deb-gui.log
@@ -234,7 +234,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          appimage="$PWD/release/Chat-On-Steroids-Linux-${{ matrix.arch }}.AppImage"
+          appimage="$PWD/release/ComGu-Linux-${{ matrix.arch }}.AppImage"
           test -x "$appimage"
           # Exercise the actual static-runtime artifact through Chromium/Electron startup and
           # require renderer-state proof rather than accepting a process that merely hangs.
@@ -317,42 +317,42 @@ jobs:
       - name: Package standalone extension
         run: |
           set -euo pipefail
-          (cd extension && zip -qr ../release/Chat-On-Steroids-Extension.zip . -x '*.map')
-          zip -q release/Chat-On-Steroids-Extension.zip LICENSE
+          (cd extension && zip -qr ../release/ComGu-Extension.zip . -x '*.map')
+          zip -q release/ComGu-Extension.zip LICENSE
           node -e "const m=require('./extension/manifest.json'),p=require('./package.json');if(m.version!==p.version)throw new Error('Extension '+m.version+' does not match app '+p.version)"
           for required in manifest.json background.js chatgpt-dom.js content.js fiber.js overlay.css popup.html popup.css popup.js icons/icon16.png icons/icon32.png icons/icon48.png icons/icon128.png LICENSE; do
-            unzip -Z1 release/Chat-On-Steroids-Extension.zip | grep -Fxq "$required" || { echo "Extension zip missing $required" >&2; exit 1; }
+            unzip -Z1 release/ComGu-Extension.zip | grep -Fxq "$required" || { echo "Extension zip missing $required" >&2; exit 1; }
           done
 
       - name: Create SHA-256 checksums
         run: |
           set -euo pipefail
           files=(
-            release/Chat-On-Steroids-Setup-x64.exe
-            release/Chat-On-Steroids-Setup-arm64.exe
-            release/Chat-On-Steroids-macOS-x64.dmg
-            release/Chat-On-Steroids-macOS-x64.zip
-            release/Chat-On-Steroids-macOS-arm64.dmg
-            release/Chat-On-Steroids-macOS-arm64.zip
-            release/Chat-On-Steroids-Linux-x64.AppImage
-            release/Chat-On-Steroids-Linux-x64.deb
-            release/Chat-On-Steroids-Linux-arm64.AppImage
-            release/Chat-On-Steroids-Linux-arm64.deb
-            release/Chat-On-Steroids-Extension.zip
+            release/ComGu-Setup-x64.exe
+            release/ComGu-Setup-arm64.exe
+            release/ComGu-macOS-x64.dmg
+            release/ComGu-macOS-x64.zip
+            release/ComGu-macOS-arm64.dmg
+            release/ComGu-macOS-arm64.zip
+            release/ComGu-Linux-x64.AppImage
+            release/ComGu-Linux-x64.deb
+            release/ComGu-Linux-arm64.AppImage
+            release/ComGu-Linux-arm64.deb
+            release/ComGu-Extension.zip
           )
           for file in "${files[@]}"; do test -f "$file" || { echo "Missing $file" >&2; exit 1; }; done
           (cd release && sha256sum \
-            Chat-On-Steroids-Setup-x64.exe \
-            Chat-On-Steroids-Setup-arm64.exe \
-            Chat-On-Steroids-macOS-x64.dmg \
-            Chat-On-Steroids-macOS-x64.zip \
-            Chat-On-Steroids-macOS-arm64.dmg \
-            Chat-On-Steroids-macOS-arm64.zip \
-            Chat-On-Steroids-Linux-x64.AppImage \
-            Chat-On-Steroids-Linux-x64.deb \
-            Chat-On-Steroids-Linux-arm64.AppImage \
-            Chat-On-Steroids-Linux-arm64.deb \
-            Chat-On-Steroids-Extension.zip > SHA256SUMS.txt)
+            ComGu-Setup-x64.exe \
+            ComGu-Setup-arm64.exe \
+            ComGu-macOS-x64.dmg \
+            ComGu-macOS-x64.zip \
+            ComGu-macOS-arm64.dmg \
+            ComGu-macOS-arm64.zip \
+            ComGu-Linux-x64.AppImage \
+            ComGu-Linux-x64.deb \
+            ComGu-Linux-arm64.AppImage \
+            ComGu-Linux-arm64.deb \
+            ComGu-Extension.zip > SHA256SUMS.txt)
           cat release/SHA256SUMS.txt
 
       - name: Upload release candidate
@@ -360,19 +360,19 @@ jobs:
         with:
           # Artifact names reject `/`, so direct candidate runs from feature/foo refs must not
           # fail after all six package jobs. A run id is filesystem-safe and caller-stable.
-          name: chat-on-steroids-candidate-${{ github.run_id }}
+          name: comgu-candidate-${{ github.run_id }}
           path: |
-            release/Chat-On-Steroids-Setup-x64.exe
-            release/Chat-On-Steroids-Setup-arm64.exe
-            release/Chat-On-Steroids-macOS-x64.dmg
-            release/Chat-On-Steroids-macOS-x64.zip
-            release/Chat-On-Steroids-macOS-arm64.dmg
-            release/Chat-On-Steroids-macOS-arm64.zip
-            release/Chat-On-Steroids-Linux-x64.AppImage
-            release/Chat-On-Steroids-Linux-x64.deb
-            release/Chat-On-Steroids-Linux-arm64.AppImage
-            release/Chat-On-Steroids-Linux-arm64.deb
-            release/Chat-On-Steroids-Extension.zip
+            release/ComGu-Setup-x64.exe
+            release/ComGu-Setup-arm64.exe
+            release/ComGu-macOS-x64.dmg
+            release/ComGu-macOS-x64.zip
+            release/ComGu-macOS-arm64.dmg
+            release/ComGu-macOS-arm64.zip
+            release/ComGu-Linux-x64.AppImage
+            release/ComGu-Linux-x64.deb
+            release/ComGu-Linux-arm64.AppImage
+            release/ComGu-Linux-arm64.deb
+            release/ComGu-Extension.zip
             release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30

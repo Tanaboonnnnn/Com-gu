@@ -245,7 +245,7 @@ function paintAlert(status, info) {
     : pairError && pairError.message
       ? pairError.message
       : pairError && pairError.error === 'secure_storage_unavailable'
-        ? 'Secure credential storage is unavailable. Open Chat On Steroids for setup instructions.'
+        ? 'Secure credential storage is unavailable. Open ComGu for setup instructions.'
     : error && Date.now() - error.at < 10 * 60 * 1000
       ? error.text
       : '';

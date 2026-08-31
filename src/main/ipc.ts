@@ -379,7 +379,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle('roots:rename', async (payload) => {
     const { name, newName } = renameRoot.parse(payload);
     if (RESERVED_ROOT_NAMES.has(newName)) {
-      throw new SandboxError(`/${newName} is reserved by Chat On Steroids and cannot be used as a folder name`);
+      throw new SandboxError(`/${newName} is reserved by ComGu and cannot be used as a folder name`);
     }
     await updateConfig((config) => {
       if (!config.roots.some((root) => root.name === name)) throw new Error(`/${name} is not an approved folder`);

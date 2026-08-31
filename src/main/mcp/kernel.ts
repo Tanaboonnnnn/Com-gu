@@ -825,7 +825,7 @@ export function createRegistrar(server: McpServer, ctx: ToolContext, surface: Su
       return guard(name, async () => {
         if (!caps[cap]) {
           return fail(
-            `TOOL_DISABLED: ${name} is disabled by the current Chat On Steroids permissions. ` +
+            `TOOL_DISABLED: ${name} is disabled by the current ComGu permissions. ` +
               'Ask the user to enable the permission in the app, then retry. If the tool list in this conversation is stale, start a new chat.'
           );
         }
@@ -834,7 +834,7 @@ export function createRegistrar(server: McpServer, ctx: ToolContext, surface: Su
     },
     featureDisabled(feature, setting) {
       return fail(
-        `FEATURE_DISABLED: ${feature} is switched off in Chat On Steroids. ` +
+        `FEATURE_DISABLED: ${feature} is switched off in ComGu. ` +
           `Ask the user to enable "${setting}" in the app, then try again.`
       );
     }

@@ -33,7 +33,7 @@ export interface PrepareHandoffInput {
  */
 export function resumeBootstrapText(summary: string): string {
   return (
-    'Continuing a Chat On Steroids session that was compacted. This is the brief the previous chat wrote about ' +
+    'Continuing a ComGu session that was compacted. This is the brief the previous chat wrote about ' +
     'its own work; carry on from it rather than starting again.\n\n' +
     summary
   );

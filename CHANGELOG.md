@@ -11,11 +11,15 @@ the app refuses the extension and asks you to reload the matching copy.
 
 ## [2.0.2] — 2026-08-26
 
-2.0.2 is the native cross-platform release port. The already-published 2.0.1 release remains the
-historical Windows hardening release; this patch moves the unreleased tree forward so the new
-Windows/macOS/Linux build matrix can be published under a fresh tag instead of trying to replace it.
+2.0.2 is the first **ComGu** friend build: a rebrand and continuation of the original project with
+Thai/English UI support, cross-platform packaging work, and safer automatic compaction. The
+already-published upstream 2.0.1 history remains intact.
 
 ### Added
+- **ComGu branding and mascot** across the current desktop UI, MCP connector display names,
+  companion extension and release packaging while compatibility identifiers remain stable.
+- **English/Thai localization** across the deterministic desktop and companion-extension UI, with
+  live locale switching and one persisted locale authority.
 - **Native release jobs now cover six host/CPU combinations:** Windows x64 + ARM64, macOS Intel +
   Apple silicon, and Linux x64 + ARM64. Every package job verifies it is running on the requested
   native host before packaging and smoke-tests the packaged native runtime before upload.
@@ -33,6 +37,9 @@ Windows/macOS/Linux build matrix can be published under a fresh tag instead of t
   instead of inheriting whatever native payload happened to be installed on the packaging host.
 
 ### Changed
+- **Automatic compaction now waits for a safe turn boundary.** Crossing the configured context
+  threshold while ChatGPT is answering arms compaction without pressing Stop; the live answer and
+  local tool work settle naturally before Compact & Resume starts once.
 - **Linux packaging is Noble-compatible and keeps stable public filenames.** DEB dependencies allow
   Ubuntu 24.04's time64 GTK/AT-SPI package names, AppImage uses electron-builder's static 1.0.3
   runtime rather than depending on legacy FUSE2, and public artifacts remain `x64`/`arm64` even

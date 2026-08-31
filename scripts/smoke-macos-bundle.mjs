@@ -19,7 +19,7 @@ const releaseDir = path.resolve('release');
 const unpackedDir = arch === 'arm64' ? 'mac-arm64' : 'mac';
 const app = process.argv[3]
   ? path.resolve(process.argv[3])
-  : path.join(releaseDir, unpackedDir, 'Chat On Steroids.app');
+  : path.join(releaseDir, unpackedDir, 'ComGu.app');
 const contents = path.join(app, 'Contents');
 const resources = path.join(contents, 'Resources');
 const plist = path.join(contents, 'Info.plist');
@@ -42,9 +42,9 @@ function plistValue(key) {
 
 const expectedPlist = {
   CFBundleIdentifier: 'com.chatonsteroids.app',
-  CFBundleExecutable: 'Chat On Steroids',
-  CFBundleName: 'Chat On Steroids',
-  CFBundleDisplayName: 'Chat On Steroids',
+  CFBundleExecutable: 'ComGu',
+  CFBundleName: 'ComGu',
+  CFBundleDisplayName: 'ComGu',
   CFBundleIconFile: 'icon.icns',
   CFBundleShortVersionString: packageVersion,
   CFBundleVersion: packageVersion,
@@ -96,7 +96,7 @@ function isLaunchedMachO(file) {
 
 const nativeDir = `darwin-${arch}`;
 const nodeModules = path.join(resources, 'app.asar.unpacked', 'node_modules');
-const mainExecutable = path.join(contents, 'MacOS', 'Chat On Steroids');
+const mainExecutable = path.join(contents, 'MacOS', 'ComGu');
 const appIcon = requireFile(path.join(resources, 'icon.icns'));
 const ptyDir = path.join(nodeModules, 'node-pty', 'prebuilds', nativeDir);
 const sharpLib = path.join(nodeModules, '@img', `sharp-darwin-${arch}`, 'lib');

@@ -1,6 +1,6 @@
 # Contributing
 
-Chat On Steroids is a Windows/macOS/Linux beta maintained by one person. Bug reports, focused fixes and concrete improvements are welcome.
+ComGu is a Windows/macOS/Linux beta maintained by one person. Bug reports, focused fixes and concrete improvements are welcome.
 
 ## Before a pull request
 

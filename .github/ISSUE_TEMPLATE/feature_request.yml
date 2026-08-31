@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a concrete improvement to Chat On Steroids.
+description: Suggest a concrete improvement to ComGu.
 labels: [enhancement]
 body:
   - type: markdown

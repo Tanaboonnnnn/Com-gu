@@ -175,6 +175,12 @@ header {
   background: var(--ink);
   color: var(--page);
 }
+.mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
 
 .title {
   font-size: 14px;

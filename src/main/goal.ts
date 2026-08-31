@@ -64,8 +64,8 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
  * uses to attribute traffic. Neither header carries anything about the user or the chat.
  */
 const ATTRIBUTION_HEADERS: Record<string, string> = {
-  'HTTP-Referer': 'https://github.com/chat-on-steroids',
-  'X-Title': 'Chat On Steroids'
+  'HTTP-Referer': 'https://github.com/Tanaboonnnnn/Com-gu',
+  'X-Title': 'ComGu'
 };
 
 /** How many messages of history the goal model is given, newest kept. */

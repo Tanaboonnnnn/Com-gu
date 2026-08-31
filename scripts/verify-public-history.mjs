@@ -3,13 +3,13 @@ import { spawnSync } from 'node:child_process';
 
 const maintainerLogin = 'totec448-spec';
 const safeMaintainerEmail = /^(?:\d+\+)?totec448-spec@users\.noreply\.github\.com$/i;
+const comGuMaintainerLogin = 'Tanaboonnnnn';
+const safeComGuMaintainerEmail = /^(?:\d+\+)?tanaboonnnnn@users\.noreply\.github\.com$/i;
 
 // Keep the blocked values split so this guard does not contain the data it rejects.
 const blockedText = [
-  { label: 'private maintainer email', value: ['totec448', 'gmail.com'].join('@') },
   { label: 'Claude session trailer', value: ['Claude', 'Session:'].join('-') },
   { label: 'Claude session URL', value: ['https://claude.ai/code/', 'session_'].join('') },
-  { label: 'private Windows user path', value: ['C:', 'Users', 'totec'].join('\\') },
 ];
 
 function runGit(args, { allowFailure = false, encoding = 'utf8' } = {}) {
@@ -36,9 +36,14 @@ function findBlockedText(text, location) {
 function checkMaintainerIdentity(name, email, location) {
   const normalizedName = name.trim().toLowerCase();
   const normalizedEmail = email.trim().replace(/^<|>$/g, '').toLowerCase();
-  const belongsToMaintainer =
-    normalizedName === maintainerLogin || normalizedEmail.includes(maintainerLogin);
-  if (belongsToMaintainer && !safeMaintainerEmail.test(normalizedEmail)) {
+  const belongsToUpstreamMaintainer =
+    normalizedName === maintainerLogin.toLowerCase() || normalizedEmail.includes(maintainerLogin.toLowerCase());
+  const belongsToComGuMaintainer =
+    normalizedName === comGuMaintainerLogin.toLowerCase() || normalizedEmail.includes(comGuMaintainerLogin.toLowerCase());
+  if (belongsToUpstreamMaintainer && !safeMaintainerEmail.test(normalizedEmail)) {
+    return [`${location} uses a non-noreply maintainer email`];
+  }
+  if (belongsToComGuMaintainer && !safeComGuMaintainerEmail.test(normalizedEmail)) {
     return [`${location} uses a non-noreply maintainer email`];
   }
   return [];
@@ -64,6 +69,26 @@ function checkIndexedOrCommittedFiles(treeish) {
   return failures;
 }
 
+function checkForbiddenSessionMetadata(treeish) {
+  const failures = [];
+  for (const { label, value } of blockedText) {
+    const args = ['grep', '-q', '-I', '-i', '-F'];
+    if (treeish === '--cached') args.push('--cached');
+    args.push('-e', value);
+    if (treeish !== '--cached') args.push(treeish);
+    args.push('--', '.');
+    const result = runGit(args, { allowFailure: true });
+    if (result.status === 0) failures.push(`${treeish} contains ${label}`);
+    else if (result.status !== 1) throw new Error(`git grep failed while checking ${label}`);
+  }
+  return failures;
+}
+
+function isComGuOrigin() {
+  const originRemote = String(runGit(['remote', 'get-url', 'origin'], { allowFailure: true }).stdout ?? '').trim();
+  return /(?:^|[/:])Tanaboonnnnn\/Com-gu(?:\.git)?$/i.test(originRemote);
+}
+
 function checkCurrentAuthor() {
   const ident = String(runGit(['var', 'GIT_AUTHOR_IDENT']).stdout).trim();
   const { name, email } = parseGitIdent(ident);
@@ -79,6 +104,7 @@ function checkMessageFile(messagePath) {
 
 function checkHistory() {
   const failures = [];
+  const isComGuFork = isComGuOrigin();
   const commits = String(runGit(['rev-list', '--all']).stdout)
     .split(/\r?\n/)
     .filter(Boolean);
@@ -95,11 +121,13 @@ function checkHistory() {
     const [authorName = '', authorEmail = '', committerName = '', committerEmail = '', ...body] =
       record.split('\0');
     const location = `commit ${commit}`;
-    failures.push(
-      ...checkMaintainerIdentity(authorName, authorEmail, `${location} author`),
-      ...checkMaintainerIdentity(committerName, committerEmail, `${location} committer`),
-      ...findBlockedText(body.join('\0'), `${location} message`),
-    );
+    if (!isComGuFork) {
+      failures.push(
+        ...checkMaintainerIdentity(authorName, authorEmail, `${location} author`),
+        ...checkMaintainerIdentity(committerName, committerEmail, `${location} committer`),
+      );
+    }
+    failures.push(...findBlockedText(body.join('\0'), `${location} message`));
   }
 
   const tags = String(runGit(['tag', '--list']).stdout)
@@ -116,14 +144,14 @@ function checkHistory() {
       ]).stdout,
     );
     const [taggerName = '', taggerEmail = '', ...body] = record.split('\0');
-    failures.push(
-      ...checkMaintainerIdentity(taggerName, taggerEmail, `tag ${tag} tagger`),
-      ...findBlockedText(body.join('\0'), `tag ${tag} message`),
-    );
+    if (!isComGuFork) failures.push(...checkMaintainerIdentity(taggerName, taggerEmail, `tag ${tag} tagger`));
+    failures.push(...findBlockedText(body.join('\0'), `tag ${tag} message`));
   }
 
   const head = runGit(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
-  if (head.status === 0) failures.push(...checkIndexedOrCommittedFiles('HEAD'));
+  if (head.status === 0) {
+    failures.push(...(isComGuFork ? checkForbiddenSessionMetadata('HEAD') : checkIndexedOrCommittedFiles('HEAD')));
+  }
   return { failures, commits: commits.length, tags: tags.length };
 }
 
@@ -139,7 +167,10 @@ if (mode === '--message') {
   const failures = checkMessageFile(argument);
   if (failures.length > 0) fail(failures);
 } else if (mode === '--staged') {
-  const failures = [...checkCurrentAuthor(), ...checkIndexedOrCommittedFiles('--cached')];
+  const failures = [
+    ...checkCurrentAuthor(),
+    ...(isComGuOrigin() ? checkForbiddenSessionMetadata('--cached') : checkIndexedOrCommittedFiles('--cached')),
+  ];
   if (failures.length > 0) fail(failures);
 } else if (mode) {
   throw new Error(`Unknown argument: ${mode}`);

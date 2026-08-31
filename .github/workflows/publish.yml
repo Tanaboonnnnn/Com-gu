@@ -75,17 +75,17 @@ jobs:
             throw new Error(`${notesPath} must disclose unsigned and unnotarized macOS artifacts`);
           }
           for (const artifact of [
-            'Chat-On-Steroids-Setup-x64.exe',
-            'Chat-On-Steroids-Setup-arm64.exe',
-            'Chat-On-Steroids-macOS-x64.dmg',
-            'Chat-On-Steroids-macOS-x64.zip',
-            'Chat-On-Steroids-macOS-arm64.dmg',
-            'Chat-On-Steroids-macOS-arm64.zip',
-            'Chat-On-Steroids-Linux-x64.AppImage',
-            'Chat-On-Steroids-Linux-x64.deb',
-            'Chat-On-Steroids-Linux-arm64.AppImage',
-            'Chat-On-Steroids-Linux-arm64.deb',
-            'Chat-On-Steroids-Extension.zip',
+            'ComGu-Setup-x64.exe',
+            'ComGu-Setup-arm64.exe',
+            'ComGu-macOS-x64.dmg',
+            'ComGu-macOS-x64.zip',
+            'ComGu-macOS-arm64.dmg',
+            'ComGu-macOS-arm64.zip',
+            'ComGu-Linux-x64.AppImage',
+            'ComGu-Linux-x64.deb',
+            'ComGu-Linux-arm64.AppImage',
+            'ComGu-Linux-arm64.deb',
+            'ComGu-Extension.zip',
             'SHA256SUMS.txt'
           ]) {
             if (!notes.includes(`\`${artifact}\``)) throw new Error(`${notesPath} is missing ${artifact}`);
@@ -153,7 +153,7 @@ jobs:
       - name: Download the candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: chat-on-steroids-candidate-${{ github.run_id }}
+          name: comgu-candidate-${{ github.run_id }}
           path: publish
 
       # The checksums were computed on the packaging runner. Re-checking them here proves
@@ -170,18 +170,18 @@ jobs:
           set -euo pipefail
           node scripts/check-release-absent.mjs
           gh release create "$TAG" \
-            publish/Chat-On-Steroids-Setup-x64.exe \
-            publish/Chat-On-Steroids-Setup-arm64.exe \
-            publish/Chat-On-Steroids-macOS-x64.dmg \
-            publish/Chat-On-Steroids-macOS-x64.zip \
-            publish/Chat-On-Steroids-macOS-arm64.dmg \
-            publish/Chat-On-Steroids-macOS-arm64.zip \
-            publish/Chat-On-Steroids-Linux-x64.AppImage \
-            publish/Chat-On-Steroids-Linux-x64.deb \
-            publish/Chat-On-Steroids-Linux-arm64.AppImage \
-            publish/Chat-On-Steroids-Linux-arm64.deb \
-            publish/Chat-On-Steroids-Extension.zip \
+            publish/ComGu-Setup-x64.exe \
+            publish/ComGu-Setup-arm64.exe \
+            publish/ComGu-macOS-x64.dmg \
+            publish/ComGu-macOS-x64.zip \
+            publish/ComGu-macOS-arm64.dmg \
+            publish/ComGu-macOS-arm64.zip \
+            publish/ComGu-Linux-x64.AppImage \
+            publish/ComGu-Linux-x64.deb \
+            publish/ComGu-Linux-arm64.AppImage \
+            publish/ComGu-Linux-arm64.deb \
+            publish/ComGu-Extension.zip \
             publish/SHA256SUMS.txt \
-            --title "Chat On Steroids ${TAG#v}" \
+            --title "ComGu ${TAG#v}" \
             --notes-file "docs/release-notes/$TAG.md"
           gh release view "$TAG" --json url --jq .url

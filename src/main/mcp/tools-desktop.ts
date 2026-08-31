@@ -408,7 +408,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           // would hide which of them the user actually has to switch on.
           if (!caps.control && actions.some((a) => a.type !== 'wait' && !a.type.endsWith('_clipboard'))) {
             return fail(
-              'TOOL_DISABLED: mouse and keyboard control is disabled by the current Chat On Steroids permissions. ' +
+              'TOOL_DISABLED: mouse and keyboard control is disabled by the current ComGu permissions. ' +
                 'Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
             );
           }

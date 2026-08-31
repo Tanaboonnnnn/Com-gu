@@ -792,7 +792,7 @@ describe('surface boundaries', () => {
   it('describes both surfaces well enough for a user to set them up and a model to find them', () => {
     for (const surface of SURFACE_LIST) {
       expect(surface.serverName, surface.id).toMatch(/^chat-on-steroids-/);
-      expect(surface.connectorName, surface.id).toContain('Chat On Steroids');
+      expect(surface.connectorName, surface.id).toContain('ComGu');
       expect(surface.cardSummary.length, surface.id).toBeGreaterThan(20);
       // The description is the only thing the model has before discovery, so it has to
       // carry real vocabulary rather than a label.

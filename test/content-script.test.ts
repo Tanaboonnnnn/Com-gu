@@ -372,6 +372,22 @@ function assistantTurn(document: Document, id: string, labels: string[]): HTMLEl
   return section;
 }
 
+function completedAssistantTurn(document: Document, id: string, text = 'Finished naturally.'): HTMLElement {
+  const section = assistantTurn(document, id, []);
+  const message = document.createElement('div');
+  message.setAttribute('data-message-id', `m-${id}`);
+  message.setAttribute('data-message-author-role', 'assistant');
+  const body = document.createElement('div');
+  body.className = 'whitespace-pre-wrap';
+  body.textContent = text;
+  message.append(body);
+  section.append(message);
+  const copy = document.createElement('button');
+  copy.setAttribute('aria-label', 'Copy message');
+  section.append(copy);
+  return section;
+}
+
 /** One user message, in the shape the page renders it. */
 function userTurn(document: Document, id: string, text: string): HTMLElement {
   const section = document.createElement('section');
@@ -6358,13 +6374,13 @@ describe('the Compact & resume control', () => {
     await live.hook.pullActivity();
     live.hook.injectControl();
     live.hook.toggleMenu();
-    expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('Chat On Steroids settings');
+    expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('ComGu settings');
 
     locale = 'th';
     await live.hook.pullActivity();
     await settle();
 
-    expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('การตั้งค่า Chat On Steroids');
+    expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('การตั้งค่า ComGu');
     expect(live.document.querySelector('.clf-menu-action')?.textContent).toContain('ย่อบริบท');
     expect(pageText.textContent).toBe('Save');
   });
@@ -6687,7 +6703,7 @@ describe('the Compact & resume control', () => {
     expect(state({})).toMatchObject({ mode: 'idle', label: 'Compact', action: 'start' });
     expect(state({ disconnected: true })).toMatchObject({
       mode: 'off',
-      hint: 'Browser connection is disconnected in Chat On Steroids.',
+      hint: 'Browser connection is disconnected in ComGu.',
       action: 'none'
     });
     expect(state({ pressedAt: 900 })).toMatchObject({ mode: 'busy', label: 'Starting…', action: 'none' });
@@ -6771,6 +6787,76 @@ describe('the Compact & resume control', () => {
       mode: 'busy',
       action: 'cancel'
     });
+  });
+
+  it('arms automatic compaction at the threshold but never stops the live turn, then compacts after it settles', async () => {
+    let stopClicks = 0;
+    let compactCalls = 0;
+    live = await harness(undefined, {
+      activity: () => ({
+        ok: true,
+        data: {
+          entries: [],
+          stream: [],
+          nextSince: 0,
+          pendingTools: 0,
+          job: null,
+          tokens: 410_000,
+          activeTurnId: null,
+          autoCompactReady: true,
+          context: { auto: true, threshold: 400_000, warn: 400_000, limit: 533_333 }
+        }
+      }),
+      compact: () => {
+        compactCalls++;
+        return { ok: false, data: { error: 'test_compaction_boundary_reached' } };
+      }
+    });
+
+    startGenerating(live.document);
+    const section = assistantTurn(live.document, 'turn-auto-safe-boundary', []);
+    let claimCalls = 0;
+    live.reply.set('auto_compact_claim', () => {
+      claimCalls++;
+      return { ok: true, data: { claimed: true } };
+    });
+    live.document.querySelector('[data-testid="stop-button"]')?.addEventListener('click', () => {
+      stopClicks++;
+      stopGenerating(live!.document);
+    });
+    live.hook.observe();
+    await settle();
+
+    // Crossing the automatic threshold while a response is live may reserve the one-shot,
+    // but it must not use the manual Compact path's deliberate Stop-button interruption.
+    await live.hook.pullActivity();
+    await settle();
+    expect(claimCalls).toBe(1);
+    expect(stopClicks).toBe(0);
+    expect(compactCalls).toBe(0);
+
+    // Once ChatGPT finishes on its own, the armed automatic compaction may proceed from the
+    // idle boundary. The compact stub refuses immediately; reaching it is enough to prove the
+    // trigger moved to the post-turn side without manufacturing a Stop click.
+    stopGenerating(live.document);
+    const message = live.document.createElement('div');
+    message.setAttribute('data-message-id', 'a-auto-safe-boundary');
+    message.setAttribute('data-message-author-role', 'assistant');
+    const body = live.document.createElement('div');
+    body.className = 'whitespace-pre-wrap';
+    body.textContent = 'Finished naturally before compacting.';
+    message.append(body);
+    section.append(message);
+    const copy = live.document.createElement('button');
+    copy.setAttribute('aria-label', 'Copy message');
+    section.append(copy);
+    live.hook.observe();
+    live.advance(live.hook.TURN_SETTLE_MS * 2);
+    live.hook.observe();
+    await settle(800);
+
+    expect(stopClicks).toBe(0);
+    expect(compactCalls).toBe(1);
   });
 
   it('interrupts the live turn, waits for local tools, then prompts this same chat', async () => {
@@ -7643,7 +7729,7 @@ describe('the fresh chat the app opened', () => {
             type: 'worker',
             text: `${task}
 
-(You are a worker agent in a Chat On Steroids multi-agent run.)`,
+(You are a worker agent in a ComGu multi-agent run.)`,
             agent: 'worker-1'
           }
         }),
@@ -8440,7 +8526,7 @@ describe('the context meter and automatic compaction', () => {
     expect(live.sent.filter((message) => message.type === 'auto_compact_claim')).toEqual([]);
   });
 
-  it('interrupts the turn it is standing in and compacts exactly once', async () => {
+  it('arms during the live turn and compacts exactly once after that turn settles', async () => {
     let ready = true;
     live = await harness(undefined, {
       activity: () => withContext(205_000, settings({ auto: true, threshold: 200_000 }), { autoCompactReady: ready }),
@@ -8460,6 +8546,7 @@ describe('the context meter and automatic compaction', () => {
     });
     live.hook.injectControl();
     startGenerating(live.document);
+    completedAssistantTurn(live.document, 'turn-auto-once');
     const stop = live.document.querySelector('[data-testid="stop-button"]') as HTMLButtonElement;
     let stopped = false;
     stop.addEventListener('click', () => {
@@ -8470,8 +8557,14 @@ describe('the context meter and automatic compaction', () => {
     await live.hook.pullActivity();
     await settle();
 
-    expect(stopped).toBe(true);
+    expect(stopped).toBe(false);
     expect(live.sent.filter((message) => message.type === 'auto_compact_claim')).toHaveLength(1);
+    expect(startedCompactions(live)).toHaveLength(0);
+
+    await settleTurn(live);
+    await settle();
+
+    expect(stopped).toBe(false);
     expect(startedCompactions(live)).toHaveLength(1);
 
     // And not again: the app has withdrawn the bit, and this tab is busy with the run it
@@ -8482,10 +8575,11 @@ describe('the context meter and automatic compaction', () => {
   });
 
   /**
-   * Mid-tool-call is mid-turn, and is explicitly allowed. Local calls are not raced: the
-   * same settle barrier a manual press goes through waits for them before anything is typed.
+   * Crossing the threshold during a local tool call only arms the boundary. Once the model
+   * turn finishes naturally, the ordinary settle barrier still waits for local calls before
+   * anything is typed.
    */
-  it('compacts while a local tool call is still running', async () => {
+  it('arms while a local tool call is running, then waits for it after the turn settles', async () => {
     let ready = true;
     let asked = 0;
     live = await harness(undefined, {
@@ -8512,6 +8606,7 @@ describe('the context meter and automatic compaction', () => {
     });
     live.hook.injectControl();
     startGenerating(live.document);
+    completedAssistantTurn(live.document, 'turn-auto-tool');
     const stop = live.document.querySelector('[data-testid="stop-button"]') as HTMLButtonElement;
     stop.addEventListener('click', () => stopGenerating(live!.document));
 
@@ -8519,6 +8614,11 @@ describe('the context meter and automatic compaction', () => {
     await settle();
 
     expect(live.sent.filter((message) => message.type === 'auto_compact_claim')).toHaveLength(1);
+    expect(startedCompactions(live)).toHaveLength(0);
+
+    await settleTurn(live);
+    await settle();
+
     expect(startedCompactions(live)).toHaveLength(1);
     // It waited for the call to finish before typing anything into the composer.
     expect(asked).toBeGreaterThanOrEqual(3);

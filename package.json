@@ -1,10 +1,10 @@
 {
   "name": "chat-on-steroids",
   "version": "2.0.2",
-  "description": "Local coding bridge for ChatGPT over MCP, with Windows-only desktop control and approved-folder capability limits.",
+  "description": "ComGu: a controlled local MCP bridge for ChatGPT with files, commands, durable sessions and optional Windows desktop control.",
   "license": "MIT",
-  "author": "Chat On Steroids",
-  "homepage": "https://github.com/totec448-spec/chat-on-steroids",
+  "author": "ComGu",
+  "homepage": "https://github.com/Tanaboonnnnn/Com-gu",
   "desktopName": "com.chatonsteroids.app.desktop",
   "main": "out/main/index.js",
   "scripts": {

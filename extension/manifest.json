@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Chat On Steroids companion",
+  "name": "ComGu companion",
   "version": "2.0.2",
-  "description": "Records your ChatGPT session into the local Chat On Steroids app and labels its MCP tool calls with what they actually did.",
+  "description": "Records your ChatGPT session into the local ComGu app and labels its MCP tool calls with what they actually did.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "scripting", "alarms"],
   "host_permissions": [
@@ -40,7 +40,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Chat On Steroids",
+    "default_title": "ComGu",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

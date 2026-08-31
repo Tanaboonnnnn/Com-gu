@@ -104,7 +104,7 @@
    * Exact names, never a prefix: `Chat On Steroids Backup` would be somebody else's
    * connector, and a prefix test would have this app vouch for its traffic.
    */
-  const OUR_APPS = ['Chat On Steroids Core', 'Chat On Steroids Desktop', 'TobisComputer'];
+  const OUR_APPS = ['ComGu Core', 'ComGu Desktop', 'Chat On Steroids Core', 'Chat On Steroids Desktop', 'TobisComputer'];
 
   /** Whether an `invoked_resource.app_name` names one of this app's own connectors. */
   function ourApp(name) {

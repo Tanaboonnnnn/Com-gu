@@ -80,7 +80,7 @@ function validateEnvironment(overrides: CommandEnvironment | undefined): void {
       throw new ExecError(`Invalid environment variable name: ${key.slice(0, MAX_ENV_KEY_CHARS) || '(empty)'}`);
     }
     if (key.toUpperCase().startsWith('CLF_')) {
-      throw new ExecError('Environment variable names beginning with CLF_ are reserved by Chat On Steroids');
+      throw new ExecError('Environment variable names beginning with CLF_ are reserved by ComGu');
     }
     if (typeof value !== 'string') throw new ExecError(`Environment variable ${key} must be a string`);
     if (value.includes('\0')) throw new ExecError(`Environment variable ${key} contains a null byte`);

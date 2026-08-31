@@ -599,6 +599,11 @@
    * it goes false again on its own the moment the answer lands.
    */
   let autoCompactReady = false;
+  /**
+   * A threshold crossing that has reserved this chat's one automatic compaction.
+   * Reservation happens while work is live; execution waits for a natural completed boundary.
+   */
+  let autoCompactArmed = null;
 
   /**
    * The goal loop, as this page sees it.
@@ -782,7 +787,7 @@
     const takeUtf8 = (value, budget) => {
       if (typeof value !== 'string') return value;
       if (utf8Bytes(value) <= budget) return value;
-      const marker = '\n\n[Chat On Steroids: browser observation truncated to fit transport.]';
+      const marker = '\n\n[ComGu: browser observation truncated to fit transport.]';
       const markerBytes = utf8Bytes(marker);
       let low = 0;
       let high = value.length;
@@ -1102,6 +1107,7 @@
     job = null;
     pendingTools = 0;
     autoCompactReady = false;
+    autoCompactArmed = null;
     resumeIdentityPending = false;
     // A native compaction belongs to the conversation it was started in. Navigating away
     // abandons this tab's half of it; the app's request expires on its own.
@@ -1565,6 +1571,20 @@
       });
     }
     if (endedTurnId) emit({ kind: 'turn_end', turnId: endedTurnId, ...result });
+    // Automatic compaction is a boundary action, not an interrupt. Crossing the configured
+    // threshold while this turn was live only reserved the one-shot; now that ChatGPT has
+    // completed naturally, run the ordinary compaction flow from an idle page. Manual Compact
+    // & Resume intentionally keeps its interrupt-now behaviour.
+    if (
+      endedTurnId &&
+      result.outcome === 'completed' &&
+      autoCompactArmed &&
+      autoCompactArmed.conversationId === conversationId &&
+      autoCompactArmed.epoch === epoch
+    ) {
+      autoCompactArmed = null;
+      void startCompact();
+    }
     // The compaction turn settling is the moment the brief exists. Read here, from this
     // generation's own section, while `ended` still names it — a tick later the page is just
     // a transcript again and this answer is indistinguishable from any other.
@@ -4462,7 +4482,7 @@
    * Exact names, never a prefix: `Chat On Steroids Backup` would be somebody else's
    * connector, and a prefix test would have this app vouch for its traffic.
    */
-  const OUR_CONNECTORS = ['Chat On Steroids Core', 'Chat On Steroids Desktop', 'TobisComputer'];
+  const OUR_CONNECTORS = ['ComGu Core', 'ComGu Desktop', 'Chat On Steroids Core', 'Chat On Steroids Desktop', 'TobisComputer'];
 
   function ourConnectorApp(name) {
     return typeof name === 'string' && OUR_CONNECTORS.includes(name);
@@ -5103,7 +5123,7 @@
       return {
         mode: 'off',
         label: 'Compact',
-        hint: 'Browser connection is disconnected in Chat On Steroids.',
+        hint: 'Browser connection is disconnected in ComGu.',
         action: 'none'
       };
     }
@@ -5111,7 +5131,7 @@
       return {
         mode: 'off',
         label: 'Compact',
-        hint: 'Chat On Steroids is not running on this PC.',
+        hint: 'ComGu is not running on this PC.',
         action: 'none'
       };
     }
@@ -5421,18 +5441,11 @@
   }
 
   /**
-   * Starts automatic compaction in the middle of the work, which is the only place it helps.
+   * Reserves automatic compaction while work is live and executes it after that turn completes.
    *
-   * The page does not compare `tokens >= threshold` itself — the app owns the number and
-   * says, per poll, whether this chat is over it and still has its one trigger. What the
-   * page adds is the half only it can see: ChatGPT is answering *right now*.
-   *
-   * That condition is the exact inverse of what this used to demand, and the inversion is
-   * the point. Waiting for the turn to end meant every automatic compaction landed on a
-   * finished answer — the one moment where a handoff carries nothing across, because the
-   * job is already done. Interrupting is what the user is asking for at the threshold: stop here,
-   * write the brief, carry on in a fresh chat. Mid-tool-call counts as mid-turn, and is
-   * handled by the same settle barrier a manual press goes through.
+   * The app owns the threshold and durable one-shot; the page contributes live-turn evidence
+   * so opening an old over-threshold chat does not arm it. Reaching the threshold is deliberately
+   * not permission to click Stop: doing that can terminate useful model/tool work mid-turn.
    */
   async function maybeAutoCompact(expectedConversation = conversationId, expectedEpoch = epoch) {
     const current = () =>
@@ -5446,6 +5459,7 @@
     // 400k ceiling only changes whether the next stop can be revived.
     if (goalConfig && goalConfig.blocked === 'worker') return;
     if (!conversationId || !context || !context.auto || !autoCompactReady) return;
+    if (autoCompactArmed) return;
     // Anything already running owns this chat, including a run started by hand.
     if (nativeBusy || pressedAt > 0) return;
     if (job && job.busy) return;
@@ -5466,7 +5480,7 @@
     }
     autoCompactReady = false;
     if (!current()) return;
-    await startCompact();
+    autoCompactArmed = { conversationId, epoch: expectedEpoch };
   }
 
   /** Local phases of a ChatGPT-native compaction, as the button says them. */
@@ -7721,7 +7735,7 @@
     if (data.error === 'compaction_running') return 'Another chat is compacting right now.';
     if (data.error === 'turn_still_generating') return 'Wait for this ChatGPT turn to finish first.';
     if (data.error) return String(data.error).slice(0, 160);
-    if (reply.error === 'app_not_found') return 'Chat On Steroids is not running on this PC.';
+    if (reply.error === 'app_not_found') return 'ComGu is not running on this PC.';
     return reply.error ? String(reply.error).slice(0, 160) : '';
   }
 

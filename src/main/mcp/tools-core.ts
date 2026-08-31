@@ -268,7 +268,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
         guard('read', async () => {
           if (!caps.read && !caps.browse && !caps.metadata) {
             return fail(
-              'TOOL_DISABLED: read is disabled by the current Chat On Steroids permissions. Ask the user to enable reading in the app.'
+              'TOOL_DISABLED: read is disabled by the current ComGu permissions. Ask the user to enable reading in the app.'
             );
           }
           const targets: string[] = [];
@@ -396,7 +396,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
         guard('view_image', async () => {
           if (!caps.read) {
             return fail(
-              'TOOL_DISABLED: view_image is disabled by the current Chat On Steroids permissions. Ask the user to enable reading in the app.'
+              'TOOL_DISABLED: view_image is disabled by the current ComGu permissions. Ask the user to enable reading in the app.'
             );
           }
           const resolved = await resolveIn(ctx.roots, path);
@@ -563,7 +563,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
         guard('apply_patch', async () => {
           if (!caps.create && !caps.edit && !caps.move && !caps.deleteFile) {
             return fail(
-              'TOOL_DISABLED: apply_patch is disabled by the current Chat On Steroids permissions. Ask the user to enable changing files in the app.'
+              'TOOL_DISABLED: apply_patch is disabled by the current ComGu permissions. Ask the user to enable changing files in the app.'
             );
           }
 

@@ -39,6 +39,10 @@ function verify(repository: string) {
   });
 }
 
+function addOrigin(repository: string, url: string): void {
+  execFileSync('git', ['remote', 'add', 'origin', url], { cwd: repository });
+}
+
 afterEach(() => {
   for (const repository of repositories.splice(0)) {
     rmSync(repository, { recursive: true, force: true });
@@ -73,5 +77,21 @@ describe('public-history privacy gate', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Claude session');
     expect(result.stderr).not.toContain(sessionUrl);
+  });
+
+  it('allows inherited upstream author identity on the ComGu fork but still rejects session provenance', () => {
+    const repository = makeRepository();
+    addOrigin(repository, 'https://github.com/Tanaboonnnnn/Com-gu.git');
+    commit(repository, 'Inherited upstream commit', ['totec448', 'gmail.com'].join('@'));
+
+    const inherited = verify(repository);
+    expect(inherited.status).toBe(0);
+
+    const sessionUrl = ['https://claude.ai/code/', 'session_forkLeak'].join('');
+    commit(repository, `Unsafe fork trailer\n\n${['Claude', 'Session'].join('-')}: ${sessionUrl}`, safeEmail);
+    const leaked = verify(repository);
+    expect(leaked.status).toBe(1);
+    expect(leaked.stderr).toContain('Claude session');
+    expect(leaked.stderr).not.toContain(sessionUrl);
   });
 });

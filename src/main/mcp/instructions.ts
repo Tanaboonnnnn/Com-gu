@@ -35,7 +35,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
   // labelled, so the line stays short on the common case where every root is one.
   const roots =
     ctx.roots.length === 0
-      ? 'None yet — the user must approve a folder in the Chat On Steroids app.'
+      ? 'None yet — the user must approve a folder in the ComGu app.'
       : ctx.roots.map((r) => `/${r.name}${isGitRepository(r.path) ? ' (git)' : ''}`).join('  ');
 
   const mode = ctx.readOnly

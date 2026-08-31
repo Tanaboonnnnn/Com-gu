@@ -13,7 +13,7 @@ the latest version, include that result in the private report.
 
 ## Security model
 
-Chat On Steroids is a permission boundary between ChatGPT and the logged-in OS user running the app:
+ComGu is a permission boundary between ChatGPT and the logged-in OS user running the app:
 
 - Filesystem tools validate paths against folders you explicitly approve.
 - Read-only mode disables effective file writes, commands, desktop control and clipboard writes.

@@ -34,7 +34,7 @@ export type SurfaceId = (typeof SURFACE_IDS)[number];
  * name and the setup cards, and those three drifting apart is how a user ends up with
  * a connector whose name does not match the thing the instructions told them to type.
  */
-export const CONNECTOR_BRAND = 'Chat On Steroids';
+export const CONNECTOR_BRAND = 'ComGu';
 
 export interface SurfaceDefinition {
   id: SurfaceId;

@@ -103,7 +103,7 @@ export async function secureStorageStatus(platform: NodeJS.Platform = process.pl
         return {
           available: false,
           detail:
-            'Linux secure storage fell back to Electron’s insecure hard-coded-key provider. Start or unlock a desktop keyring/Secret Service (for example GNOME Keyring or KWallet), then restart Chat On Steroids.'
+            'Linux secure storage fell back to Electron’s insecure hard-coded-key provider. Start or unlock a desktop keyring/Secret Service (for example GNOME Keyring or KWallet), then restart ComGu.'
         };
       }
     }
