@@ -56,7 +56,7 @@ if (targetPlatform === 'darwin') {
   appExecutable = path.join(appBundle, 'Contents', 'MacOS', 'ComGu');
 } else {
   resourcesDir = path.join(packageRoot, 'resources');
-  appExecutable = path.join(packageRoot, targetPlatform === 'win32' ? 'ComGu.exe' : 'chat-on-steroids');
+  appExecutable = path.join(packageRoot, targetPlatform === 'win32' ? 'ComGu.exe' : 'comgu');
 }
 
 function required(relative) {

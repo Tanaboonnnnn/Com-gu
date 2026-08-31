@@ -413,6 +413,7 @@ describe('cross-platform packaging targets', () => {
     const packagedRuntime = readFileSync(path.join(root, 'scripts', 'smoke-packaged-runtime.mjs'), 'utf8');
     expect(packagedRuntime).toContain("for (const dependency of ['node-pty', 'tree-sitter', 'tree-sitter-bash'])");
     expect(packagedRuntime).toContain('directories.length !== 1 || directories[0] !== nativeDir');
+    expect(packagedRuntime).toContain("targetPlatform === 'win32' ? 'ComGu.exe' : 'comgu'");
 
     const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
     const notes = readFileSync(path.join(root, 'docs', 'release-notes', 'v2.0.2.md'), 'utf8');
