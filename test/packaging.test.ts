@@ -105,11 +105,11 @@ describe('cross-platform packaging targets', () => {
     expect(smoke).toContain('runtime.electron !== expectedElectronVersion');
   });
 
-  it('assembles every platform artifact in the reusable release workflow', () => {
+  it('assembles the five current native release targets and skips Intel macOS', () => {
     const workflow = readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
     const parsed = yamlFile('.github/workflows/release.yml');
     const matrix = parsed.jobs.package.strategy.matrix.include;
-    expect(matrix).toHaveLength(6);
+    expect(matrix).toHaveLength(5);
     expect(matrix).toEqual([
       {
         name: 'Windows x64', platform: 'win32', arch: 'x64', runner: 'windows-2025',
@@ -118,11 +118,6 @@ describe('cross-platform packaging targets', () => {
       {
         name: 'Windows arm64', platform: 'win32', arch: 'arm64', runner: 'windows-11-arm',
         script: 'dist:arm64', artifact: 'package-windows-arm64', files: 'release/ComGu-Setup-arm64.exe'
-      },
-      {
-        name: 'macOS x64', platform: 'darwin', arch: 'x64', runner: 'macos-15-intel',
-        script: 'dist:mac:x64', artifact: 'package-macos-x64',
-        files: 'release/ComGu-macOS-x64.dmg\nrelease/ComGu-macOS-x64.zip\n'
       },
       {
         name: 'macOS arm64', platform: 'darwin', arch: 'arm64', runner: 'macos-15',
@@ -140,6 +135,9 @@ describe('cross-platform packaging targets', () => {
         files: 'release/ComGu-Linux-arm64.AppImage\nrelease/ComGu-Linux-arm64.deb\n'
       }
     ]);
+    expect(workflow).not.toContain('Package macOS x64');
+    expect(workflow).not.toContain('release/ComGu-macOS-x64.dmg');
+    expect(workflow).not.toContain('release/ComGu-macOS-x64.zip');
     expect(parsed.jobs.package['runs-on']).toBe('${{ matrix.runner }}');
     expect(workflow).toContain('name: comgu-candidate-${{ github.run_id }}');
     expect(workflow).toContain('Install generated DEB on target distro');
@@ -540,7 +538,7 @@ Load command 11
     })).rejects.toThrow(/refusing to assume the release is absent/);
   });
 
-  it('rejects invalid publishes before allocating the reusable six-runner build', () => {
+  it('rejects invalid publishes before allocating the reusable five-runner build', () => {
     const workflow = readFileSync(path.join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
     const preflight = workflow.indexOf('  preflight:');
     const candidate = workflow.indexOf('  candidate:');
@@ -580,8 +578,6 @@ Load command 11
     const artifacts = [
       'ComGu-Setup-x64.exe',
       'ComGu-Setup-arm64.exe',
-      'ComGu-macOS-x64.dmg',
-      'ComGu-macOS-x64.zip',
       'ComGu-macOS-arm64.dmg',
       'ComGu-macOS-arm64.zip',
       'ComGu-Linux-x64.AppImage',
@@ -604,6 +600,12 @@ Load command 11
     }
     for (const artifact of artifacts.filter((artifact) => artifact !== 'SHA256SUMS.txt')) {
       expect(checksumStep).toContain(artifact);
+    }
+    for (const retiredArtifact of ['ComGu-macOS-x64.dmg', 'ComGu-macOS-x64.zip']) {
+      expect(notes).not.toContain(`\`${retiredArtifact}\``);
+      expect(checksumStep).not.toContain(retiredArtifact);
+      expect(candidateUpload).not.toContain(retiredArtifact);
+      expect(publishStep).not.toContain(retiredArtifact);
     }
   });
 });

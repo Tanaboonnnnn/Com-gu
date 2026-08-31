@@ -26,7 +26,7 @@ jobs:
       TAG: ${{ github.ref_name }}
 
     steps:
-      # Fail cheap before allocating the six native packaging runners. The final publish step
+      # Fail cheap before allocating the five native packaging runners. The final publish step
       # repeats the release-exists check to close the race while the candidate is building.
       - name: Refuse to publish from anything but a tag
         run: |
@@ -77,8 +77,6 @@ jobs:
           for (const artifact of [
             'ComGu-Setup-x64.exe',
             'ComGu-Setup-arm64.exe',
-            'ComGu-macOS-x64.dmg',
-            'ComGu-macOS-x64.zip',
             'ComGu-macOS-arm64.dmg',
             'ComGu-macOS-arm64.zip',
             'ComGu-Linux-x64.AppImage',
@@ -172,8 +170,6 @@ jobs:
           gh release create "$TAG" \
             publish/ComGu-Setup-x64.exe \
             publish/ComGu-Setup-arm64.exe \
-            publish/ComGu-macOS-x64.dmg \
-            publish/ComGu-macOS-x64.zip \
             publish/ComGu-macOS-arm64.dmg \
             publish/ComGu-macOS-arm64.zip \
             publish/ComGu-Linux-x64.AppImage \

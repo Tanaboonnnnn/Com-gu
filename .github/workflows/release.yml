@@ -32,15 +32,6 @@ jobs:
             script: dist:arm64
             artifact: package-windows-arm64
             files: release/ComGu-Setup-arm64.exe
-          - name: macOS x64
-            platform: darwin
-            arch: x64
-            runner: macos-15-intel
-            script: dist:mac:x64
-            artifact: package-macos-x64
-            files: |
-              release/ComGu-macOS-x64.dmg
-              release/ComGu-macOS-x64.zip
           - name: macOS arm64
             platform: darwin
             arch: arm64
@@ -330,8 +321,6 @@ jobs:
           files=(
             release/ComGu-Setup-x64.exe
             release/ComGu-Setup-arm64.exe
-            release/ComGu-macOS-x64.dmg
-            release/ComGu-macOS-x64.zip
             release/ComGu-macOS-arm64.dmg
             release/ComGu-macOS-arm64.zip
             release/ComGu-Linux-x64.AppImage
@@ -344,8 +333,6 @@ jobs:
           (cd release && sha256sum \
             ComGu-Setup-x64.exe \
             ComGu-Setup-arm64.exe \
-            ComGu-macOS-x64.dmg \
-            ComGu-macOS-x64.zip \
             ComGu-macOS-arm64.dmg \
             ComGu-macOS-arm64.zip \
             ComGu-Linux-x64.AppImage \
@@ -364,8 +351,6 @@ jobs:
           path: |
             release/ComGu-Setup-x64.exe
             release/ComGu-Setup-arm64.exe
-            release/ComGu-macOS-x64.dmg
-            release/ComGu-macOS-x64.zip
             release/ComGu-macOS-arm64.dmg
             release/ComGu-macOS-arm64.zip
             release/ComGu-Linux-x64.AppImage
