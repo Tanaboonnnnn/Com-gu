@@ -158,7 +158,7 @@ jobs:
           test -f "$deb"
           echo "Generated control metadata:"
           dpkg-deb --field "$deb" Package Version Architecture Depends
-          test "$(dpkg-deb --field "$deb" Package)" = chat-on-steroids
+          test "$(dpkg-deb --field "$deb" Package)" = comgu
           test "$(dpkg-deb --field "$deb" Version)" = "$(node -p "require('./package.json').version")"
           expected_deb_arch=arm64
           if [ '${{ matrix.arch }}' = x64 ]; then expected_deb_arch=amd64; fi
@@ -169,12 +169,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends "$deb"
           sudo apt-get install -y --no-install-recommends xvfb xauth
-          dpkg-query -W -f='${Status}\n' chat-on-steroids | grep -Fxq 'install ok installed'
-          desktop=/usr/share/applications/com.chatonsteroids.app.desktop
+          dpkg-query -W -f='${Status}\n' comgu | grep -Fxq 'install ok installed'
+          desktop=/usr/share/applications/com.comgu.app.desktop
           test -f "$desktop"
           grep -Fxq 'Name=ComGu' "$desktop"
           grep -Fxq 'Icon=comgu' "$desktop"
-          grep -Fxq 'StartupWMClass=com.chatonsteroids.app' "$desktop"
+          grep -Fxq 'StartupWMClass=com.comgu.app' "$desktop"
           # electron-builder's DEB postinstall registers /usr/bin through update-alternatives.
           # Prove package integration is present, then anchor the full runtime smoke at the
           # package-owned resolved binary rather than assuming an /opt product-directory spelling.
@@ -182,7 +182,7 @@ jobs:
           ELECTRON_RUN_AS_NODE=1 /usr/bin/comgu -e "if(process.platform!=='linux'||process.arch!=='${{ matrix.arch }}')process.exit(9); console.log('deb-runtime-ok')" | grep -Fxq 'deb-runtime-ok'
           installed_executable="$(readlink -f /usr/bin/comgu)"
           test -x "$installed_executable"
-          dpkg-query -S "$installed_executable" | grep -Eq '^chat-on-steroids:'
+          dpkg-query -S "$installed_executable" | grep -Eq '^comgu:'
           node scripts/smoke-packaged-runtime.mjs --platform linux --arch '${{ matrix.arch }}' --root "$(dirname "$installed_executable")"
 
       - name: Launch installed DEB normally under Xvfb

@@ -325,7 +325,11 @@ describe('cross-platform packaging targets', () => {
     expect(releaseWorkflow).toContain('CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a /usr/bin/comgu');
     expect(releaseWorkflow).toContain("grep -Fq '[info] app started' \"$log\"");
     expect(releaseWorkflow).toContain("grep -Fq '[info] window loaded' \"$log\"");
-    expect(releaseWorkflow).toContain("test \"$(dpkg-deb --field \"$deb\" Package)\" = chat-on-steroids");
+    expect(releaseWorkflow).toContain("test \"$(dpkg-deb --field \"$deb\" Package)\" = comgu");
+    expect(releaseWorkflow).toContain("dpkg-query -W -f='${Status}\\n' comgu | grep -Fxq 'install ok installed'");
+    expect(releaseWorkflow).toContain('desktop=/usr/share/applications/com.comgu.app.desktop');
+    expect(releaseWorkflow).toContain("grep -Fxq 'StartupWMClass=com.comgu.app' \"$desktop\"");
+    expect(releaseWorkflow).toContain("dpkg-query -S \"$installed_executable\" | grep -Eq '^comgu:'");
     expect(releaseWorkflow).toContain("test \"$(dpkg-deb --field \"$deb\" Version)\" = \"$(node -p \"require('./package.json').version\")\"");
     expect(releaseWorkflow).toContain('expected_deb_arch=amd64');
     expect(releaseWorkflow).toContain('test -L /usr/bin/comgu');
@@ -380,7 +384,7 @@ describe('cross-platform packaging targets', () => {
     const nativePrep = readFileSync(path.join(root, 'scripts', 'prepare-packaging-native.mjs'), 'utf8');
     expect(nativePrep).toContain("await chmod(path.join(payloadRoot, 'node-pty', 'prebuilds', prebuildDir, 'spawn-helper'), 0o755)");
     for (const marker of [
-      "CFBundleIdentifier: 'com.chatonsteroids.app'",
+      "CFBundleIdentifier: 'com.comgu.app'",
       "CFBundleExecutable: 'ComGu'",
       "CFBundleName: 'ComGu'",
       "CFBundleDisplayName: 'ComGu'",

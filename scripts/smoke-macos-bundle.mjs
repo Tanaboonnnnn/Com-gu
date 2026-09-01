@@ -41,7 +41,7 @@ function plistValue(key) {
 }
 
 const expectedPlist = {
-  CFBundleIdentifier: 'com.chatonsteroids.app',
+  CFBundleIdentifier: 'com.comgu.app',
   CFBundleExecutable: 'ComGu',
   CFBundleName: 'ComGu',
   CFBundleDisplayName: 'ComGu',
