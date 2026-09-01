@@ -22,7 +22,7 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
-import type { BridgeStatus } from '../shared/types.js';
+import { BROWSER_FAMILIES, type BridgeStatus, type BrowserFamily } from '../shared/types.js';
 import type { SessionOrigin } from '../shared/session.js';
 import { getConfig, updateConfig } from './config.js';
 import { getSecret, secureStorageStatus, setSecret } from './secrets.js';
@@ -139,6 +139,17 @@ export const STALE_SWARM_MS = 2 * 60_000;
 const STALE_SWARM_SWEEP_MS = 30_000;
 /** /events batches currently between parse and durable/session+worker lifecycle completion. */
 let observationWritesInFlight = 0;
+const browserFamilyByConversation = new Map<string, BrowserFamily>();
+
+function browserFamily(value: unknown): BrowserFamily | null {
+  return typeof value === 'string' && BROWSER_FAMILIES.includes(value as BrowserFamily) ? (value as BrowserFamily) : null;
+}
+
+function rememberBrowserFamily(conversationId: string, value: unknown): void {
+  const family = browserFamily(value);
+  if (family) browserFamilyByConversation.set(conversationId, family);
+}
+
 /** Requests allowed per rolling minute, across all routes. */
 const RATE_LIMIT = 900;
 
@@ -251,7 +262,7 @@ function boundBrief(text: string): string {
  * worker's inbox holds at hand-out time. Building both there is what keeps that true.
  */
 type CommandSpec =
-  | { type: 'worker'; agent: string; task: string; runId: string }
+  | { type: 'worker'; agent: string; task: string; runId: string; primeConversationId: string | null }
   /**
    * Waking a sleeping worker in the chat it already has.
    *
@@ -275,7 +286,7 @@ type CommandSpec =
    * move happened. Keyed by session, because compacting the same chat twice is one job whose
    * brief got newer — not two fresh chats, which is what keying on the handoff produced.
    */
-  | { type: 'resume'; sessionId: string; token: string };
+  | { type: 'resume'; sessionId: string; token: string; sourceConversationId: string | null };
 
 interface Command {
   id: string;
@@ -1027,6 +1038,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const id = conversationId(body['conversationId']);
     if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    rememberBrowserFamily(id, body['browserFamily']);
     const calls = parseCallEvidence(body['calls'], true).filter((call) => call.requestId !== null);
     if (calls.length === 0) return json(res, 400, { error: 'bad_request_evidence' }, origin);
 
@@ -1083,6 +1095,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const id = conversationId(body['conversationId']);
     if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    rememberBrowserFamily(id, body['browserFamily']);
     // Normal worker binding happens on the exact command ACK. `/events` is the lost-ACK
     // recovery path, but the friendly id (`worker-1`) is reused by every later swarm and is
     // therefore not enough authority on its own. A command-opened document also carries the
@@ -3375,7 +3388,8 @@ export function queueWorkerBootstrap(agent: string, task: string): BridgeCommand
   // meaning for one outside a run, and manufacturing an unscoped command here is exactly how
   // stale durable work later becomes somebody else's `worker-1`.
   if (!runId) return null;
-  const command = queue({ type: 'worker', agent, task, runId });
+  const primeConversationId = swarmState().agents.find((entry) => entry.role === 'prime')?.conversationId ?? null;
+  const command = queue({ type: 'worker', agent, task, runId, primeConversationId });
   deliver();
   return describe(command, null);
 }
@@ -3413,7 +3427,8 @@ export function queueResume(sessionId: string, token: string): BridgeCommand | n
 
 function queueResumeCommand(sessionId: string, token: string): Command {
   rememberToken(sessionId, token);
-  const command = queue({ type: 'resume', sessionId, token });
+  const sourceConversationId = continuationByToken(token)?.from ?? null;
+  const command = queue({ type: 'resume', sessionId, token, sourceConversationId });
   changed();
   return command;
 }
@@ -3427,9 +3442,9 @@ function queueResumeCommand(sessionId: string, token: string): Command {
  * a build with no window (or a test) simply falls back to the polling path instead of
  * having a browser-launching side effect nobody asked for.
  */
-let openInBrowser: ((url: string) => Promise<void>) | null = null;
+let openInBrowser: ((url: string, family: BrowserFamily | null) => Promise<void>) | null = null;
 
-export function setBrowserOpener(open: ((url: string) => Promise<void>) | null): void {
+export function setBrowserOpener(open: ((url: string, family: BrowserFamily | null) => Promise<void>) | null): void {
   openInBrowser = open;
 }
 
@@ -3490,6 +3505,17 @@ async function deliverOne(): Promise<void> {
   // worker already has, so the page lands on it and the marker it redeems names it back.
   const targetConversation =
     command.spec.type === 'revive' || command.spec.type === 'prime-wake' ? command.spec.conversationId : null;
+  const affinityConversation =
+    command.spec.type === 'worker'
+      ? command.spec.primeConversationId
+      : command.spec.type === 'resume'
+        ? command.spec.sourceConversationId
+        : targetConversation;
+  const family = affinityConversation
+    ? (browserFamilyByConversation.get(affinityConversation) ?? null)
+    : command.spec.type === 'worker'
+      ? ([...browserFamilyByConversation.entries()].find(([conversation]) => agentForConversation(conversation) === PRIME_ID)?.[1] ?? null)
+      : null;
   const url = commandUrl(command.id, targetConversation);
   // The recorder can see a brand-new ChatGPT conversation before that page's content script has
   // redeemed this command. Arm the session-transfer gate before the browser gets any chance to
@@ -3503,7 +3529,7 @@ async function deliverOne(): Promise<void> {
       : `bridge: opening a fresh ChatGPT chat for ${specKey(command.spec)}`
   );
   try {
-    await openInBrowser(url);
+    await openInBrowser(url, family);
   } catch (err) {
     // One command is one browser-open attempt. A rejected opener can never produce an ACK,
     // so leaving the row unleased merely blocks everything behind it until some unrelated
@@ -3978,7 +4004,16 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
     // already be durable while the leased browser command is still waiting for its retry.
     const workerState = swarmState().agents.find((entry) => entry.id === worker.agent && entry.role === 'worker')?.state;
     if (workerState !== 'invited' && workerState !== 'active') return null;
-    return { type: 'worker', agent: worker.agent, task: worker.task.slice(0, 512 * 1024), runId: worker.runId };
+    return {
+      type: 'worker',
+      agent: worker.agent,
+      task: worker.task.slice(0, 512 * 1024),
+      runId: worker.runId,
+      primeConversationId:
+        typeof (raw as { primeConversationId?: unknown }).primeConversationId === 'string'
+          ? (raw as { primeConversationId: string }).primeConversationId
+          : (swarmState().agents.find((entry) => entry.role === 'prime')?.conversationId ?? null)
+    };
   }
   if (
     version >= 4 &&
@@ -4011,7 +4046,15 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
     const resume = raw as Extract<CommandSpec, { type: 'resume' }>;
     const continuation = continuationByToken(resume.token);
     if (!continuation || continuation.sessionId !== resume.sessionId || continuation.state === 'aborted') return null;
-    return { type: 'resume', sessionId: resume.sessionId, token: resume.token };
+    return {
+      type: 'resume',
+      sessionId: resume.sessionId,
+      token: resume.token,
+      sourceConversationId:
+        typeof (raw as { sourceConversationId?: unknown }).sourceConversationId === 'string'
+          ? (raw as { sourceConversationId: string }).sourceConversationId
+          : null
+    };
   }
   return null;
 }
@@ -4245,6 +4288,7 @@ export async function restoreCommands(): Promise<void> {
 
 /** Test seam. */
 export function resetBridgeForTests(): void {
+  browserFamilyByConversation.clear();
   for (const command of commands) if (command.timer) clearTimeout(command.timer);
   if (browserPresenceTimer) clearTimeout(browserPresenceTimer);
   browserPresenceTimer = null;

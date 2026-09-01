@@ -502,6 +502,7 @@ function loadWorker(options: {
   local: FakeStorageArea;
   session: FakeStorageArea;
   fetch?: (input: string, init?: Record<string, unknown>) => Promise<ReturnType<typeof response>>;
+  navigator?: Record<string, unknown>;
   tabsGet?: (tabId: number) => Promise<{ id?: number; url?: string; pendingUrl?: string; status?: string }>;
   tabsQuery?: () => Promise<Array<{ id?: number; windowId?: number; url?: string; pendingUrl?: string }>>;
   tabsSendMessage?: (tabId: number, message: Record<string, unknown>) => Promise<unknown>;
@@ -588,6 +589,7 @@ function loadWorker(options: {
   vm.runInNewContext(backgroundSource, {
     chrome,
     fetch,
+    navigator: options.navigator ?? { userAgent: 'Mozilla/5.0 Chrome/152.0.0.0' },
     AbortController,
     setTimeout,
     clearTimeout,
@@ -1628,7 +1630,11 @@ describe('extension observation journal', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(postedEvents).toEqual([
-      { conversationId, events: [expect.objectContaining({ kind: 'user_message', text: 'command bootstrap' })] }
+      {
+        conversationId,
+        browserFamily: 'chrome',
+        events: [expect.objectContaining({ kind: 'user_message', text: 'command bootstrap' })]
+      }
     ]);
     expect(session.data.commandAckOutbox).toEqual([]);
     expect(journalOf(session)).toEqual([]);
@@ -1792,8 +1798,12 @@ describe('extension observation journal', () => {
     });
 
     expect(posted).toEqual([
-      { conversationId: a, events: [{ kind: 'progress', time: expect.any(Number), text: 'A1' }, { kind: 'progress', time: expect.any(Number), text: 'A2' }] },
-      { conversationId: b, events: [{ kind: 'progress', time: expect.any(Number), text: 'B1' }] }
+      {
+        conversationId: a,
+        browserFamily: 'chrome',
+        events: [{ kind: 'progress', time: expect.any(Number), text: 'A1' }, { kind: 'progress', time: expect.any(Number), text: 'A2' }]
+      },
+      { conversationId: b, browserFamily: 'chrome', events: [{ kind: 'progress', time: expect.any(Number), text: 'B1' }] }
     ]);
     expect(journalOf(session)).toEqual([]);
   });
@@ -2487,7 +2497,8 @@ describe('extension connection', () => {
     const worker = loadWorker({
       local: new FakeStorageArea({ port: 8765, token: 'paired-token' }),
       session: new FakeStorageArea(),
-      fetch
+      fetch,
+      navigator: { brave: { isBrave: async () => true }, userAgent: 'Mozilla/5.0 Chrome/152.0.0.0' }
     });
 
     const reply = await worker.send({
@@ -2498,6 +2509,7 @@ describe('extension connection', () => {
 
     expect(body).toMatchObject({
       conversationId,
+      browserFamily: 'brave',
       calls: [expect.objectContaining({ requestId, messageId: 'request-message' })]
     });
     expect(reply).toMatchObject({

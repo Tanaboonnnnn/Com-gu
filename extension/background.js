@@ -37,6 +37,27 @@ const BATCH = 100;
 const RETRY_ALARM = 'clf-bridge-drain';
 let retryAlarmScheduled = false;
 
+function browserFamily() {
+  try {
+    if (navigator?.brave && typeof navigator.brave.isBrave === 'function') return 'brave';
+    const brands = Array.isArray(navigator?.userAgentData?.brands)
+      ? navigator.userAgentData.brands.map((entry) => String(entry?.brand || '').toLowerCase())
+      : [];
+    if (brands.some((brand) => brand.includes('microsoft edge'))) return 'edge';
+    if (brands.some((brand) => brand.includes('google chrome'))) return 'chrome';
+    if (brands.some((brand) => brand === 'chromium')) return 'chromium';
+    const ua = String(navigator?.userAgent || '');
+    if (/Edg\//.test(ua)) return 'edge';
+    if (/Chromium\//.test(ua)) return 'chromium';
+    if (/Chrome\//.test(ua)) return 'chrome';
+  } catch {
+    // Browser affinity is optional evidence. Unknown must stay unknown rather than guessed.
+  }
+  return null;
+}
+
+const BROWSER_FAMILY = browserFamily();
+
 let port = null;
 let token = null;
 let loaded = false;
@@ -652,6 +673,7 @@ async function drainOnce(preferredConversationId = null) {
       method: 'POST',
       body: JSON.stringify({
         conversationId,
+        browserFamily: BROWSER_FAMILY,
         agent,
         agentCommandId,
         events: mine.map((entry) => entry.event)
@@ -663,7 +685,7 @@ async function drainOnce(preferredConversationId = null) {
       const half = mine.slice(0, Math.floor(mine.length / 2));
       const retry = await call('/events', {
         method: 'POST',
-        body: JSON.stringify({ conversationId, agent, agentCommandId, events: half.map((entry) => entry.event) })
+        body: JSON.stringify({ conversationId, browserFamily: BROWSER_FAMILY, agent, agentCommandId, events: half.map((entry) => entry.event) })
       });
       noteDelivery(retry, half.length, conversationId);
       if (!retry.ok) break;
@@ -1881,7 +1903,7 @@ const HANDLERS = {
     if (calls.length === 0) return { ok: false, error: 'bad_request_evidence' };
     const result = await call('/correlations', {
       method: 'POST',
-      body: JSON.stringify({ conversationId, calls })
+      body: JSON.stringify({ conversationId, browserFamily: BROWSER_FAMILY, calls })
     });
     return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
   },

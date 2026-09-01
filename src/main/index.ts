@@ -3,7 +3,7 @@
  */
 
 import path from 'node:path';
-import { app, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session } from 'electron';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
 import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
 import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
@@ -260,18 +260,15 @@ void app.whenReady().then(async () => {
   // cases the old "wait for a ChatGPT tab to poll us" delivery could never handle. Wired
   // before any restored command is delivered, so a resume queued yesterday opens as soon
   // as the bridge starts rather than waiting for the user to visit ChatGPT.
-  setBrowserOpener(async (url) => {
-    try {
-      const browser = await openInPreferredBrowser(url);
-      if (browser) return;
-    } catch (error) {
-      logWarn(`could not open ChatGPT in the preferred Chromium browser: ${(error as Error).message}`);
-    }
-    logWarn(
-      'Chrome/Chromium was not found for a browser-backed worker/resume command; falling back to the default browser. ' +
-        'If that browser does not have the ComGu extension loaded, open the generated ChatGPT URL in Chrome instead.'
+  setBrowserOpener(async (url, family) => {
+    const preference = getConfig().browser.preference;
+    const browser = await openInPreferredBrowser(url, { preference, primeFamily: family });
+    if (browser) return;
+    throw new Error(
+      preference === 'prime'
+        ? 'the prime browser family is not proven or no matching installed browser was found'
+        : `no installed ${preference} browser was found`
     );
-    await shell.openExternal(url);
   });
 
   // Persistence is a process-lifetime dependency of the broker, not a feature-toggle

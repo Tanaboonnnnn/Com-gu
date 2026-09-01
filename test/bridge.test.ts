@@ -137,10 +137,15 @@ ${SAMPLE_BRIEF}`);
  * session is actually in — a bare `createSession` has no conversation to move away from
  * and every commit against it is refused.
  */
-async function compactedSession(from: string, brief: string): Promise<{ sessionId: string; token: string }> {
+async function compactedSession(
+  from: string,
+  brief: string,
+  browserFamily?: 'brave' | 'chrome' | 'edge' | 'chromium'
+): Promise<{ sessionId: string; token: string }> {
   const reply = await request('POST', '/events', {
     body: {
       conversationId: from,
+      ...(browserFamily ? { browserFamily } : {}),
       events: [{ kind: 'user_message', time: Date.now(), text: 'do the work', messageId: `m-${from}` }]
     }
   });
@@ -151,6 +156,7 @@ async function compactedSession(from: string, brief: string): Promise<{ sessionI
 
 /** Every URL the app asked the OS to open, in order. Stands in for Electron's shell. */
 const opened: string[] = [];
+const openedFamilies: Array<string | null> = [];
 let anonymousRedeemIndex = 0;
 
 let dir: string;
@@ -284,17 +290,67 @@ beforeEach(async () => {
   resetSwarm();
   resetBridgeForTests();
   opened.length = 0;
+  openedFamilies.length = 0;
   anonymousRedeemIndex = 0;
   // The app opens the chat itself, always: there is no queue for a tab to come and ask.
   // Tests that need the open to fail replace this with their own opener.
-  setBrowserOpener(async (url) => {
+  setBrowserOpener(async (url, family) => {
     opened.push(url);
+    openedFamilies.push(family);
   });
   resetRecorderForTests();
   writeDurableSoon('bridge-commands', null);
   await flushDurable();
   await setSecret('bridgeToken', '');
   token = null;
+});
+
+describe('browser family affinity', () => {
+  it('opens a spawned worker in the proven prime browser family', async () => {
+    const primeConversation = 'abababab-1111-4222-8333-cdcdcdcdcdcd';
+    const launches: Array<{ url: string; family: string | null }> = [];
+    setBrowserOpener(async (url, family) => {
+      launches.push({ url, family });
+    });
+    await pair();
+    const evidence = await request('POST', '/correlations', {
+      body: {
+        conversationId: primeConversation,
+        browserFamily: 'brave',
+        calls: [
+          {
+            messageId: 'browser-affinity-prime-message',
+            tool: 'agents',
+            order: 0,
+            answered: false,
+            requestId: '77186fb4-bdda-4849-8cd7-879bb08a1618',
+            createTime: Date.now() / 1000
+          }
+        ]
+      }
+    });
+    expect(evidence.status).toBe(200);
+    spawn({ workers: [{ task: 'stay with the prime browser' }], caller: { conversationId: primeConversation } });
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+    expect(launches[0]?.family).toBe('brave');
+  });
+
+  it('opens a Compact & Resume replacement in the source conversation browser family', async () => {
+    const launches: Array<string | null> = [];
+    setBrowserOpener(async (_url, family) => {
+      launches.push(family);
+    });
+    await pair();
+    const { sessionId, token: continuation } = await compactedSession(
+      'cdcdcdcd-1111-4222-8333-abababababab',
+      'carry browser affinity into the replacement',
+      'chromium'
+    );
+
+    queueResume(sessionId, continuation);
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+    expect(launches).toEqual(['chromium']);
+  });
 });
 
 // ------------------------------------------------------------------ origin
@@ -370,10 +426,12 @@ describe('prime inbox auto-wake', () => {
     });
     expect(workerAck.status).toBe(200);
     opened.length = 0;
+    openedFamilies.length = 0;
     anonymousRedeemIndex = 0;
     await request('POST', '/events', {
       body: {
         conversationId: primeChat,
+        browserFamily: 'brave',
         events: [
           { kind: 'turn_start', time: Date.now(), turnId: 'prime-idle-proof' },
           { kind: 'turn_end', time: Date.now() + 1, turnId: 'prime-idle-proof', outcome: 'completed' }
@@ -383,6 +441,7 @@ describe('prime inbox auto-wake', () => {
 
     finishAgent({ conversationId: workerChat }, 'SECRET-WORKER-RESULT that must stay in the broker inbox');
     await waitForOpened(1);
+    expect(openedFamilies).toEqual(['brave']);
 
     const url = new URL(opened[0]!);
     expect(url.pathname).toBe(`/c/${primeChat}`);
@@ -1996,11 +2055,19 @@ describe('delivering a bootstrap', () => {
     await request('POST', '/commands/ack', {
       body: { id: bootstrap.id, status: 'sent', conversationId, agent: 'worker-1' }
     });
+    await request('POST', '/events', {
+      body: {
+        conversationId,
+        browserFamily: 'edge',
+        events: [{ kind: 'conversation_title', time: Date.now(), text: 'Worker audit' }]
+      }
+    });
     finishAgent({ conversationId }, 'the first half is done');
     expect(swarmState().agents.find((agent) => agent.id === 'worker-1')?.state).toBe('sleeping');
 
     wake([{ to: 'worker-1', text: 'now do the second half' }]);
     await waitForOpened(2);
+    expect(openedFamilies[1]).toBe('edge');
 
     // No fresh composer: the chat the worker already has, with the marker on it.
     const url = new URL(opened[1]!);
