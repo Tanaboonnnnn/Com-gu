@@ -57,6 +57,7 @@ import {
 } from './window-lifecycle.js';
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
+import { migrateLegacyUserData } from './migration.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -220,6 +221,15 @@ void app.whenReady().then(async () => {
   // primary that was told to quit before ready, must never touch the primary's shared userData.
   if (!shouldBeginAppBootstrap(hasSingleInstanceLock, quitting)) return;
   const userData = app.getPath('userData');
+  // Changing package/app identity changes Electron's default userData directory. Copy only the
+  // two bootstrap files that must exist before their owners initialize; never delete the legacy
+  // directory and never decrypt secrets as part of this compatibility migration.
+  const legacyUserData = path.join(path.dirname(userData), 'chat-on-steroids');
+  try {
+    await migrateLegacyUserData({ legacyDir: legacyUserData, destinationDir: userData });
+  } catch (error) {
+    logWarn(`legacy user-data migration did not complete: ${(error as Error).message}`);
+  }
   initConfigPath(userData);
   initSecretsPath(userData);
   initSessionStore(userData);

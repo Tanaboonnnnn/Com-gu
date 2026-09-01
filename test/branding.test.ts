@@ -27,7 +27,7 @@ describe('ComGu branding', () => {
     expect(main).toContain('`ComGu — ${label.toLowerCase()}`');
   });
 
-  it('keeps compatibility identifiers stable while recognizing new and legacy connector names', async () => {
+  it('uses the ComGu application identity while preserving protocol compatibility identifiers', async () => {
     const [builder, surfaces, bridge, background, fiber, content] = await Promise.all([
       text('electron-builder.yml'),
       text('src/main/mcp/surfaces.ts'),
@@ -37,7 +37,7 @@ describe('ComGu branding', () => {
       text('extension/content.js')
     ]);
 
-    expect(builder).toContain('appId: com.chatonsteroids.app');
+    expect(builder).toContain('appId: com.comgu.app');
     expect(surfaces).toContain("serverName: 'chat-on-steroids-core'");
     expect(surfaces).toContain("serverName: 'chat-on-steroids-desktop'");
     expect(bridge).toContain("app: 'chat-on-steroids'");
@@ -50,12 +50,14 @@ describe('ComGu branding', () => {
     }
   });
 
-  it('packages ComGu-named artifacts without renaming the internal npm package', async () => {
+  it('packages with the ComGu npm and desktop identity', async () => {
     const [pkgText, builder] = await Promise.all([text('package.json'), text('electron-builder.yml')]);
-    const pkg = JSON.parse(pkgText) as { name: string; author: string };
-    expect(pkg.name).toBe('chat-on-steroids');
+    const pkg = JSON.parse(pkgText) as { name: string; author: string; desktopName: string };
+    expect(pkg.name).toBe('comgu');
     expect(pkg.author).toBe('ComGu');
+    expect(pkg.desktopName).toBe('com.comgu.app.desktop');
     expect(builder).toContain('shortcutName: ComGu');
+    expect(builder).toContain('uninstallDisplayName: ComGu');
     expect(builder).toContain('artifactName: ComGu-Setup-${arch}.${ext}');
     expect(builder).toContain('artifactName: ComGu-macOS-${arch}.${ext}');
     expect(builder).toContain('artifactName: ComGu-Linux-${env.COS_PACKAGE_ARCH}.${ext}');
