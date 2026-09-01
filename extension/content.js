@@ -3101,7 +3101,8 @@
       generating &&
       activeTurnIndex >= 0 &&
       activeLocalTurnId === turnId &&
-      Boolean(answer.turns[activeTurnIndex]?.endMessageId)
+      Boolean(answer.turns[activeTurnIndex]?.endMessageId) &&
+      !(answer.turns[activeTurnIndex]?.calls || []).some((call) => !call || call.answered !== true)
     ) {
       fiberTerminalMessageId = answer.turns[activeTurnIndex].endMessageId;
       const ended = generationTurn();
@@ -4323,9 +4324,14 @@
       if (key) expected.push(key);
     }
     for (const call of descriptor.calls || []) {
+      // A connector request that has not produced a result yet can be waiting on ChatGPT's
+      // own permission / approval UI. The app feed may already contain the request id, but
+      // that represents only the call, not the interactive ChatGPT control. Whole-turn
+      // Overwrite therefore starts only after every call is answered.
+      if (!call || call.answered !== true) return false;
       // A call without ChatGPT request identity cannot be proven complete. Leave that turn
       // native instead of falling back to time/position/cardinality matching.
-      const key = websiteKey('request', call && call.requestId);
+      const key = websiteKey('request', call.requestId);
       if (!key) return false;
       expected.push(key);
     }

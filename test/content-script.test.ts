@@ -2394,6 +2394,57 @@ describe('the app-owned chronological stream', () => {
     expect(native.textContent).toBe('This native interim has not reached the local app yet.');
   });
 
+  it('keeps ChatGPT approval controls native while a represented tool call is still unanswered', async () => {
+    const activity = () => ({
+      ok: true,
+      data: {
+        entries: [],
+        stream: [
+          { seq: 1, time: 100, kind: 'turn_start', turnId: 'g-awaiting-approval', agent: 'prime' },
+          { seq: 2, time: 110, kind: 'tool_call', turnId: 'g-awaiting-approval', agent: 'prime', tool: 'computer', callId: 'call-awaiting-approval', requestId: 'wfr-awaiting-approval', outcome: 'running', durationMs: 0, summary: { kind: 'computer', tone: 'neutral', title: 'Use computer' } }
+        ],
+        job: null
+      }
+    });
+    live = await harness(undefined, { activity });
+    renderingOn();
+    const section = assistantTurn(live.document, 'page-awaiting-approval', []);
+    const approval = live.document.createElement('button');
+    approval.textContent = 'Allow desktop access';
+    section.append(approval);
+    await bindFiberTurns([{ section, turn: {
+      turnId: 'page-awaiting-approval',
+      calls: [{ messageId: 'fiber-awaiting-approval', tool: 'computer', order: 0, answered: false, requestId: 'wfr-awaiting-approval' }]
+    } }]);
+    await live.hook.pullActivity();
+    live.hook.renderStreams();
+
+    expect(section.getAttribute('data-clf-turn-replaced')).toBeNull();
+    expect(overwriteStream(section)).toBeNull();
+    expect(approval.isConnected).toBe(true);
+    expect(approval.textContent).toBe('Allow desktop access');
+  });
+
+  it('does not finish from Fiber end_turn while the exact connector call is still unanswered', async () => {
+    live = await harness();
+    startGenerating(live.document);
+    const section = assistantTurn(live.document, 'page-awaiting-terminal-approval', []);
+    section.setAttribute('data-clf-fiber-turn', '0');
+    live.hook.observe();
+    await settle();
+    const opened = emitted(live.sent, 'turn_start').at(-1)!.event.turnId as string;
+
+    await replyFiber([], [{
+      turnId: 'page-awaiting-terminal-approval',
+      calls: [{ messageId: 'fiber-terminal-awaiting-approval', tool: 'computer', order: 0, answered: false, requestId: 'wfr-terminal-awaiting-approval' }],
+      messages: [{ messageId: 'site-terminal-before-approval', stable: true, rawText: 'Waiting for approval.', renderedHtml: '<p>Waiting for approval.</p>' }],
+      endMessageId: 'site-terminal-before-approval'
+    }]);
+    await live.hook.flush();
+    await settle();
+
+    expect(emitted(live.sent, 'turn_end').filter((entry) => entry.event.turnId === opened)).toHaveLength(0);
+  });
   it('keeps a proven overwrite mounted through a transient incomplete Fiber scan', async () => {
     const activity = () => ({
       ok: true,
