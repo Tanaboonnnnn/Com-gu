@@ -2067,6 +2067,12 @@
           void Promise.resolve().then(() => {
             urgentQueued = false;
             if (!alive || !sameChat()) return;
+            // A hidden tab can leave the previous Fiber request suspended long after the
+            // DOM has moved on. The Stop-removal edge is a new terminal observation, so in
+            // that throttled case it must not be answered by a snapshot requested before
+            // the edge. Foreground tabs keep the ordinary coalescing path: a split response
+            // can still be mounting a later sibling while the existing scan completes.
+            if (document.visibilityState === 'hidden') void refreshFiber(null, true);
             observe();
           });
         }
@@ -2253,6 +2259,7 @@
   /** Exact scan frame those two descriptor maps came from. */
   let fiberScanToken = null;
   let fiberAsking = null;
+  let cancelFiberAsk = null;
   /** Off until the helper answers once, so a browser without it behaves exactly as before. */
   let fiberPresent = false;
   /** Avoid turning a missing MAIN-world helper into one script injection per observer tick. */
@@ -2493,7 +2500,8 @@
    * browser where the MAIN-world script never ran must degrade to the old behaviour, not
    * stall the paint loop.
    */
-  function askFiber() {
+  function askFiber(forceFresh = false) {
+    if (forceFresh && cancelFiberAsk) cancelFiberAsk();
     if (fiberAsking) return fiberAsking;
     const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     fiberAsking = new Promise((resolve) => {
@@ -2502,9 +2510,12 @@
         if (done) return;
         done = true;
         window.removeEventListener('message', onMessage);
+        if (cancelFiberAsk === cancel) cancelFiberAsk = null;
         fiberAsking = null;
         resolve(rows);
       };
+      const cancel = () => finish(null);
+      cancelFiberAsk = cancel;
       const onMessage = (event) => {
         if (event.source !== window) return;
         const data = event.data;
@@ -2694,7 +2705,7 @@
       for (const call of batch) requestOwnersPending.delete(`${ownerConversation}\u0000${call.requestId}`);
     }
   }
-  async function refreshFiber(settled = null) {
+  async function refreshFiber(settled = null, forceFresh = false) {
     // A bound chat can briefly lose its /c/<id> route during React/router churn, and a real
     // navigation to a fresh composer has the exact same pathname until ChatGPT assigns the
     // new conversation id. While that identity is unresolved, fail closed: emitting Fiber
@@ -2707,7 +2718,7 @@
     // never be emitted under chat B's conversation id.
     const askedEpoch = epoch;
     const askedConversation = conversationId;
-    let answer = await askFiber();
+    let answer = await askFiber(forceFresh);
     if (answer === null) {
       // One missed reply is not proof the helper is gone: a busy main thread can outlive this
       // bounded poll. Keep the last proven state while the worker attempts a repair. Only a

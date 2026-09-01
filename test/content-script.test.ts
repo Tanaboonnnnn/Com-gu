@@ -81,7 +81,7 @@ interface Hook {
     blocks: Array<{ callId: string | null; original: string; hidden?: number; tool?: string | null }>,
     calls: ActivityEntry[]
   ): Array<[number, ActivityEntry | null, ActivityEntry[]]>;
-  refreshFiber(settled?: Record<string, unknown> | null): Promise<void>;
+  refreshFiber(settled?: Record<string, unknown> | null, forceFresh?: boolean): Promise<void>;
   fiberFor(block: Element): Descriptor | null;
   readDescriptor(raw: unknown): Descriptor | null;
   controlState(input: Record<string, unknown>): { mode: string; label: string; hint: string; action: string };
@@ -560,7 +560,10 @@ async function replyFiber(
   };
   window.addEventListener('message', onAsk);
   try {
-    await live!.hook.refreshFiber(settled);
+    // This helper promises to supply the exact frame passed above. If production already
+    // has a scan in flight, reusing it would mean the listener was attached too late to
+    // answer that request and the fixture would silently describe a different scan.
+    await live!.hook.refreshFiber(settled, true);
   } finally {
     window.removeEventListener('message', onAsk);
     window.setTimeout = instant;
@@ -10371,9 +10374,14 @@ describe('the goal loop', () => {
     await new Promise((resolve) => globalThis.setTimeout(resolve, 10));
 
     let scans = 0;
+    let resolveScan!: () => void;
+    const scanSeen = new Promise<void>((resolve) => {
+      resolveScan = resolve;
+    });
     const onAsk = (event: any) => {
       if (!event.data || event.data.source !== 'clf-fiber-ask') return;
       scans++;
+      resolveScan();
       const scanToken = event.data.nonce;
       section.setAttribute('data-clf-fiber-turn', `${scanToken}:0`);
       // Goal's own settle loop is not what this regression freezes. Once the terminal Fiber
@@ -10412,7 +10420,96 @@ describe('the goal loop', () => {
     live.window.addEventListener('message', onAsk);
     try {
       stopGenerating(live.document);
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 10));
+      await Promise.race([
+        scanSeen,
+        new Promise<never>((_, reject) =>
+          globalThis.setTimeout(() => reject(new Error('terminal Fiber scan was not requested')), 1_000)
+        )
+      ]);
+      await settle(1200);
+    } finally {
+      live.window.removeEventListener('message', onAsk);
+      live.window.setTimeout = instantTimeout;
+    }
+
+    expect(scans).toBeGreaterThan(0);
+    expect(emitted(live.sent, 'turn_end')).toContainEqual(
+      expect.objectContaining({ event: expect.objectContaining({ turnId: opened, outcome: 'completed' }) })
+    );
+    expect(drafts(live)).toHaveLength(1);
+  });
+
+  it('supersedes a stale Fiber request when a hidden-tab Stop removal is the terminal edge', async () => {
+    live = await harness(`https://chatgpt.com/c/${CHAT}`, goalReplies());
+    await live.hook.pullActivity();
+    startGenerating(live.document);
+    const section = assistantTurn(live.document, 'turn-hidden-stale-fiber', []);
+    live.hook.observe();
+    await settle();
+    const opened = emitted(live.sent, 'turn_start')[0]!.event.turnId as string;
+
+    const instantTimeout = live.window.setTimeout;
+    Object.defineProperty(live.document, 'visibilityState', { configurable: true, value: 'hidden' });
+    live.window.setTimeout = (() => 778) as unknown as typeof live.window.setTimeout;
+
+    // Model a background-tab Fiber request whose timeout has been throttled indefinitely.
+    // It posts before the helper listener below exists, so the request stays in flight.
+    void live.hook.refreshFiber();
+    await settle();
+
+    prose(live.document, section, 'a-hidden-stale-fiber', 'The final answer was already visible.');
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 10));
+
+    let scans = 0;
+    let resolveScan!: () => void;
+    const scanSeen = new Promise<void>((resolve) => {
+      resolveScan = resolve;
+    });
+    const onAsk = (event: any) => {
+      if (!event.data || event.data.source !== 'clf-fiber-ask') return;
+      scans++;
+      resolveScan();
+      const scanToken = event.data.nonce;
+      section.setAttribute('data-clf-fiber-turn', `${scanToken}:0`);
+      live!.window.setTimeout = instantTimeout;
+      live!.window.dispatchEvent(
+        new live!.window.MessageEvent('message', {
+          data: {
+            source: 'clf-fiber-reply',
+            nonce: event.data.nonce,
+            scanToken,
+            v: 10,
+            scanOk: true,
+            rows: [],
+            turns: [{
+              index: 0,
+              turnId: 'turn-hidden-stale-fiber',
+              conversationId: CHAT,
+              endMessageId: 'site-hidden-stale-fiber',
+              calls: [],
+              messages: [{
+                messageId: 'site-hidden-stale-fiber',
+                rawMessageId: 'a-hidden-stale-fiber',
+                stable: true,
+                rawText: 'The final answer was already visible.',
+                renderedHtml: '<p>The final answer was already visible.</p>'
+              }],
+              activities: []
+            }]
+          },
+          source: live!.window as unknown as Window
+        })
+      );
+    };
+    live.window.addEventListener('message', onAsk);
+    try {
+      stopGenerating(live.document);
+      await Promise.race([
+        scanSeen,
+        new Promise<never>((_, reject) =>
+          globalThis.setTimeout(() => reject(new Error('fresh terminal Fiber scan was not requested')), 1_000)
+        )
+      ]);
       await settle(1200);
     } finally {
       live.window.removeEventListener('message', onAsk);
