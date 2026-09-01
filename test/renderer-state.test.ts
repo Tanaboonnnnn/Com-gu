@@ -132,6 +132,10 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   expect(locale.value).toBe('th');
   expect(w.document.documentElement.lang).toBe('th');
   expect(w.document.getElementById('liveState')!.textContent).toBe('ยังไม่ได้เชื่อมต่อ');
+  expect(w.document.querySelector('[data-panel="home"] h2')!.textContent).toContain('สิทธิ์การเข้าถึง');
+  expect(w.document.querySelector('[data-step="folder"] h3')!.textContent).toBe('เลือกโฟลเดอร์ที่จะแชร์');
+  expect(w.document.querySelector('[data-panel="chat"] h2')!.textContent).toContain('เซสชัน');
+  expect(w.document.querySelector('[data-panel="activity"] h2')!.textContent).toContain('กิจกรรม');
 
   const englishState = structuredClone(state) as any;
   englishState.config.ui.locale = 'en';

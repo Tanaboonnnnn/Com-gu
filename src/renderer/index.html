@@ -105,7 +105,7 @@
             <!-- ------------------------------------------------- permissions -->
             <section class="card">
               <h2>
-                Permissions
+                <span data-i18n="home.permissions">Permissions</span>
                 <span class="acts">
                   <button class="btn" id="readOnlyBtn" type="button">
                     <svg class="ico" viewBox="0 0 24 24"><use href="#i-lock" /></svg>Read-only
@@ -118,7 +118,7 @@
             <!-- ----------------------------------------------------- folders -->
             <section class="card">
               <h2>
-                Folders
+                <span data-i18n="home.folders">Folders</span>
                 <span class="acts">
                   <button class="btn" id="addFolder" type="button">
                     <svg class="ico" viewBox="0 0 24 24"><use href="#i-plus" /></svg>Add
@@ -167,7 +167,7 @@
           <!-- ---------------------------------------------------- activity -->
           <section class="card">
             <h2>
-              Activity
+              <span data-i18n="activity.title">Activity</span>
               <span class="acts">
                 <span class="problems" id="homeProblems" hidden></span>
                 <button class="btn" id="copyLog" type="button">
@@ -198,7 +198,7 @@
                   <svg class="ico tick" viewBox="0 0 24 24"><use href="#i-check" /></svg>
                 </div>
                 <div class="step-body">
-                  <h3>Pick a folder to share</h3>
+                  <h3 data-i18n="setup.pickFolder">Pick a folder to share</h3>
                   <p>
                     Nothing outside the folders you approve is reachable. Do this first — the tunnel
                     will not start with nothing to serve.
@@ -319,7 +319,7 @@
                   <svg class="ico tick" viewBox="0 0 24 24"><use href="#i-check" /></svg>
                 </div>
                 <div class="step-body">
-                  <h3>Add it in ChatGPT</h3>
+                  <h3 data-i18n="setup.addInChatgpt">Add it in ChatGPT</h3>
                   <p>
                     Turn on <strong>Developer mode</strong> in ChatGPT — currently under
                     <em>Settings → Apps → Advanced settings</em>, with workspace-managed plans
@@ -430,7 +430,7 @@
           <!-- --------------------------------------------------- sessions -->
           <section class="card">
             <h2>
-              Sessions
+              <span data-i18n="chat.sessions">Sessions</span>
               <span class="acts">
                 <button class="btn" id="chatRefresh" type="button">
                   <svg class="ico" viewBox="0 0 24 24"><use href="#i-pulse" /></svg>Refresh
@@ -479,7 +479,7 @@
             </h2>
             <div class="subhead">
               <span class="seg" id="chatView">
-                <button class="is-sel" data-view="timeline" type="button">Timeline</button>
+                <button class="is-sel" data-view="timeline" data-i18n="chat.timeline" type="button">Timeline</button>
                 <button data-view="compact" type="button">Handoff</button>
               </span>
               <span class="subhead-note" id="chatState"></span>
@@ -668,7 +668,7 @@
         <section class="panel" data-panel="activity">
           <section class="card">
             <h2>
-              Activity
+              <span data-i18n="activity.title">Activity</span>
               <span class="acts">
                 <span class="seg" id="logAgentFilter" hidden></span>
                 <span class="seg" id="logFilter">

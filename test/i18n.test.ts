@@ -50,4 +50,15 @@ describe('i18n', () => {
     expect(thai).toContain('API key');
     expect(thai).toContain('Developer mode');
   });
+
+  it('covers deterministic Home, Setup, Chat and Activity copy in natural Thai', () => {
+    expect(TH['home.permissions']).toBe('สิทธิ์การเข้าถึง');
+    expect(TH['home.folders']).toBe('โฟลเดอร์');
+    expect(TH['setup.pickFolder']).toBe('เลือกโฟลเดอร์ที่จะแชร์');
+    expect(TH['setup.addInChatgpt']).toBe('เพิ่มใน ChatGPT');
+    expect(TH['chat.sessions']).toBe('เซสชัน');
+    expect(TH['chat.timeline']).toBe('ไทม์ไลน์');
+    expect(TH['activity.title']).toBe('กิจกรรม');
+    expect(TH['activity.turnStarted']).toBe('เริ่มเทิร์นแล้ว');
+  });
 });
