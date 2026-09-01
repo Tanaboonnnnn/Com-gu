@@ -17,7 +17,7 @@ import type {
   TokenPressure
 } from '../shared/session.js';
 
-type Reply<T> = { ok: true; data: T } | { ok: false; error: string };
+type Reply<T> = { ok: true; data: T } | { ok: false; error: string; errorCode?: string };
 
 const call = <T>(channel: string, payload?: unknown): Promise<Reply<T>> =>
   ipcRenderer.invoke(channel, payload) as Promise<Reply<T>>;

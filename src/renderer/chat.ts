@@ -31,7 +31,7 @@ import {
 } from '../shared/goal.js';
 import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
-import { $, clockTime, compactNumber, el, icon, run, toast } from './dom.js';
+import { $, clockTime, compactNumber, el, icon, run, toast, type IpcFailure } from './dom.js';
 
 const api = window.api;
 
@@ -1274,6 +1274,11 @@ function wireGoal(save: () => Promise<void>): void {
   });
   // On blur, like every other key in this app: not saved keystroke by keystroke, and the
   // field is emptied the moment it has been handed over.
+  const secretFailureText = (failure: IpcFailure): string => {
+    if (failure.errorCode === 'secure_storage_unavailable') return tr('setup.secureStorageUnavailable');
+    if (failure.errorCode === 'stored_credentials_unreadable') return tr('setup.secureStorageUnreadable');
+    return failure.error;
+  };
   $('goalKey').addEventListener('blur', async () => {
     const input = $<HTMLInputElement>('goalKey');
     const submitted = input.value;
@@ -1281,7 +1286,7 @@ function wireGoal(save: () => Promise<void>): void {
     // Whitespace is not a key. Passing it through trim as an empty string used to invoke the
     // remove-key path and then claim a key was stored.
     if (key === '') return;
-    const next = await run(api.setGoalKey(key));
+    const next = await run(api.setGoalKey(key), secretFailureText);
     if (next) {
       // A blur can be followed immediately by refocus + new typing while IPC is in flight.
       // Clear only the exact value that successfully crossed the secret-store boundary.
@@ -1291,7 +1296,7 @@ function wireGoal(save: () => Promise<void>): void {
     }
   });
   $('goalKeyRemove').addEventListener('click', async () => {
-    const next = await run(api.setGoalKey(''));
+    const next = await run(api.setGoalKey(''), secretFailureText);
     if (next) {
       applyGoal(next);
       toast(tr('goal.keyRemovedToast'));

@@ -67,6 +67,10 @@ win:
       filter: ['**/*']
 
 nsis:
+  # Preserve the v2.x installer identity so Windows upgrades the existing installation instead
+  # of registering a second ComGu beside it after the public appId rename.
+  guid: 9015b47f-b2d6-5ad6-97a3-d1b4a5e93850
+  include: scripts/nsis-compat.nsh
   oneClick: false
   perMachine: false
   buildUniversalInstaller: false

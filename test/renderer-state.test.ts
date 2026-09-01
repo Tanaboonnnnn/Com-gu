@@ -3,6 +3,7 @@ import path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_GOAL_SYSTEM_PROMPT } from '../src/shared/goal.js';
+import { t } from '../src/shared/i18n/index.js';
 
 let dom: JSDOM | null = null;
 afterEach(() => {
@@ -701,6 +702,22 @@ it('keeps secret-key input on secure-storage failure', async () => {
   await settle();
   expect(goalFailed.value).toBe('sk-or-v1-retry-me');
   expect(apiFailed.value).toBe('sk-retry-me');
+
+  const thai = structuredClone(failed.state);
+  thai.config.ui.locale = 'th';
+  failed.push(thai);
+  await settle();
+  (failed.window.document.querySelector('.toast') as HTMLElement | null)?.remove();
+  const thaiApi = failed.window.document.getElementById('apiKey') as HTMLInputElement;
+  thaiApi.value = 'sk-retry-thai';
+  (failed.window as any).api.setApiKey = () => Promise.resolve({
+    ok: false,
+    error: 'Secure operating-system credential storage is unavailable on this machine.',
+    errorCode: 'secure_storage_unavailable'
+  });
+  thaiApi.dispatchEvent(new failed.window.Event('blur'));
+  await settle();
+  expect(failed.window.document.querySelector('.toast')?.textContent).toBe(t('th', 'setup.secureStorageUnavailable'));
 });
 
 it('never lets an older secret save erase a newer value typed while IPC is in flight', async () => {

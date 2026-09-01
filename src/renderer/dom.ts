@@ -38,12 +38,19 @@ export function toast(message: string): void {
 }
 
 /** Unwraps an IPC reply, showing the main process's own error text on failure. */
+export interface IpcFailure {
+  ok: false;
+  error: string;
+  errorCode?: string;
+}
+
 export async function run<T>(
-  promise: Promise<{ ok: true; data: T } | { ok: false; error: string }>
+  promise: Promise<{ ok: true; data: T } | IpcFailure>,
+  errorText?: (failure: IpcFailure) => string
 ): Promise<T | null> {
   const reply = await promise;
   if (!reply.ok) {
-    toast(reply.error);
+    toast(errorText ? errorText(reply) : reply.error);
     return null;
   }
   return reply.data;

@@ -63,6 +63,32 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
  */
 export type SecretKey = 'openaiApiKey' | 'bridgeToken' | 'openRouterApiKey';
 
+export type SecretStorageErrorCode = 'secure_storage_unavailable' | 'stored_credentials_unreadable';
+
+export class SecretStorageError extends Error {
+  constructor(
+    public readonly code: SecretStorageErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'SecretStorageError';
+  }
+}
+
+function unavailableError(): SecretStorageError {
+  return new SecretStorageError(
+    'secure_storage_unavailable',
+    'Secure OS credential storage is unavailable, so the key was not saved'
+  );
+}
+
+function unreadableError(): SecretStorageError {
+  return new SecretStorageError(
+    'stored_credentials_unreadable',
+    'Stored credentials could not be decrypted; the encrypted file was left untouched'
+  );
+}
+
 export function initSecretsPath(userDataDir: string): void {
   secretsPath = path.join(userDataDir, FILE_NAME);
 }
@@ -205,11 +231,11 @@ async function readAll(): Promise<Record<string, string>> {
 
 async function writeAll(values: Record<string, string>): Promise<void> {
   if (!(await isEncryptionAvailable())) {
-    throw new Error('Secure OS credential storage is unavailable, so the key was not saved');
+    throw unavailableError();
   }
   const blob = await safeStorage.encryptStringAsync(JSON.stringify(values));
   if (!secureStorageCiphertextIsProtected(blob)) {
-    throw new Error('Secure OS credential storage is unavailable, so the key was not saved');
+    throw unavailableError();
   }
   const tmp = `${secretsPath}.tmp`;
   await fs.mkdir(path.dirname(secretsPath), { recursive: true });
@@ -261,7 +287,7 @@ export async function hasSecret(key: SecretKey): Promise<boolean> {
 export function setSecret(key: SecretKey, value: string): Promise<void> {
   return enqueue(async () => {
     if (!(await isEncryptionAvailable())) {
-      throw new Error('Secure OS credential storage is unavailable, so the key was not saved');
+      throw unavailableError();
     }
     // Read inside the queue, so this composes from the latest committed state rather
     // than from a snapshot taken before the call ahead of it finished.
@@ -271,7 +297,11 @@ export function setSecret(key: SecretKey, value: string): Promise<void> {
     // if the read did not establish an authoritative cache, writing it would replace real
     // encrypted credentials with a partial/empty blob after a transient unlock race.
     if (cache === null) {
-      throw new Error('Secure OS credential storage is unavailable, so the key was not saved');
+      // Availability and readability are different states. A live DPAPI/Keychain provider can
+      // still be unable to open ciphertext whose Local State/key material belongs to another
+      // userData directory. Keep the blob intact and report the actionable distinction.
+      if ((await secureStorageStatus()).available) throw unreadableError();
+      throw unavailableError();
     }
     const all = { ...current };
     const trimmed = value.trim();

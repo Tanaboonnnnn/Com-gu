@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 const MIGRATION_MARKER = '.legacy-userdata-migrated';
@@ -12,6 +12,27 @@ export interface LegacyUserDataMigrationOptions {
 export interface LegacyUserDataMigrationResult {
   completed: boolean;
   copied: string[];
+}
+
+export interface CompatibleUserDataPathOptions {
+  appDataDir: string;
+  defaultUserDataDir: string;
+}
+
+/**
+ * Existing installs must keep Electron's original userData directory. On Windows safeStorage's
+ * encrypted key is persisted in Chromium Local State under that directory, so moving only
+ * secrets.bin severs ciphertext from the key that can open it. New installs have no legacy
+ * directory and use the ComGu default normally.
+ *
+ * This is synchronous by design: callers use it before Electron readiness/safeStorage startup.
+ */
+export function resolveCompatibleUserDataPath(options: CompatibleUserDataPathOptions): string {
+  const legacyDir = path.join(options.appDataDir, 'chat-on-steroids');
+  const looksLikeUserData = ['Local State', 'config.json', 'secrets.bin'].some((name) =>
+    existsSync(path.join(legacyDir, name))
+  );
+  return looksLikeUserData ? legacyDir : options.defaultUserDataDir;
 }
 
 async function exists(file: string): Promise<boolean> {

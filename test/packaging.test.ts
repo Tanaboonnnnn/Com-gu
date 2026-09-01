@@ -304,6 +304,12 @@ describe('cross-platform packaging targets', () => {
     const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     const iconScript = readFileSync(path.join(root, 'scripts', 'make-icon.mjs'), 'utf8');
     expect(builder.toolsets.appimage).toBe('1.0.3');
+    expect(builder.nsis.guid).toBe('9015b47f-b2d6-5ad6-97a3-d1b4a5e93850');
+    expect(builder.nsis.include).toBe('scripts/nsis-compat.nsh');
+    const nsisCompat = readFileSync(path.join(root, 'scripts', 'nsis-compat.nsh'), 'utf8');
+    expect(nsisCompat).toContain('91a49385-f194-54ae-8bf4-449ec245a7d0');
+    expect(nsisCompat).toContain('UninstallString');
+    expect(nsisCompat).toContain('ExecWait');
     expect(builder.linux.artifactName).toBe('ComGu-Linux-${env.COS_PACKAGE_ARCH}.${ext}');
     expect(builder.deb.depends).toContain('libgtk-3-0 | libgtk-3-0t64');
     expect(builder.deb.depends).toContain('libatspi2.0-0 | libatspi2.0-0t64');

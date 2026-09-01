@@ -20,7 +20,7 @@ import { forgetExposedSurface } from './mcp/server.js';
 import { runDiagnostics } from './diagnostics.js';
 import { formatLogAsJson, formatLogForClipboard, getLog, logInfo, onLog } from './logger.js';
 import { RESERVED_ROOT_NAMES, uniqueRootName, validateNewRoot, SandboxError } from './sandbox.js';
-import { hasSecret, isEncryptionAvailable, secureStorageStatus, setSecret } from './secrets.js';
+import { hasSecret, isEncryptionAvailable, SecretStorageError, secureStorageStatus, setSecret } from './secrets.js';
 import { bundledVersion, locateBinary } from './tunnel/locate.js';
 import { TUNNEL_ID_PATTERN } from './tunnel/index.js';
 import {
@@ -291,7 +291,11 @@ function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>): void 
           : err instanceof Error
             ? err.message
             : String(err);
-      return { ok: false as const, error: message };
+      return {
+        ok: false as const,
+        error: message,
+        ...(err instanceof SecretStorageError ? { errorCode: err.code } : {})
+      };
     }
   });
 }

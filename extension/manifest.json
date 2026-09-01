@@ -1,51 +1,69 @@
 {
-  "manifest_version": 3,
-  "name": "ComGu companion",
-  "version": "3.0.0",
-  "description": "Records your ChatGPT session into the local ComGu app and labels its MCP tool calls with what they actually did.",
-  "minimum_chrome_version": "116",
-  "permissions": ["storage", "scripting", "alarms"],
-  "host_permissions": [
-    "https://chatgpt.com/*",
-    "https://chat.openai.com/*",
-    "http://127.0.0.1:8765/*",
-    "http://127.0.0.1:8766/*",
-    "http://127.0.0.1:8767/*",
-    "http://127.0.0.1:8768/*",
-    "http://127.0.0.1:8769/*"
-  ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["i18n.js", "chatgpt-dom.js", "content.js"],
-      "css": ["overlay.css"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["fiber.js"],
-      "world": "MAIN",
-      "run_at": "document_idle"
-    }
-  ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "ComGu",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  }
+    "manifest_version":  3,
+    "name":  "ComGu companion",
+    "version":  "3.0.1",
+    "description":  "Records your ChatGPT session into the local ComGu app and labels its MCP tool calls with what they actually did.",
+    "minimum_chrome_version":  "116",
+    "permissions":  [
+                        "storage",
+                        "scripting",
+                        "alarms"
+                    ],
+    "host_permissions":  [
+                             "https://chatgpt.com/*",
+                             "https://chat.openai.com/*",
+                             "http://127.0.0.1:8765/*",
+                             "http://127.0.0.1:8766/*",
+                             "http://127.0.0.1:8767/*",
+                             "http://127.0.0.1:8768/*",
+                             "http://127.0.0.1:8769/*"
+                         ],
+    "background":  {
+                       "service_worker":  "background.js",
+                       "type":  "module"
+                   },
+    "content_scripts":  [
+                            {
+                                "matches":  [
+                                                "https://chatgpt.com/*",
+                                                "https://chat.openai.com/*"
+                                            ],
+                                "js":  [
+                                           "i18n.js",
+                                           "chatgpt-dom.js",
+                                           "content.js"
+                                       ],
+                                "css":  [
+                                            "overlay.css"
+                                        ],
+                                "run_at":  "document_idle"
+                            },
+                            {
+                                "matches":  [
+                                                "https://chatgpt.com/*",
+                                                "https://chat.openai.com/*"
+                                            ],
+                                "js":  [
+                                           "fiber.js"
+                                       ],
+                                "world":  "MAIN",
+                                "run_at":  "document_idle"
+                            }
+                        ],
+    "icons":  {
+                  "16":  "icons/icon16.png",
+                  "32":  "icons/icon32.png",
+                  "48":  "icons/icon48.png",
+                  "128":  "icons/icon128.png"
+              },
+    "action":  {
+                   "default_popup":  "popup.html",
+                   "default_title":  "ComGu",
+                   "default_icon":  {
+                                        "16":  "icons/icon16.png",
+                                        "32":  "icons/icon32.png",
+                                        "48":  "icons/icon48.png",
+                                        "128":  "icons/icon128.png"
+                                    }
+               }
 }

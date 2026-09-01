@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { migrateLegacyUserData } from '../src/main/migration.js';
+import { migrateLegacyUserData, resolveCompatibleUserDataPath } from '../src/main/migration.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
 let root = '';
@@ -12,6 +13,45 @@ afterEach(async () => {
 });
 
 describe('ComGu user-data migration', () => {
+  it('selects compatible userData before Electron establishes the single-instance/runtime context', () => {
+    const main = readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');
+    const setPath = main.indexOf("app.setPath('userData', compatibleUserData)");
+    const singleInstance = main.indexOf('app.requestSingleInstanceLock()');
+    const ready = main.indexOf('app.whenReady()');
+    expect(setPath).toBeGreaterThan(-1);
+    expect(setPath).toBeLessThan(singleInstance);
+    expect(setPath).toBeLessThan(ready);
+  });
+
+  it('keeps upgraded users on the legacy userData directory so safeStorage key material stays paired with secrets.bin', async () => {
+    root = await makeTempDir('comgu-userdata-');
+    const legacy = path.join(root, 'chat-on-steroids');
+    const current = path.join(root, 'ComGu');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.mkdir(current, { recursive: true });
+    await fs.writeFile(path.join(legacy, 'Local State'), '{"os_crypt":{"encrypted_key":"legacy-key"}}', 'utf8');
+    await fs.writeFile(path.join(legacy, 'secrets.bin'), Buffer.from([1,2,3]));
+    await fs.writeFile(path.join(current, 'Local State'), '{"os_crypt":{"encrypted_key":"wrong-new-key"}}', 'utf8');
+
+    expect(resolveCompatibleUserDataPath({ appDataDir: root, defaultUserDataDir: current })).toBe(legacy);
+  });
+
+  it('ignores an empty leftover legacy directory', async () => {
+    root = await makeTempDir('comgu-userdata-');
+    const legacy = path.join(root, 'chat-on-steroids');
+    const current = path.join(root, 'ComGu');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.mkdir(current, { recursive: true });
+    expect(resolveCompatibleUserDataPath({ appDataDir: root, defaultUserDataDir: current })).toBe(current);
+  });
+
+  it('uses the ComGu userData directory for a clean install with no legacy data', async () => {
+    root = await makeTempDir('comgu-userdata-');
+    const current = path.join(root, 'ComGu');
+    await fs.mkdir(current, { recursive: true });
+    expect(resolveCompatibleUserDataPath({ appDataDir: root, defaultUserDataDir: current })).toBe(current);
+  });
+
   it('copies legacy config and ciphertext first, leaves legacy data intact, and is idempotent', async () => {
     root = await makeTempDir('comgu-migration-');
     const legacy = path.join(root, 'chat-on-steroids');

@@ -25,7 +25,7 @@ import {
 } from '../shared/types.js';
 import type { SwarmState } from '../shared/session.js';
 import { t, type Locale, type MessageKey } from '../shared/i18n/index.js';
-import { $, el, icon, run, toast } from './dom.js';
+import { $, el, icon, run, toast, type IpcFailure } from './dom.js';
 import { chatApply, chatSettingsPatch, chatVisible, initChat } from './chat.js';
 import { applyStaticTranslations } from './i18n.js';
 
@@ -1489,12 +1489,18 @@ $('copyLogJson').addEventListener('click', async () => {
   if (copied) toast(tr('home.activityJsonCopied'));
 });
 
+function secretFailureText(failure: IpcFailure): string {
+  if (failure.errorCode === 'secure_storage_unavailable') return tr('setup.secureStorageUnavailable');
+  if (failure.errorCode === 'stored_credentials_unreadable') return tr('setup.secureStorageUnreadable');
+  return failure.error;
+}
+
 // The API key is written on blur so it is not saved keystroke by keystroke.
 $('apiKey').addEventListener('blur', async () => {
   const input = $<HTMLInputElement>('apiKey');
   const submitted = input.value;
   if (submitted === '') return;
-  const next = await run(api.setApiKey(submitted));
+  const next = await run(api.setApiKey(submitted), secretFailureText);
   if (next) {
     // Do not erase a newer value typed while safeStorage/IPC was still resolving the previous
     // blur. On failure keep the submitted value too, so the user can retry instead of losing it.
@@ -1505,7 +1511,7 @@ $('apiKey').addEventListener('blur', async () => {
 });
 
 $('removeApiKey').addEventListener('click', async () => {
-  const next = await run(api.setApiKey(''));
+  const next = await run(api.setApiKey(''), secretFailureText);
   if (next) {
     apply(next);
     toast(tr('home.apiKeyRemovedToast'));

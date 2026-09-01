@@ -22,7 +22,8 @@ const {
   resetSecretsCacheForTests,
   secureStorageCiphertextIsProtected,
   secureStorageStatus,
-  setSecret
+  setSecret,
+  SecretStorageError
 } = await import('../src/main/secrets.js');
 const { safeStorage } = await import('electron');
 const { formatLogAsJson, getLog, logInfo } = await import('../src/main/logger.js');
@@ -242,9 +243,9 @@ describe('secret store', () => {
     // rejected decrypt must never be converted into an empty authoritative store solely because
     // isAsyncEncryptionAvailable() still says that the provider exists.
     expect(await getSecret('bridgeToken')).toBeNull();
-    await expect(setSecret('openRouterApiKey', 'must-not-replace-ambiguous-blob')).rejects.toThrow(
-      /credential storage is unavailable/i
-    );
+    const failedWrite = setSecret('openRouterApiKey', 'must-not-replace-ambiguous-blob');
+    await expect(failedWrite).rejects.toBeInstanceOf(SecretStorageError);
+    await expect(failedWrite).rejects.toMatchObject({ code: 'stored_credentials_unreadable' });
     expect(await fs.readFile(file)).toEqual(before);
 
     vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer) => ({
@@ -268,9 +269,9 @@ describe('secret store', () => {
     const before = await fs.readFile(file);
 
     expect(await getSecret('bridgeToken')).toBeNull();
-    await expect(setSecret('openRouterApiKey', 'must-not-replace-malformed-blob')).rejects.toThrow(
-      /credential storage is unavailable/i
-    );
+    const malformedWrite = setSecret('openRouterApiKey', 'must-not-replace-malformed-blob');
+    await expect(malformedWrite).rejects.toBeInstanceOf(SecretStorageError);
+    await expect(malformedWrite).rejects.toMatchObject({ code: 'stored_credentials_unreadable' });
     expect(await fs.readFile(file)).toEqual(before);
   });
 

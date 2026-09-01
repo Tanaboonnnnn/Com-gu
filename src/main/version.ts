@@ -8,11 +8,11 @@
  *
  * `BRIDGE_PROTOCOL` is what actually has to match. It moves only when the request or
  * response shape between app and extension changes in a way an older peer cannot handle,
- * which is far less often than the app's own version moves — and it is what turns "the
+ * which is far less often than the app's own version moves โ€” and it is what turns "the
  * extension does nothing" into a diagnosable mismatch.
  */
 
-export const APP_VERSION = '3.0.0';
+export const APP_VERSION = '3.0.1';
 
 /**
  * Standalone extension recovery must stay on the app's own release. Using GitHub's moving
@@ -23,27 +23,27 @@ export function extensionDownloadUrl(version = APP_VERSION): string {
 }
 
 /**
- * 1 — original observations/activity bridge.
- * 2 — leased commands: /commands hands out a claim, /commands/ack reports the outcome.
- * 3 — browser-triggered compaction via /compact and worker bootstrap completion semantics.
- * 4 — targeted open: the app opens the chat itself with a ?clf=<id> marker and the page
+ * 1 โ€” original observations/activity bridge.
+ * 2 โ€” leased commands: /commands hands out a claim, /commands/ack reports the outcome.
+ * 3 โ€” browser-triggered compaction via /compact and worker bootstrap completion semantics.
+ * 4 โ€” targeted open: the app opens the chat itself with a ?clf=<id> marker and the page
  *     redeems that one id through /commands/redeem, /commands also reports which ids are
  *     still active, /activity carries the resume job and compaction progress, and /pair
  *     provisions silently.
- * 5 — canonical Fiber message/request observations, exact request-id attribution metadata,
+ * 5 โ€” canonical Fiber message/request observations, exact request-id attribution metadata,
  *     automatic-compaction edge/claim state, and the 1.8 activity payload contract.
- * 6 — 1.8.8 reshaped the wire in ways a 1.8.7 peer mishandles silently rather than loudly:
+ * 6 โ€” 1.8.8 reshaped the wire in ways a 1.8.7 peer mishandles silently rather than loudly:
  *     /activity carries resetActivity and truncatedFrom so a page that merged from a cursor
  *     predating the truncated window resyncs instead of projecting stale turns, /activity
  *     carries retiredWorker, /commands/ack answers 404 no_such_command when the caller names
  *     a client, and observations carry authoredTime, which now drives message ordering. None
  *     of those degrade gracefully, so the 426 gate has to be able to see the mismatch.
- * 7 — the app renamed itself to Chat On Steroids, and the `app` field every bridge response
+ * 7 โ€” the app renamed itself to Chat On Steroids, and the `app` field every bridge response
  *     is stamped with renamed along with it. A 6 extension reads that field to decide the
  *     reply came from this app at all, so against a 7 app it silently discards every answer
- *     and reports nothing — which looks exactly like a bridge that is down. The bump turns
+ *     and reports nothing โ€” which looks exactly like a bridge that is down. The bump turns
  *     that into the 426 the user can act on.
- * 8 — explicit app-side browser disconnect became a durable pairing state. /hello reports
+ * 8 โ€” explicit app-side browser disconnect became a durable pairing state. /hello reports
  *     `disconnected`, protected routes distinguish that revocation from a stale token, and
  *     /pair accepts `reconnect: true` only for an explicit browser-side reconnect. An older
  *     extension would otherwise silently undo the user's app-side Disconnect on its next 401.

@@ -57,7 +57,7 @@ import {
 } from './window-lifecycle.js';
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
-import { migrateLegacyUserData } from './migration.js';
+import { migrateLegacyUserData, resolveCompatibleUserDataPath } from './migration.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
@@ -70,6 +70,16 @@ let quitting = false;
 let shutdownStarted = false;
 let shutdownComplete = false;
 let stopSessionRetention: (() => void) | null = null;
+
+// Preserve the original Electron userData for upgraded users before Chromium/safeStorage
+// initialize. The old directory contains Local State, which owns the OS-encrypted key used to
+// decrypt secrets.bin. Clean installs keep Electron's normal ComGu directory.
+const defaultUserData = app.getPath('userData');
+const compatibleUserData = resolveCompatibleUserDataPath({
+  appDataDir: path.dirname(defaultUserData),
+  defaultUserDataDir: defaultUserData
+});
+if (compatibleUserData !== defaultUserData) app.setPath('userData', compatibleUserData);
 
 // One instance only: two copies would fight over the tunnel and the config file.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -228,10 +238,12 @@ void app.whenReady().then(async () => {
   // two bootstrap files that must exist before their owners initialize; never delete the legacy
   // directory and never decrypt secrets as part of this compatibility migration.
   const legacyUserData = path.join(path.dirname(userData), 'chat-on-steroids');
-  try {
-    await migrateLegacyUserData({ legacyDir: legacyUserData, destinationDir: userData });
-  } catch (error) {
-    logWarn(`legacy user-data migration did not complete: ${(error as Error).message}`);
+  if (path.resolve(legacyUserData) !== path.resolve(userData)) {
+    try {
+      await migrateLegacyUserData({ legacyDir: legacyUserData, destinationDir: userData });
+    } catch (error) {
+      logWarn(`legacy user-data migration did not complete: ${(error as Error).message}`);
+    }
   }
   initConfigPath(userData);
   initSecretsPath(userData);
