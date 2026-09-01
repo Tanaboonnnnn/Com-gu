@@ -10,6 +10,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import {
+  BROWSER_FAMILIES,
   CAPABILITIES,
   DEFAULT_CAPABILITIES,
   GOAL_REASONING_LEVELS,
@@ -214,6 +215,10 @@ const configSchema = z.object({
     .transform(uniqueStoredRoots),
   capabilities: capabilitiesSchema,
   readOnly: z.boolean(),
+  browser: z
+    .object({ preference: z.union([z.literal('prime'), z.enum(BROWSER_FAMILIES)]).optional().default('prime').catch('prime') })
+    .optional()
+    .default({ preference: 'prime' }),
   tunnel: z.object({
     kind: z.enum(['openai', 'cloudflared', 'manual']),
     tunnelId: z.string().max(128),
@@ -329,6 +334,7 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform): Con
     // stored schema remains cross-platform so one config can still be moved between machines.
     capabilities: capabilitiesForPlatform({ ...ALL_FIRST_LAUNCH_CAPABILITIES }, platform),
     readOnly: false,
+    browser: { preference: 'prime' },
     tunnel: { kind: 'openai', tunnelId: '', desktopTunnelId: '', binaryPath: '' },
     ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'dark', locale: 'en' },
     sessions: { ...DEFAULT_SESSIONS },

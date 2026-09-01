@@ -17,6 +17,30 @@ afterAll(async () => {
 });
 
 describe('settings migration', () => {
+  it('defaults legacy configs with no browser preference to prime affinity', async () => {
+    const legacy = defaultConfig() as unknown as Record<string, unknown>;
+    const { browser: _browser, ...withoutBrowser } = legacy;
+    await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify(withoutBrowser), 'utf8');
+    expect((await loadConfig()).browser.preference).toBe('prime');
+  });
+
+  it('preserves an explicit browser family preference', async () => {
+    const config = defaultConfig();
+    await saveConfig({ ...config, browser: { preference: 'brave' } });
+    expect((await loadConfig()).browser.preference).toBe('brave');
+  });
+  it('repairs an unknown browser preference without discarding unrelated settings', async () => {
+    const config = defaultConfig() as unknown as Record<string, unknown>;
+    await fs.writeFile(
+      path.join(dir, 'config.json'),
+      JSON.stringify({ ...config, roots: [{ name: 'project', path: 'C:\\work\\project' }], browser: { preference: 'future-browser' } }),
+      'utf8'
+    );
+    const loaded = await loadConfig();
+    expect(loaded.browser.preference).toBe('prime');
+    expect(loaded.roots).toEqual([{ name: 'project', path: 'C:\\work\\project' }]);
+  });
+
   it('defaults older configs with no locale to English without changing other UI prefs', async () => {
     const old = defaultConfig() as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
     const { locale: _locale, ...oldUi } = old.ui;

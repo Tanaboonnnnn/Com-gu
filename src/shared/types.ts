@@ -216,10 +216,19 @@ export interface MultiAgentSettings {
   maxWorkers: number;
 }
 
+export const BROWSER_FAMILIES = ['brave', 'chrome', 'edge', 'chromium'] as const;
+export type BrowserFamily = (typeof BROWSER_FAMILIES)[number];
+export type BrowserPreference = 'prime' | BrowserFamily;
+
+export interface BrowserSettings {
+  preference: BrowserPreference;
+}
+
 export interface Config {
   roots: Root[];
   capabilities: Capabilities;
   readOnly: boolean;
+  browser: BrowserSettings;
   tunnel: TunnelSettings;
   ui: UiPrefs;
   sessions: SessionSettings;

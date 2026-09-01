@@ -1,8 +1,60 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { findPreferredBrowser, openInPreferredBrowser, preferredBrowserCandidates } from '../src/main/browser.js';
+import {
+  findPreferredBrowser,
+  openInPreferredBrowser,
+  preferredBrowserCandidates,
+  resolveBrowserCandidates
+} from '../src/main/browser.js';
+
 
 describe('browser-backed ChatGPT commands', () => {
+  it('detects Brave, Chrome, Edge and Chromium Windows families from known install locations', () => {
+    const env = {
+      LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local',
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)'
+    };
+    const candidates = preferredBrowserCandidates('win32', env, 'C:\\Users\\example');
+    expect(candidates).toContain('C:\\Users\\example\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe');
+    expect(candidates).toContain('C:\\Users\\example\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe');
+    expect(candidates).toContain('C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe');
+    expect(candidates).toContain('C:\\Users\\example\\AppData\\Local\\Chromium\\Application\\chrome.exe');
+  });
+
+  it('keeps prime affinity inside the proven browser family', () => {
+    const candidates = resolveBrowserCandidates({
+      platform: 'win32',
+      env: { LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local', ProgramFiles: 'C:\\Program Files' },
+      home: 'C:\\Users\\example',
+      preference: 'prime',
+      primeFamily: 'brave'
+    });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every((candidate) => candidate.family === 'brave')).toBe(true);
+  });
+
+  it('fails closed when prime affinity has no proven family instead of guessing Chrome', () => {
+    expect(resolveBrowserCandidates({ platform: 'win32', preference: 'prime' })).toEqual([]);
+  });
+
+  it('never crosses to another family after an explicit-family launch failure', async () => {
+    const attempts: string[] = [];
+    await expect(
+      openInPreferredBrowser('https://chatgpt.com/?clf=worker', {
+        platform: 'win32',
+        env: { LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local', ProgramFiles: 'C:\\Program Files' },
+        preference: 'brave',
+        usable: () => true,
+        launch: async (candidate) => {
+          attempts.push(candidate);
+          throw new Error('Brave launch failed');
+        }
+      })
+    ).rejects.toThrow(/Brave launch failed/);
+    expect(attempts.length).toBeGreaterThan(0);
+    expect(attempts.every((candidate) => /BraveSoftware|brave/i.test(candidate))).toBe(true);
+  });
   it('prefers the normal per-user Chrome install on Windows', () => {
     const env = {
       LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local',
@@ -33,7 +85,7 @@ describe('browser-backed ChatGPT commands', () => {
   it('discovers every standard macOS Chrome channel before Chromium fallback', () => {
     const candidates = preferredBrowserCandidates('darwin', { HOME: '/Users/example' }, '/Users/example');
     const systemCandidates = candidates.filter((candidate) => candidate.startsWith('/Applications/'));
-    expect(systemCandidates).toEqual([
+    expect(systemCandidates.slice(0, 5)).toEqual([
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
       '/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev',
