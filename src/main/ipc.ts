@@ -11,7 +11,7 @@
 import path from 'node:path';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import { z } from 'zod';
-import { CAPABILITIES, GOAL_REASONING_LEVELS, type AppState, type Config } from '../shared/types.js';
+import { BROWSER_FAMILIES, CAPABILITIES, GOAL_REASONING_LEVELS, type AppState, type Config } from '../shared/types.js';
 import { MAX_GOAL_SYSTEM_PROMPT_CHARS } from '../shared/goal.js';
 import { applySettings, connect, disconnect, getStatus, onStatusChange } from './connection.js';
 import { getConfig, updateConfig } from './config.js';
@@ -55,6 +55,7 @@ import { forgetWorkspaceRoot, renameWorkspaceRoot } from './workspace.js';
 import { hostPlatformInfo } from './platform.js';
 import { checkForUpdate, downloadUpdate, installDownloadedUpdate } from './updater.js';
 import { launchAtLoginState, setLaunchAtLogin } from './startup.js';
+import { installedBrowserFamilies } from './browser.js';
 import type { UpdateCheckResult } from '../shared/types.js';
 
 type UpdateUiState =
@@ -104,6 +105,7 @@ const capabilityPatch = z.object(
 const settingsPatch = z.object({
   capabilities: capabilityPatch,
   readOnly: z.boolean(),
+  browser: z.object({ preference: z.enum(['prime', ...BROWSER_FAMILIES]) }),
   tunnel: z.object({
     kind: z.enum(['openai', 'cloudflared', 'manual']),
     tunnelId: z
@@ -186,6 +188,9 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
   return {
     capabilities,
     readOnly: pick(current.readOnly, base.readOnly, wanted.readOnly),
+    browser: {
+      preference: pick(current.browser.preference, base.browser.preference, wanted.browser.preference)
+    },
     tunnel: {
       kind: pick(current.tunnel.kind, base.tunnel.kind, wanted.tunnel.kind),
       tunnelId: pick(current.tunnel.tunnelId, base.tunnel.tunnelId, wanted.tunnel.tunnelId),
@@ -339,6 +344,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   };
 
   // Launch-at-login belongs to the OS, not config.json. Read it fresh whenever the UI asks.
+  handle('browser:list', async () => installedBrowserFamilies());
   handle('startup:get', async () => launchAtLoginState());
   handle('startup:set', async (payload) => {
     const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(payload);

@@ -27,6 +27,22 @@ import {
 
 import type { Check, Diagnosis } from '../shared/types.js';
 import { surfaceIsUseful } from './mcp/surfaces.js';
+import { t, type Locale, type MessageKey } from '../shared/i18n/index.js';
+
+function dc(locale: Locale, key: MessageKey, values?: Record<string, string | number>): string {
+  return t(locale, key, values);
+}
+
+function diagnosticAgo(locale: Locale, atMs: number | null, nowMs = Date.now()): string {
+  if (locale === 'en') return ago(atMs, nowMs);
+  if (atMs === null) return dc(locale, 'common.never');
+  const seconds = Math.max(0, Math.round((nowMs - atMs) / 1000));
+  if (seconds < 3) return dc(locale, 'common.justNow');
+  if (seconds < 90) return dc(locale, 'common.secondsAgo', { count: seconds });
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return dc(locale, 'common.minutesAgo', { count: minutes });
+  return dc(locale, 'common.hoursAgo', { count: Math.round(minutes / 60) });
+}
 
 async function fetchJson(
   url: string,
@@ -94,18 +110,22 @@ const PROTOCOL_VERSION = '2025-06-18';
 export function describeRoute(
   health: PollHealth | null,
   uptimeSeconds: number | null,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  locale: Locale = 'en'
 ): Check {
-  const name = 'Route to OpenAI';
-  if (health === null) return { name, status: 'not-run', ok: null, detail: 'The tunnel did not report its metrics.' };
+  const name = dc(locale, 'diagnostics.route');
+  if (health === null) return { name, status: 'not-run', ok: null, detail: dc(locale, 'diagnostics.noMetrics') };
 
-  const errors = `${health.errors ?? 0} poll error${health.errors === 1 ? '' : 's'} since start`;
+  const errors = dc(locale, 'diagnostics.pollErrors', { count: health.errors ?? 0 });
   if (health.lastSuccessMs !== null && nowMs - health.lastSuccessMs <= POLL_FRESH_MS) {
     return {
       name,
       status: 'pass',
       ok: true,
-      detail: `Verified — last completed handshake ${ago(health.lastSuccessMs, nowMs)}; ${errors}.`
+      detail: dc(locale, 'diagnostics.routeVerified', {
+        ago: diagnosticAgo(locale, health.lastSuccessMs, nowMs),
+        errors
+      })
     };
   }
   // Only a client that has *never* polled successfully gets the benefit of the doubt. One
@@ -115,19 +135,22 @@ export function describeRoute(
       name,
       status: 'not-run',
       ok: null,
-      detail: `Still starting — the first poll of the control plane takes up to 30s; ${errors}.`
+      detail: dc(locale, 'diagnostics.routeStarting', { errors })
     };
   }
   return {
     name,
     status: 'fail',
     ok: false,
-    detail: `Not verified — last completed handshake ${ago(health.lastSuccessMs, nowMs)}; ${errors}.`
+    detail: dc(locale, 'diagnostics.routeNotVerified', {
+      ago: diagnosticAgo(locale, health.lastSuccessMs, nowMs),
+      errors
+    })
   };
 }
 
 /** Runs an initialize + tools/list against our own loopback endpoint. */
-async function checkLocalServer(url: string): Promise<Check> {
+async function checkLocalServer(url: string, locale: Locale): Promise<Check> {
   const init = await fetchJson(url, {
     jsonrpc: '2.0',
     id: 1,
@@ -139,15 +162,17 @@ async function checkLocalServer(url: string): Promise<Check> {
     }
   });
   if (init === null) {
-    return { name: 'Local server', status: 'fail', ok: false, detail: 'No answer on the loopback address.' };
+    return { name: dc(locale, 'diagnostics.localServer'), status: 'fail', ok: false, detail: dc(locale, 'diagnostics.localNoAnswer') };
   }
   const initObj = init.json as { error?: { message?: string } } | null;
   if (init.status >= 400 || initObj?.error) {
     return {
-      name: 'Local server',
+      name: dc(locale, 'diagnostics.localServer'),
       status: 'fail',
       ok: false,
-      detail: `initialize failed: HTTP ${init.status} ${initObj?.error?.message ?? init.text.slice(0, 120)}`
+      detail: dc(locale, 'diagnostics.initializeFailed', {
+        detail: `HTTP ${init.status} ${initObj?.error?.message ?? init.text.slice(0, 120)}`
+      })
     };
   }
 
@@ -158,18 +183,20 @@ async function checkLocalServer(url: string): Promise<Check> {
   const tools = listObj?.result?.tools;
   if (!Array.isArray(tools)) {
     return {
-      name: 'Local server',
+      name: dc(locale, 'diagnostics.localServer'),
       status: 'fail',
       ok: false,
-      detail: `tools/list failed: ${listObj?.error?.message ?? `HTTP ${list?.status ?? 0}`}`
+      detail: dc(locale, 'diagnostics.toolsListFailed', {
+        detail: listObj?.error?.message ?? `HTTP ${list?.status ?? 0}`
+      })
     };
   }
   const names = tools.map((t) => t.name).filter(Boolean);
   return {
-    name: 'Local server',
+    name: dc(locale, 'diagnostics.localServer'),
     status: 'pass',
     ok: true,
-    detail: `Answers on loopback and offers ${names.length} tool${names.length === 1 ? '' : 's'}: ${names.join(', ')}`
+    detail: dc(locale, 'diagnostics.localAnswers', { count: names.length, tools: names.join(', ') })
   };
 }
 
@@ -199,39 +226,35 @@ async function probeText(url: string): Promise<{ status: number; body: string } 
  * never reports a hard failure. It names the suspicion, which is the part that costs
  * an hour to work out from scratch.
  */
-function developerMode(seen: number | null, called: number | null): Check {
+function developerMode(seen: number | null, called: number | null, locale: Locale): Check {
   if (called !== null) {
     return {
-      name: 'ChatGPT allowed to use the tools',
+      name: dc(locale, 'diagnostics.chatgptAllowed'),
       status: 'pass',
       ok: true,
-      detail: `Yes — ChatGPT last ran a tool ${ago(called)}, so Developer mode is on and the whole chain works.`
+      detail: dc(locale, 'diagnostics.developerYes', { ago: diagnosticAgo(locale, called) })
     };
   }
   if (seen === null) {
     return {
-      name: 'ChatGPT allowed to use the tools',
+      name: dc(locale, 'diagnostics.chatgptAllowed'),
       status: 'not-run',
       ok: null,
-      detail: 'Unknown — ChatGPT has not reached this app at all yet, so there is nothing to judge.'
+      detail: dc(locale, 'diagnostics.developerUnknown')
     };
   }
   return {
-    name: 'ChatGPT allowed to use the tools',
+    name: dc(locale, 'diagnostics.chatgptAllowed'),
     status: 'not-run',
     ok: null,
-    detail:
-      'Cannot tell — ChatGPT connected and read the tool list, but has never run a tool. ' +
-      'That is normal if you have not asked it to do anything yet. If you have asked and it ' +
-      'answered “does not support developer MCPs”, the cause is on ChatGPT’s side: turn ' +
-      'Developer mode back on in ChatGPT → Settings → Apps & Connectors → Advanced. It can ' +
-      'switch itself off after a ChatGPT update.'
+    detail: dc(locale, 'diagnostics.developerCannotTell')
   };
 }
 
 export async function runDiagnostics(): Promise<Diagnosis> {
   const checks: Check[] = [];
   const config = getConfig();
+  const locale: Locale = config.ui.locale === 'th' ? 'th' : 'en';
   const caps = effectiveCapabilities(config);
   const status = getStatus();
 
@@ -240,77 +263,81 @@ export async function runDiagnostics(): Promise<Diagnosis> {
     .filter(([, on]) => on)
     .map(([name]) => name);
   checks.push({
-    name: 'Permissions',
+    name: dc(locale, 'diagnostics.permissions'),
     status:
       enabled.length > 0 && (config.roots.length > 0 || surfaceIsUseful('desktop', caps)) ? 'pass' : 'fail',
     ok: enabled.length > 0 && (config.roots.length > 0 || surfaceIsUseful('desktop', caps)),
     detail:
       enabled.length === 0
-        ? 'Nothing is switched on, so the connector would expose no tools.'
-        : `${config.roots.length} folder${config.roots.length === 1 ? '' : 's'} shared; on: ${enabled.join(', ')}${config.readOnly ? ' (read-only)' : ''}`
+        ? dc(locale, 'diagnostics.permissionsNone')
+        : dc(locale, 'diagnostics.permissionsShared', {
+            folders: config.roots.length,
+            enabled: enabled.join(', '),
+            readOnly: config.readOnly ? dc(locale, 'diagnostics.readOnlySuffix') : ''
+          })
   });
 
   // 2. Our own server, end to end, over the same URL the tunnel uses.
   if (!isServerRunning() || !status.localUrl) {
     checks.push({
-      name: 'Local server',
+      name: dc(locale, 'diagnostics.localServer'),
       status: 'fail',
       ok: false,
-      detail: 'Not running. Press Connect first.'
+      detail: dc(locale, 'diagnostics.localNotRunning')
     });
   } else {
-    checks.push(await checkLocalServer(status.localUrl));
+    checks.push(await checkLocalServer(status.localUrl, locale));
   }
 
   // 3. The tunnel process itself.
   const base = tunnelHealthBase();
   if (config.tunnel.kind !== 'openai') {
     checks.push({
-      name: 'Tunnel',
+      name: dc(locale, 'diagnostics.tunnel'),
       status: 'skipped',
       ok: null,
-      detail: `Using the ${config.tunnel.kind} path, which has no local health endpoint.`
+      detail: dc(locale, 'diagnostics.tunnelSkipped', { kind: config.tunnel.kind })
     });
   } else if (!base) {
     checks.push({
-      name: 'Tunnel',
+      name: dc(locale, 'diagnostics.tunnel'),
       status: 'fail',
       ok: false,
-      detail: 'The tunnel program is not running or has not reported a health address yet.'
+      detail: dc(locale, 'diagnostics.tunnelNotRunning')
     });
   } else {
     const ready = await probeText(`${base}/readyz`);
     checks.push({
-      name: 'Tunnel',
+      name: dc(locale, 'diagnostics.tunnel'),
       status: ready?.status === 200 ? 'pass' : 'fail',
       ok: ready?.status === 200,
       detail:
         ready === null
-          ? 'The tunnel program is not answering on its local health address.'
+          ? dc(locale, 'diagnostics.tunnelNoAnswer')
           : ready.status === 200
-            ? 'Running and ready.'
-            : `Not ready: HTTP ${ready.status} ${ready.body}`
+            ? dc(locale, 'diagnostics.tunnelReady')
+            : dc(locale, 'diagnostics.tunnelNotReady', { detail: `HTTP ${ready.status} ${ready.body}` })
     });
 
     // 4. The link the outage actually breaks: client → OpenAI, and 5. what the tunnel
     //    thinks of us. Read together because the route check needs the client's uptime
     //    to tell "not working" apart from "has not finished starting".
     const [health, client] = await Promise.all([readPollHealth(base), readClientStatus(base)]);
-    checks.push(describeRoute(health, client?.uptimeSeconds ?? null));
+    checks.push(describeRoute(health, client?.uptimeSeconds ?? null, Date.now(), locale));
 
     if (client) {
       checks.push({
-        name: 'Tunnel → this app',
+        name: dc(locale, 'diagnostics.tunnelToApp'),
         status: client.probe === null ? 'not-run' : client.probe === 'ok' ? 'pass' : 'fail',
         ok: client.probe === null ? null : client.probe === 'ok',
         detail:
           client.probe === null
-            ? 'The tunnel did not report a probe result for the main channel.'
-            : `Probe of the local MCP server: ${client.probe}.`
+            ? dc(locale, 'diagnostics.noProbe')
+            : dc(locale, 'diagnostics.probe', { probe: client.probe })
       });
       if (client.metadataError) {
         checks.push({
-          name: 'Last tunnel error',
+          name: dc(locale, 'diagnostics.lastTunnelError'),
           status: 'fail',
           ok: false,
           detail: client.metadataError.slice(0, 300)
@@ -322,27 +349,27 @@ export async function runDiagnostics(): Promise<Diagnosis> {
   // 6. The only end-to-end proof there is.
   const seen = lastRequestAt();
   checks.push({
-    name: 'ChatGPT reaching this PC',
+    name: dc(locale, 'diagnostics.chatgptReaching'),
     status: seen === null ? 'not-run' : 'pass',
     ok: seen === null ? null : true,
     detail:
       seen === null
-        ? 'No request has arrived since the server started. If ChatGPT reports an error, it never got as far as this app — that failure is on ChatGPT’s side, not here.'
-        : `Last request from ChatGPT ${ago(seen)}.`
+        ? dc(locale, 'diagnostics.noChatgptRequest')
+        : dc(locale, 'diagnostics.lastChatgptRequest', { ago: diagnosticAgo(locale, seen) })
   });
 
   // 7. The failure that looks exactly like success: ChatGPT connects, this app
   //    answers, and the model is still not allowed to call anything.
-  checks.push(developerMode(seen, lastToolCallAt()));
+  checks.push(developerMode(seen, lastToolCallAt(), locale));
 
   const broken = checks.filter((c) => c.status === 'fail');
   const incomplete = checks.filter((c) => c.status === 'not-run');
   const summary =
     broken.length > 0
-      ? `${broken.length} problem${broken.length === 1 ? '' : 's'}: ${broken.map((c) => c.name).join(', ')}.`
+      ? dc(locale, 'diagnostics.summaryProblems', { count: broken.length, names: broken.map((c) => c.name).join(', ') })
       : incomplete.length > 0
-        ? `No failed checks · ${incomplete.length} not verified yet.`
-        : 'Every required check passed.';
+        ? dc(locale, 'diagnostics.summaryIncomplete', { count: incomplete.length })
+        : dc(locale, 'diagnostics.summaryPassed');
 
   logInfo(`self-test: ${summary}`);
   for (const check of checks) {

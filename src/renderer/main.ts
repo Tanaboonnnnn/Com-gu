@@ -14,7 +14,7 @@
 
 import type { AppApi, SettingsPatch, UpdateUiState } from '../preload/index.js';
 import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
-import type { AppState, Capability, LogEntry, SurfaceStatus } from '../shared/types.js';
+import type { AppState, BrowserFamily, BrowserPreference, Capability, LaunchAtLoginState, LogEntry, SurfaceStatus } from '../shared/types.js';
 import {
   browserExtensionRequired,
   CAPABILITY_DETAILS,
@@ -24,8 +24,8 @@ import {
   WRITE_CAPABILITIES
 } from '../shared/types.js';
 import type { SwarmState } from '../shared/session.js';
-import type { Locale } from '../shared/i18n/index.js';
-import { $, ago, el, icon, run, shortAgo, toast } from './dom.js';
+import { t, type Locale, type MessageKey } from '../shared/i18n/index.js';
+import { $, el, icon, run, toast } from './dom.js';
 import { chatApply, chatSettingsPatch, chatVisible, initChat } from './chat.js';
 import { applyStaticTranslations } from './i18n.js';
 
@@ -37,15 +37,32 @@ declare global {
 
 const api = window.api;
 
+function tr(key: MessageKey, values?: Record<string, string | number>): string {
+  const locale: Locale = state?.config.ui.locale === 'th' ? 'th' : 'en';
+  return t(locale, key, values);
+}
+
+function displayAgo(atMs: number | null, short = false): string {
+  if (atMs === null) return short ? '—' : tr('common.never');
+  const seconds = Math.max(0, Math.round((Date.now() - atMs) / 1000));
+  if (seconds < 3) return tr(short ? 'common.now' : 'common.justNow');
+  if (seconds < 90) return tr(short ? 'common.secondsShort' : 'common.secondsAgo', { count: seconds });
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return tr(short ? 'common.minutesShort' : 'common.minutesAgo', { count: minutes });
+  return tr(short ? 'common.hoursShort' : 'common.hoursAgo', { count: Math.round(minutes / 60) });
+}
 let latestUpdateState: UpdateUiState | null = null;
 let updatePanelRequested = false;
+let detectedBrowserFamilies: BrowserFamily[] = [];
 
 function paintUpdate(next: UpdateUiState): void {
   latestUpdateState = next;
   const button = $<HTMLButtonElement>('versionBtn');
   button.disabled = next.status === 'checking' || next.status === 'downloading';
   button.classList.toggle('has-update', next.status === 'available');
-  button.textContent = next.status === 'available' ? `v${next.latestVersion} available` : `v${next.currentVersion}`;
+  button.textContent = next.status === 'available'
+    ? tr('update.availableVersion', { version: next.latestVersion })
+    : `v${next.currentVersion}`;
 
   if (!updatePanelRequested) return;
   const panel = $('updatePanel');
@@ -53,16 +70,16 @@ function paintUpdate(next: UpdateUiState): void {
   const install = $<HTMLButtonElement>('updateInstall');
   install.hidden = next.status !== 'available';
   install.disabled = next.status === 'downloading';
-  $('updateTitle').textContent = next.status === 'available' ? next.releaseName : 'ComGu update';
+  $('updateTitle').textContent = next.status === 'available' ? next.releaseName : tr('update.title');
   $('updateNotes').textContent = next.status === 'available' ? next.releaseNotes : '';
   $('updateSummary').textContent =
-    next.status === 'available' ? `Installed v${next.currentVersion}. v${next.latestVersion} is ready.` :
-    next.status === 'checking' ? 'Checking for updates…' :
-    next.status === 'current' ? `v${next.currentVersion} is up to date.` :
-    next.status === 'downloading' ? `Downloading and verifying v${next.latestVersion}…` :
-    next.status === 'launched' ? 'Verified installer opened. Follow the installer to finish updating.' :
-    next.status === 'unsupported' ? 'Automatic updates are available on Windows x64 and ARM64.' :
-    next.status === 'error' ? next.message : `Installed v${next.currentVersion}.`;
+    next.status === 'available' ? tr('update.installedReady', { current: next.currentVersion, latest: next.latestVersion }) :
+    next.status === 'checking' ? tr('update.checking') :
+    next.status === 'current' ? tr('update.current', { version: next.currentVersion }) :
+    next.status === 'downloading' ? tr('update.downloading', { version: next.latestVersion }) :
+    next.status === 'launched' ? tr('update.launched') :
+    next.status === 'unsupported' ? tr('update.unsupported') :
+    next.status === 'error' ? next.message : tr('update.installed', { version: next.currentVersion });
 }
 
 /** Same shape the platform uses; mirrored here only to grey out step 2 until it is valid. */
@@ -107,6 +124,13 @@ const GROUPS: Group[] = [
     caps: ['command']
   }
 ];
+
+const GROUP_TITLE_KEYS: Record<string, MessageKey> = {
+  read: 'permissions.lookFiles.title',
+  write: 'permissions.changeFiles.title',
+  desktop: 'permissions.desktop.title',
+  run: 'permissions.command.title'
+};
 
 let state: AppState | null = null;
 /** Guards against saving while we are writing values into the controls. */
@@ -209,7 +233,7 @@ function buildGroups(): void {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.className = 'group-box';
-    box.title = `Turn everything in "${group.title}" on or off`;
+    box.title = tr('permissions.toggleGroup', { name: group.title });
     box.addEventListener('change', () => {
       for (const cap of group.caps) {
         const input = capInput(cap);
@@ -245,13 +269,13 @@ function buildGroups(): void {
   const record = document.createElement('input');
   record.type = 'checkbox';
   record.id = 'sessRecord';
-  record.title = 'Record this chat locally, and expose the session tool in ChatGPT';
+  record.title = tr('permissions.recording.toggle');
   record.addEventListener('change', () => void save());
-  const recording = groupShell('recording', 'Session recording', 'i-steps', record);
+  const recording = groupShell('recording', tr('permissions.recording.title'), 'i-steps', record);
   const recordTools = el('div', 'tools');
   for (const [name, detail] of [
-    ['search', 'List recent recordings or find past and concurrent work by text.'],
-    ['read', 'Read one explicit recording, continue it, or expand one short T… tool reference.']
+    ['search', tr('permissions.recording.search')],
+    ['read', tr('permissions.recording.read')]
   ] as Array<[string, string]>) {
     const row = el('div', 'tool is-static');
     const body = el('span');
@@ -265,18 +289,18 @@ function buildGroups(): void {
   const enabled = document.createElement('input');
   enabled.type = 'checkbox';
   enabled.id = 'homeMaEnabled';
-  enabled.title = 'Expose or hide the sub-agent tools in ChatGPT';
+  enabled.title = tr('permissions.agents.toggle');
   // The only multi-agent exposure control there is. Chat settings used to carry a second
   // checkbox for the same flag, which this one had to mirror by hand.
   enabled.addEventListener('change', () => void save());
-  const agents = groupShell('agents', 'Sub-agents', 'i-bolt', enabled);
+  const agents = groupShell('agents', tr('permissions.agents.title'), 'i-bolt', enabled);
 
   const tools = el('div', 'tools');
   const agentTools: Array<[string, string]> = [
-    ['spawn', 'Open worker ChatGPT conversations for parts of the task, on one shared context.'],
-    ['message', 'Steer one worker or several at once, or report back to prime.'],
-    ['status', 'See every worker, and collect messages not yet delivered on a tool result.'],
-    ['finish', 'Hand the worker result back to prime and close that slot.']
+    ['spawn', tr('permissions.agents.spawn')],
+    ['message', tr('permissions.agents.message')],
+    ['status', tr('permissions.agents.status')],
+    ['finish', tr('permissions.agents.finish')]
   ];
   for (const [name, detail] of agentTools) {
     const row = el('div', 'tool is-static');
@@ -310,23 +334,33 @@ function paintGroups(): void {
       continue;
     }
     root.classList.toggle('is-open', openGroup === group.id);
+    const translatedTitle = tr(GROUP_TITLE_KEYS[group.id]!);
+    root.querySelector<HTMLElement>('.perm-main b')!.textContent = translatedTitle;
+    const groupBox = root.querySelector<HTMLInputElement>('.group-box')!;
+    groupBox.title = tr('permissions.toggleGroup', { name: translatedTitle });
+    for (const cap of group.caps) {
+      const row = root.querySelector<HTMLElement>(`[data-cap="${cap}"]`)?.closest<HTMLElement>('.tool');
+      if (!row) continue;
+      row.querySelector<HTMLElement>('strong')!.textContent = tr(`permissions.cap.${cap}.label` as MessageKey);
+      row.querySelector<HTMLElement>('em')!.textContent = tr(`permissions.cap.${cap}.detail` as MessageKey);
+    }
 
     const usable = group.caps.filter((cap) => !(readOnly && WRITE_CAPABILITIES.includes(cap)));
     const on = group.caps.filter((cap) => capInput(cap).checked);
 
-    const box = root.querySelector<HTMLInputElement>('.group-box')!;
+    const box = groupBox;
     box.checked = usable.length > 0 && usable.every((cap) => capInput(cap).checked);
     box.indeterminate = !box.checked && on.length > 0;
     box.disabled = usable.length === 0;
 
     root.querySelector<HTMLElement>('.group-count')!.textContent =
       usable.length === 0
-        ? 'off in read-only mode'
+        ? tr('permissions.offReadOnly')
         : on.length === 0
-          ? 'off'
+          ? tr('permissions.off')
           : on.length === group.caps.length
-            ? `${on.length} permission${on.length === 1 ? '' : 's'}`
-            : `${on.length} of ${group.caps.length} permissions`;
+            ? tr('permissions.enabledCount', { count: on.length })
+            : tr('permissions.enabledOfCount', { count: on.length, total: group.caps.length });
 
     root.classList.toggle('is-on', on.length > 0);
     root.classList.toggle('is-locked', usable.length === 0);
@@ -338,16 +372,19 @@ function paintGroups(): void {
   // focused/dirty-field guard. Recopying state here undid that protection and visibly
   // flipped a user's just-clicked toggle back when an unsolicited stale state push
   // arrived before save completed, so this only reads them.
-  for (const [id, onText] of [
-    ['recording', 'session tool exposed'],
-    ['agents', 'agents tool exposed']
-  ] as Array<[string, string]>) {
+  for (const [id, titleKey, toggleKey, onKey] of [
+    ['recording', 'permissions.recording.title', 'permissions.recording.toggle', 'permissions.sessionToolExposed'],
+    ['agents', 'permissions.agents.title', 'permissions.agents.toggle', 'permissions.agentsToolExposed']
+  ] as Array<[string, MessageKey, MessageKey, MessageKey]>) {
     const root = document.querySelector<HTMLElement>(`[data-group="${id}"]`);
     if (!root) continue;
     const box = root.querySelector<HTMLInputElement>('.sw input')!;
+    const translatedTitle = tr(titleKey);
+    root.querySelector<HTMLElement>('.perm-main b')!.textContent = translatedTitle;
+    box.title = tr(toggleKey);
     root.classList.toggle('is-open', openGroup === id);
     root.classList.toggle('is-on', box.checked);
-    root.querySelector<HTMLElement>('.group-count')!.textContent = box.checked ? onText : 'off';
+    root.querySelector<HTMLElement>('.group-count')!.textContent = box.checked ? tr(onKey) : tr('permissions.off');
   }
 }
 
@@ -394,6 +431,7 @@ function save(over: { readOnly?: boolean; theme?: 'light' | 'dark'; locale?: Loc
   const patch: SettingsPatch = {
     capabilities,
     readOnly,
+    browser: { preference: $<HTMLSelectElement>('browserPreference').value as BrowserPreference },
     tunnel: {
       kind: $<HTMLSelectElement>('tunnelKind').value as 'openai' | 'cloudflared' | 'manual',
       tunnelId: $<HTMLInputElement>('tunnelId').value.trim(),
@@ -434,6 +472,7 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
   const base: SettingsPatch = {
     capabilities: previous.capabilities,
     readOnly: previous.readOnly,
+    browser: previous.browser ?? { preference: 'prime' },
     tunnel: previous.tunnel,
     ui: previous.ui,
     sessions: previous.sessions,
@@ -447,9 +486,9 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
     if (previous.multiAgent.enabled && !patch.multiAgent.enabled) {
       // A cached snapshot keeps offering the `agents` tool until the connector is
       // reloaded. Say so plainly rather than letting it look sticky.
-      toast('Multi-agent off. Reconnect the connector in ChatGPT (then start a new chat) to drop the agents tool.');
+      toast(tr('home.multiAgentOffToast'));
     } else if (toolSurfaceChanged) {
-      toast('Tools changed. Start a new ChatGPT conversation to guarantee the new tool list is loaded.');
+      toast(tr('home.toolsChangedToast'));
     }
   } else await refresh();
   // Do not erase the desired state of a newer queued save when an older one completes.
@@ -458,22 +497,20 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
 
 // ---------------------------------------------------------------- helpers
 
-const STATUS_TEXT: Record<AppState['status']['state'], string> = {
-  disconnected: 'Not connected',
-  'starting-server': 'Starting',
-  'connecting-tunnel': 'Connecting',
-  connected: 'Connected',
-  offline: 'No internet',
-  'auth-failed': 'Sign-in failed',
-  'tunnel-unavailable': 'Tunnel unavailable'
+const STATUS_KEYS: Record<AppState['status']['state'], MessageKey> = {
+  disconnected: 'status.notConnected',
+  'starting-server': 'status.starting',
+  'connecting-tunnel': 'status.connecting',
+  connected: 'status.connected',
+  offline: 'status.offline',
+  'auth-failed': 'status.authFailed',
+  'tunnel-unavailable': 'status.tunnelUnavailable'
 };
 
-const METHOD_HINT: Record<string, string> = {
-  openai:
-    'ChatGPT reaches this computer through an OpenAI tunnel. Nothing is exposed to the open internet.',
-  cloudflared:
-    'Creates a temporary public https address with Cloudflare. The address changes on every restart.',
-  manual: 'This app only listens on localhost. You are responsible for exposing it.'
+const METHOD_HINT_KEYS: Record<string, MessageKey> = {
+  openai: 'setup.openaiHint',
+  cloudflared: 'setup.cloudflaredHint',
+  manual: 'setup.manualHint'
 };
 
 function duration(seconds: number | null): string {
@@ -503,20 +540,20 @@ function missingStep(next: AppState): { step: string; text: string } | null {
   // clipboard may legitimately be rootless; enabling one must not hide a root still needed
   // by an effective file/patch/command capability on Core.
   if (config.roots.length === 0 && requiresApprovedFilesystemRoot(config)) {
-    return { step: 'folder', text: 'Choose a folder to share — step 1.' };
+    return { step: 'folder', text: tr('setup.chooseFolderStep') };
   }
   if (config.tunnel.kind === 'openai') {
     if (!TUNNEL_ID_PATTERN.test(config.tunnel.tunnelId)) {
-      return { step: 'tunnel', text: 'Create a tunnel and paste its ID — step 2.' };
+      return { step: 'tunnel', text: tr('setup.createTunnelStep') };
     }
     if (!(next.secureStorage?.available ?? true) && !next.hasApiKey) {
-      return { step: 'key', text: next.secureStorage?.detail ?? 'Secure credential storage is unavailable.' };
+      return { step: 'key', text: next.secureStorage?.detail ?? tr('setup.secureStorageUnavailable') };
     }
     if (!next.hasApiKey) {
-      return { step: 'key', text: 'Add a restricted API key — step 3.' };
+    return { step: 'key', text: tr('setup.addApiKeyStep') };
     }
   } else if (!next.resolvedBinary && config.tunnel.kind === 'cloudflared') {
-    return { step: 'connect', text: 'cloudflared was not found on this computer.' };
+    return { step: 'connect', text: tr('setup.cloudflaredMissing') };
   }
   return null;
 }
@@ -595,7 +632,7 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
     input.value = renameState.draft;
     input.maxLength = 32;
     input.disabled = renameState.committing;
-    input.setAttribute('aria-label', `Rename /${root.name}`);
+    input.setAttribute('aria-label', tr('home.renameFolder', { name: root.name }));
     input.addEventListener('input', () => captureRootRenameInput(input, renameState));
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
@@ -620,7 +657,7 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
   const rename = document.createElement('button');
   rename.className = 'btn';
   rename.type = 'button';
-  rename.title = `Rename /${root.name}`;
+  rename.title = tr('home.renameFolder', { name: root.name });
   rename.append(icon('i-pencil'));
   rename.addEventListener('click', () => {
     rootRename = {
@@ -639,7 +676,7 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
   const remove = document.createElement('button');
   remove.className = 'btn';
   remove.type = 'button';
-  remove.title = `Stop sharing /${root.name}`;
+  remove.title = tr('home.stopSharing', { name: root.name });
   remove.append(icon('i-trash'));
   remove.addEventListener('click', async () => {
     const result = await run(api.removeRoot(root.name));
@@ -702,27 +739,32 @@ function apply(next: AppState): void {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   const locale: Locale = config.ui.locale === 'th' ? 'th' : 'en';
   applyValue($<HTMLSelectElement>('localeSelect'), locale, previousState?.config.ui.locale ?? 'en');
+  applyValue(
+    $<HTMLSelectElement>('browserPreference'),
+    config.browser?.preference ?? 'prime',
+    previousState?.config.browser?.preference ?? 'prime'
+  );
   $('themeIcon').setAttribute('href', dark ? '#i-sun' : '#i-moon');
-  $('themeBtn').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  $('themeBtn').title = dark ? tr('setup.switchLight') : tr('setup.switchDark');
 
   // ---- header
   const live = $('live');
   live.className = `live${
     connected ? ' is-connected' : offline ? ' is-offline' : busy ? ' is-busy' : failed ? ' is-error' : ''
   }`;
-  $('liveState').textContent = STATUS_TEXT[status.state];
+  $('liveState').textContent = tr(STATUS_KEYS[status.state]);
 
   const id = config.tunnel.tunnelId;
   $('headerSub').textContent =
     config.tunnel.kind === 'openai'
       ? TUNNEL_ID_PATTERN.test(id)
         ? `${id.slice(0, 11)}…${id.slice(-4)}`
-        : 'No tunnel yet'
+        : tr('home.noTunnel')
       : (status.publicUrl ?? status.localUrl ?? config.tunnel.kind);
 
   const connectBtn = $<HTMLButtonElement>('connectBtn');
   connectBtn.classList.toggle('is-running', running);
-  $('connectLabel').textContent = running ? 'Disconnect' : 'Connect';
+  $('connectLabel').textContent = running ? tr('common.disconnect') : tr('common.connect');
   connectBtn.disabled = !running && missing !== null;
   connectBtn.title = !running && missing ? missing.text : '';
 
@@ -764,7 +806,8 @@ function apply(next: AppState): void {
     config.tunnel.kind,
     previousState?.config.tunnel.kind
   );
-  $('methodHint').textContent = METHOD_HINT[config.tunnel.kind] ?? '';
+  const methodHintKey = METHOD_HINT_KEYS[config.tunnel.kind];
+  $('methodHint').textContent = methodHintKey ? tr(methodHintKey) : '';
   applyValue($<HTMLInputElement>('tunnelId'), config.tunnel.tunnelId, previousState?.config.tunnel.tunnelId);
   applyValue(
     $<HTMLInputElement>('desktopTunnelId'),
@@ -785,13 +828,11 @@ function apply(next: AppState): void {
   );
   $('privacyScreenshotsSetting').hidden = !(next.platform?.desktopAutomation ?? true);
   if (next.platform?.family === 'macos') {
-    $('backgroundRunningCopy').textContent =
-      'Leave it running while you use the connector. It stays available from the menu bar and Dock when you close the window.';
-    $('minimizeToTrayCopy').textContent = 'Hide the window to the menu bar when closed';
+    $('backgroundRunningCopy').textContent = tr('setup.backgroundMac');
+    $('minimizeToTrayCopy').textContent = tr('setup.minimizeMac');
   } else {
-    $('backgroundRunningCopy').textContent =
-      'Leave it running while you use the connector. It stays in the tray when you close the window.';
-    $('minimizeToTrayCopy').textContent = 'Keep running in the tray when closed';
+    $('backgroundRunningCopy').textContent = tr('setup.backgroundTray');
+    $('minimizeToTrayCopy').textContent = tr('setup.minimizeTray');
   }
 
   const openai = config.tunnel.kind === 'openai';
@@ -805,28 +846,28 @@ function apply(next: AppState): void {
   $('desktopTunnelField').hidden = !openai || !desktopSurface?.available;
 
   $('wizFolders').textContent =
-    config.roots.length === 0 ? 'None yet' : config.roots.map((r) => `/${r.name}`).join('  ');
+    config.roots.length === 0 ? tr('home.noneYet') : config.roots.map((r) => `/${r.name}`).join('  ');
   const secureStorageAvailable = next.secureStorage?.available ?? true;
   const apiKey = $<HTMLInputElement>('apiKey');
-  apiKey.placeholder = next.hasApiKey ? '•••••••• stored' : 'sk-…';
+  apiKey.placeholder = next.hasApiKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-…';
   apiKey.disabled = !secureStorageAvailable;
   $('apiKeyState').textContent = !secureStorageAvailable
-    ? (next.secureStorage?.detail ?? 'Secure credential storage is unavailable.')
+    ? (next.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : next.hasApiKey
-      ? 'A key is stored with secure OS credential storage. Type a new one to replace it, or use Remove stored API key.'
-      : 'Stored with secure OS credential storage. It is never shown again and never leaves this app.';
+      ? tr('setup.apiKeyStored')
+      : tr('setup.apiKeySafe');
   $('apiKeyState').classList.toggle('is-warn', !secureStorageAvailable);
   $<HTMLButtonElement>('removeApiKey').disabled = !next.hasApiKey || !secureStorageAvailable;
 
   const wizConnect = $<HTMLButtonElement>('wizConnect');
-  wizConnect.textContent = running ? 'Disconnect' : 'Connect';
+  wizConnect.textContent = running ? tr('common.disconnect') : tr('common.connect');
   wizConnect.disabled = connectBtn.disabled;
-  $('wizStatus').textContent = running || failed ? status.detail || STATUS_TEXT[status.state] : '';
+  $('wizStatus').textContent = running || failed ? status.detail || tr(STATUS_KEYS[status.state]) : '';
 
   $('chatgptConn').replaceChildren(
     openai
-      ? frag('For the connection, choose ', 'Tunnel', ' and pick the tunnel you made in step 2.')
-      : frag('For the connection, paste the URL below into ', 'MCP server URL', '.')
+      ? frag(tr('setup.connectionTunnelPrefix'), tr('setup.connectionTunnelStrong'), tr('setup.connectionTunnelSuffix'))
+      : frag(tr('setup.connectionUrlPrefix'), tr('setup.connectionUrlStrong'), tr('setup.connectionUrlSuffix'))
   );
 
   // Says plainly whether the connector has ever reached this app, because a
@@ -844,16 +885,17 @@ function apply(next: AppState): void {
   );
   chatgptNote.textContent =
     status.lastRequestAt === null
-      ? 'ChatGPT has not called this app yet.'
+      ? tr('setup.chatgptNotCalled')
       : status.lastToolCallAt === null
-        ? `ChatGPT connected ${ago(status.lastRequestAt)} but has never run a tool. If it says “does not support developer MCPs”, switch Developer mode back on in ChatGPT → Settings → Apps & Connectors → Advanced.`
+        ? tr('setup.chatgptNeverTool', { ago: displayAgo(status.lastRequestAt) })
         : unverified.length > 0
           ? // One connector working is not the whole setup. Naming the missing one is the
             // difference between "something is off" and knowing what to go and create.
-            `ChatGPT ran a tool ${ago(status.lastToolCallAt)}, but ${unverified
-              .map((surface) => `“${surface.connectorName}”`)
-              .join(' and ')} has never been called — create it in ChatGPT to use it.`
-          : `ChatGPT ran a tool ${ago(status.lastToolCallAt)} — the whole chain works.`;
+            tr('setup.chatgptMissingConnectors', {
+              ago: displayAgo(status.lastToolCallAt),
+              connectors: unverified.map((surface) => `“${surface.connectorName}”`).join(' / ')
+            })
+          : tr('setup.chatgptWorks', { ago: displayAgo(status.lastToolCallAt) });
 
   const cards = $('connectorCards');
   // A connector the user has switched on but never created in ChatGPT is unfinished setup,
@@ -896,17 +938,17 @@ function apply(next: AppState): void {
   $('wizard').classList.toggle('is-tidy', allDone && !showAllSteps);
   const expand = $<HTMLButtonElement>('wizExpand');
   expand.hidden = !allDone;
-  expand.textContent = showAllSteps ? 'Hide finished steps' : 'Show all steps';
+  expand.textContent = showAllSteps ? tr('setup.hideFinishedSteps') : tr('setup.showAllSteps');
 
   const needsBinary = config.tunnel.kind !== 'manual';
   $('binaryState').textContent = !needsBinary
-    ? 'Not needed for this method.'
+    ? tr('setup.binaryNotNeeded')
     : next.resolvedBinary
-      ? `Using ${next.resolvedBinary}`
-      : 'Not found. Install it, or choose the file with Browse.';
+      ? tr('setup.binaryUsing', { path: next.resolvedBinary })
+      : tr('setup.binaryMissing');
   $('versionLine').textContent = next.bundledTunnelVersion
-    ? `Recent activity only — no file contents, no credentials. Bundled tunnel-client ${next.bundledTunnelVersion}.`
-    : 'Recent activity only. File contents and credentials are never recorded.';
+    ? tr('setup.activityPrivateBundled', { version: next.bundledTunnelVersion })
+    : tr('setup.activityPrivate');
 
   chatApply(next, previousState?.config);
   applyStaticTranslations(document, locale);
@@ -914,11 +956,11 @@ function apply(next: AppState): void {
   applying = false;
 }
 
-const SURFACE_STATE_TEXT: Record<SurfaceStatus['state'], string> = {
-  off: 'Not published',
-  starting: 'Connecting…',
-  live: 'Published',
-  error: 'Problem'
+const SURFACE_STATE_KEYS: Record<SurfaceStatus['state'], MessageKey> = {
+  off: 'connector.state.off',
+  starting: 'connector.state.starting',
+  live: 'connector.state.live',
+  error: 'connector.state.error'
 };
 
 /** One copyable value with its own button, so nothing has to be retyped by hand. */
@@ -931,10 +973,10 @@ function copyRow(label: string, value: string, what: string): HTMLElement {
   input.value = value;
   const button = el('button', 'btn btn-solid');
   (button as HTMLButtonElement).type = 'button';
-  button.append(icon('i-copy'), document.createTextNode('Copy'));
+  button.append(icon('i-copy'), document.createTextNode(tr('connector.copy')));
   button.addEventListener('click', async () => {
     const copied = await run(api.writeClipboard(value));
-    if (copied) toast(`${what} copied`);
+    if (copied) toast(tr('connector.copied', { what }));
   });
   const row = el('div', 'row-inline');
   row.append(input, button);
@@ -961,8 +1003,8 @@ function connectorCards(next: AppState): HTMLElement[] {
     const head = el('div', 'connector-head');
     head.append(
       el('h4', '', surface.connectorName),
-      el('span', 'tag', surface.optional ? 'optional' : 'required'),
-      el('span', `pill is-${surface.state}`, SURFACE_STATE_TEXT[surface.state])
+      el('span', 'tag', surface.optional ? tr('connector.optional') : tr('connector.required')),
+      el('span', `pill is-${surface.state}`, tr(SURFACE_STATE_KEYS[surface.state]))
     );
     card.append(head, el('p', 'hint', surface.cardSummary));
 
@@ -971,17 +1013,17 @@ function connectorCards(next: AppState): HTMLElement[] {
       return card;
     }
 
-    card.append(copyRow('Name', surface.connectorName, 'Name'));
-    card.append(copyRow('Description', surface.description, 'Description'));
+    card.append(copyRow(tr('connector.name'), surface.connectorName, tr('connector.name')));
+    card.append(copyRow(tr('connector.description'), surface.description, tr('connector.description')));
 
     // On the OpenAI method the connector is picked from a list of tunnels instead of
     // pasted as a URL, so showing a loopback address there would only mislead.
     const url =
       surface.publicUrl ?? (config.tunnel.kind === 'manual' ? surface.localUrl : null);
     if (url) {
-      card.append(copyRow('MCP server URL', url, 'URL'));
+      card.append(copyRow(tr('connector.serverUrl'), url, 'URL'));
       card.append(
-        el('p', 'hint', 'Anyone with this URL can use your enabled tools. Do not share it.')
+        el('p', 'hint', tr('connector.urlWarning'))
       );
     } else if (config.tunnel.kind === 'openai') {
       card.append(
@@ -989,8 +1031,8 @@ function connectorCards(next: AppState): HTMLElement[] {
           'p',
           'hint',
           surface.id === 'desktop' && !config.tunnel.desktopTunnelId
-            ? 'Pick this connector’s own tunnel — paste its ID in step 2 first.'
-            : 'Choose Tunnel, then pick this connector’s tunnel.'
+            ? tr('connector.desktopTunnelFirst')
+            : tr('connector.chooseTunnel')
         )
       );
     }
@@ -1003,19 +1045,19 @@ function connectorCards(next: AppState): HTMLElement[] {
     if (surface.state === 'live') {
       card.append(
         surface.lastRequestAt === null
-          ? el('p', 'hint is-warn', 'Not created in ChatGPT yet — ChatGPT has never called this connector.')
+          ? el('p', 'hint is-warn', tr('connector.notCreated'))
           : el(
               'p',
               'hint',
               surface.lastToolCallAt === null
-                ? `ChatGPT connected ${ago(surface.lastRequestAt)} but has not run one of its tools yet.`
-                : `ChatGPT ran one of its tools ${ago(surface.lastToolCallAt)}.`
+                ? tr('connector.connectedNoTool', { ago: displayAgo(surface.lastRequestAt) })
+                : tr('connector.toolRan', { ago: displayAgo(surface.lastToolCallAt) })
             )
       );
     }
 
     if (surface.tools.length > 0) {
-      card.append(el('p', 'hint', `Tools: ${surface.tools.join(', ')}`));
+      card.append(el('p', 'hint', tr('connector.tools', { tools: surface.tools.join(', ') })));
     }
     return card;
     });
@@ -1032,9 +1074,9 @@ function facts(next: AppState): HTMLElement[] {
   const health = status.health;
 
   if (isRunning(status.state)) {
-    rows.push(['Route to OpenAI', health?.route ?? 'starting…']);
+    rows.push([tr('health.route'), health?.route ?? tr('health.starting')]);
     rows.push([
-      'Poll errors',
+      tr('health.pollErrors'),
       health?.pollErrors === null || health?.pollErrors === undefined
         ? '—'
         : String(health.pollErrors),
@@ -1042,29 +1084,29 @@ function facts(next: AppState): HTMLElement[] {
     ]);
     const probe = health?.probe ?? null;
     rows.push([
-      'Tunnel → this app',
-      probe ?? 'checking…',
+      tr('health.tunnelToApp'),
+      probe ?? tr('health.checking'),
       probe !== null && probe !== 'ok' && probe !== 'success' && probe !== 'healthy'
     ]);
-    rows.push(['Tunnel uptime', duration(health?.uptimeSeconds ?? null)]);
+    rows.push([tr('health.uptime'), duration(health?.uptimeSeconds ?? null)]);
     // Requests but no tool call is what an account with Developer mode switched off
     // looks like from here, and it is invisible in every other number on this card.
     if (status.lastRequestAt !== null) {
       rows.push([
-        'ChatGPT ran a tool',
-        status.lastToolCallAt === null ? 'never — check Developer mode' : ago(status.lastToolCallAt),
+        tr('health.chatgptRanTool'),
+        status.lastToolCallAt === null ? tr('health.neverDeveloperMode') : displayAgo(status.lastToolCallAt),
         status.lastToolCallAt === null
       ]);
     }
-    if (health?.clientVersion) rows.push(['Tunnel client', health.clientVersion]);
-    if (status.localUrl) rows.push(['Local server', status.localUrl.replace(/^https?:\/\//, '')]);
+    if (health?.clientVersion) rows.push([tr('health.tunnelClient'), health.clientVersion]);
+    if (status.localUrl) rows.push([tr('health.localServer'), status.localUrl.replace(/^https?:\/\//, '')]);
   } else {
-    rows.push(['Route to OpenAI', 'not running']);
+    rows.push([tr('health.route'), tr('health.notRunning')]);
   }
 
   rows.push([
-    'Tools ChatGPT can see',
-    `${toolsOn(next)} available · ${config.roots.length} folder${config.roots.length === 1 ? '' : 's'}`
+    tr('health.toolsVisible'),
+    tr('health.availableFolders', { tools: toolsOn(next), folders: config.roots.length })
   ]);
 
   return rows.map(([label, value, bad]) => {
@@ -1088,17 +1130,17 @@ function paintClock(): void {
   const connected = status.state === 'connected';
 
   const handshake = $('bigHandshake');
-  handshake.textContent = shortAgo(status.handshakeAt);
+  handshake.textContent = displayAgo(status.handshakeAt, true);
   handshake.className = connected ? '' : status.state === 'offline' ? 'is-bad' : 'is-cold';
 
   const request = $('bigRequest');
-  request.textContent = shortAgo(status.lastRequestAt);
+  request.textContent = displayAgo(status.lastRequestAt, true);
   request.className = status.lastRequestAt === null ? 'is-cold' : '';
 
   $('liveNote').textContent = running
     ? status.handshakeAt === null
-      ? 'no handshake yet'
-      : `verified ${ago(status.handshakeAt)}`
+      ? tr('home.noHandshake')
+      : tr('home.verifiedAgo', { ago: displayAgo(status.handshakeAt) })
     : '';
 }
 
@@ -1130,7 +1172,7 @@ function paintProblems(): void {
   for (const id of ['homeProblems', 'logProblems']) {
     const badge = $(id);
     badge.hidden = problems === 0;
-    badge.textContent = `${problems} problem${problems === 1 ? '' : 's'}`;
+    badge.textContent = problems === 1 ? tr('home.problemOne') : tr('home.problemCount', { count: problems });
   }
 }
 
@@ -1251,7 +1293,7 @@ function paintAgentFilter(swarm: SwarmState): void {
     return;
   }
   // Prime first, then workers in creation order — the order the broker reports them.
-  const choices: Array<{ id: string | null; label: string }> = [{ id: null, label: 'All' }];
+  const choices: Array<{ id: string | null; label: string }> = [{ id: null, label: tr('activity.all') }];
   for (const agent of swarm.agents) choices.push({ id: agent.id, label: agent.label || agent.id });
   if (agentFilter !== null && !swarm.agents.some((agent) => agent.id === agentFilter)) {
     agentFilter = null;
@@ -1292,7 +1334,7 @@ async function toggleConnection(): Promise<void> {
 async function runChecks(): Promise<void> {
   const button = $<HTMLButtonElement>('runChecks');
   button.disabled = true;
-  $('runChecksLabel').textContent = 'Checking…';
+  $('runChecksLabel').textContent = tr('home.checking');
   try {
     const result = await run(api.runDiagnostics());
     if (!result) return;
@@ -1322,7 +1364,7 @@ async function runChecks(): Promise<void> {
     $('checksBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } finally {
     button.disabled = false;
-    $('runChecksLabel').textContent = 'Run checks';
+    $('runChecksLabel').textContent = tr('home.runChecks');
   }
 }
 
@@ -1335,6 +1377,8 @@ $('localeSelect').addEventListener('change', () => {
   if (!state) return;
   const locale: Locale = $<HTMLSelectElement>('localeSelect').value === 'th' ? 'th' : 'en';
   applyStaticTranslations(document, locale);
+  populateBrowserFamilies(detectedBrowserFamilies);
+  if (latestUpdateState) paintUpdate(latestUpdateState);
   void save({ locale });
 });
 
@@ -1389,13 +1433,52 @@ $('pickBinary').addEventListener('click', async () => {
   if (next) apply(next);
 });
 
+function paintLaunchAtLogin(next: LaunchAtLoginState): void {
+  const input = $<HTMLInputElement>('launchAtLogin');
+  input.checked = next.enabled;
+  input.disabled = !next.supported;
+  $('launchAtLoginSetting').toggleAttribute('hidden', !next.supported);
+}
+
+function populateBrowserFamilies(families: BrowserFamily[]): void {
+  detectedBrowserFamilies = [...families];
+  const select = $<HTMLSelectElement>('browserPreference');
+  const selected = state?.config.browser?.preference ?? 'prime';
+  const labels: Record<BrowserFamily, string> = { brave: 'Brave', chrome: 'Google Chrome', edge: 'Microsoft Edge', chromium: 'Chromium' };
+  const options: HTMLOptionElement[] = [];
+  const prime = document.createElement('option');
+  prime.value = 'prime';
+  prime.textContent = tr('setup.browserPrime');
+  options.push(prime);
+  for (const family of families) {
+    const option = document.createElement('option');
+    option.value = family;
+    option.textContent = labels[family];
+    options.push(option);
+  }
+  if (selected !== 'prime' && !families.includes(selected as BrowserFamily)) {
+    const missing = document.createElement('option');
+    missing.value = selected;
+    missing.textContent = tr('setup.browserMissing', { browser: labels[selected as BrowserFamily] ?? selected });
+    missing.disabled = true;
+    options.push(missing);
+  }
+  select.replaceChildren(...options);
+  select.value = selected;
+}
+
+$('launchAtLogin').addEventListener('change', async () => {
+  const next = await run(api.setLaunchAtLogin($<HTMLInputElement>('launchAtLogin').checked));
+  if (next) paintLaunchAtLogin(next);
+});
+
 
 for (const id of ['copyLog', 'copyLogText']) {
   $(id).addEventListener('click', async () => {
     const text = await run(api.getLogText());
     if (text === null) return;
     const copied = await run(api.writeClipboard(text));
-    if (copied) toast('Activity copied');
+    if (copied) toast(tr('home.activityCopied'));
   });
 }
 
@@ -1403,7 +1486,7 @@ $('copyLogJson').addEventListener('click', async () => {
   const text = await run(api.getLogJson());
   if (text === null) return;
   const copied = await run(api.writeClipboard(text));
-  if (copied) toast('Activity JSON copied');
+  if (copied) toast(tr('home.activityJsonCopied'));
 });
 
 // The API key is written on blur so it is not saved keystroke by keystroke.
@@ -1417,7 +1500,7 @@ $('apiKey').addEventListener('blur', async () => {
     // blur. On failure keep the submitted value too, so the user can retry instead of losing it.
     if (input.value === submitted) input.value = '';
     apply(next);
-    toast('API key stored');
+    toast(tr('home.apiKeyStoredToast'));
   }
 });
 
@@ -1425,11 +1508,12 @@ $('removeApiKey').addEventListener('click', async () => {
   const next = await run(api.setApiKey(''));
   if (next) {
     apply(next);
-    toast('API key removed');
+    toast(tr('home.apiKeyRemovedToast'));
   }
 });
 
 for (const id of [
+  'browserPreference',
   'autoConnect',
   'minimizeToTray',
   'privacyScreenshots',
@@ -1462,6 +1546,10 @@ initChat({ save: () => save(), state: () => state });
 
 void (async () => {
   await refresh();
+  const startup = await run(api.getLaunchAtLogin());
+  if (startup) paintLaunchAtLogin(startup);
+  const browserFamilies = await run(api.getBrowserFamilies());
+  if (browserFamilies) populateBrowserFamilies(browserFamilies);
   const update = await run(api.getUpdateState());
   if (update) paintUpdate(update);
   // A first run has nothing set up, so open on the wizard rather than an empty Home.

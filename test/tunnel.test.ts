@@ -302,6 +302,13 @@ describe('self-test route check', () => {
     expect(check.detail).toBe('Verified — last completed handshake 19s ago; 5 poll errors since start.');
   });
 
+  it('renders the same route diagnostic in Thai when requested', () => {
+    const check = describeRoute(health(T - 19_000, 2), 900, T, 'th');
+    expect(check.name).toBe('เส้นทางไป OpenAI');
+    expect(check.detail).toContain('ยืนยันแล้ว');
+    expect(check.detail).toContain('19 วินาทีที่แล้ว');
+  });
+
   it('reports unknown, not broken, when the tunnel serves no metrics', () => {
     expect(describeRoute(null, null, T).ok).toBeNull();
   });

@@ -58,6 +58,7 @@ import {
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
 import { migrateLegacyUserData } from './migration.js';
+import { t, type MessageKey } from '../shared/i18n/index.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -186,25 +187,27 @@ function trayIcon(running: boolean): Electron.NativeImage {
 function refreshTray(): void {
   if (!tray) return;
   const state = getStatus().state;
+  const locale = getConfig().ui.locale === 'th' ? 'th' : 'en';
+  const tr = (key: MessageKey): string => t(locale, key);
   const connected = state === 'connected';
   const offline = state === 'offline';
   // Offline keeps the running icon: the bridge is up, the internet is not.
   const running = connected || offline;
-  const label = connected ? 'Connected' : offline ? 'No internet' : 'Not connected';
+  const label = connected ? tr('status.connected') : offline ? tr('status.offline') : tr('status.notConnected');
   tray.setImage(trayIcon(running));
-  tray.setToolTip(`ComGu — ${label.toLowerCase()}`);
+  tray.setToolTip(`ComGu — ${label}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label, enabled: false },
       { type: 'separator' },
-      { label: 'Open', click: windowActivation.request },
+      { label: tr('tray.open'), click: windowActivation.request },
       {
-        label: running ? 'Disconnect' : 'Connect',
+        label: running ? tr('common.disconnect') : tr('common.connect'),
         click: () => void (running ? disconnect() : connect())
       },
       { type: 'separator' },
       {
-        label: 'Quit',
+        label: tr('tray.quit'),
         click: () => {
           quitting = true;
           app.quit();

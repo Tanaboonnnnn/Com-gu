@@ -52,6 +52,8 @@ describe('extension release metadata', () => {
     expect(i18n.t('th', 'popup.connectedPort', { port: 8765 })).toBe('เชื่อมต่อแล้ว · Port 8765');
     expect(i18n.t('th', 'test.missing', { value: 'x' })).toBe('test.missing');
     expect(i18n.t('th', 'composer.goalPlaceholder')).toContain('แชตนี้');
+    expect(i18n.t('th', 'popup.noRecorder')).toContain('โหลดหน้าใหม่');
+    expect(i18n.t('th', 'popup.recordingIntoApp')).toBe('กำลังบันทึกลงในแอป');
     expect(i18n.source).toBeUndefined();
   });
 
@@ -67,6 +69,10 @@ describe('extension release metadata', () => {
     expect(html).toContain('data-i18n="common.copy"');
     expect(popup).toContain("globalThis.CLF_I18N.t(locale, key, values)");
     expect(popup).toContain("type: 'locale_get'");
+    expect(popup).toContain("tr('common.copied')");
+    expect(popup).toContain("tr('common.copyFailed')");
+    expect(popup).not.toContain("button.textContent = 'copied'");
+    expect(popup).not.toContain("button.textContent = 'copy failed'");
     expect(popup).not.toMatch(/createTreeWalker|NodeFilter\.SHOW_TEXT|\.source\s*\(/);
   });
 

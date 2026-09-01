@@ -22,7 +22,7 @@ import type {
   SwarmState,
   TokenPressure
 } from '../shared/session.js';
-import { ATTRIBUTION_LABELS, TURN_OUTCOME_LABELS, foldProgress } from '../shared/session.js';
+import { ATTRIBUTION_LABELS, foldProgress } from '../shared/session.js';
 import { chronological } from '../shared/chronology.js';
 import {
   DEFAULT_GOAL_OBJECTIVE_SYSTEM_PROMPT,
@@ -31,7 +31,7 @@ import {
 } from '../shared/goal.js';
 import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
-import { $, ago, clockTime, compactNumber, el, icon, run, toast } from './dom.js';
+import { $, clockTime, compactNumber, el, icon, run, toast } from './dom.js';
 
 const api = window.api;
 
@@ -93,6 +93,20 @@ function tr(key: MessageKey, values?: Record<string, string | number>): string {
   return t(locale, key, values);
 }
 
+function displayAgo(atMs: number | null): string {
+  if (atMs === null) return tr('common.never');
+  const seconds = Math.max(0, Math.round((Date.now() - atMs) / 1000));
+  if (seconds < 3) return tr('common.justNow');
+  if (seconds < 90) return tr('common.secondsAgo', { count: seconds });
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return tr('common.minutesAgo', { count: minutes });
+  return tr('common.hoursAgo', { count: Math.round(minutes / 60) });
+}
+
+function outcomeLabel(outcome: SessionSummary['lastTurnOutcome'] extends infer O ? Exclude<O, null> : never): string {
+  return tr(`turn.${outcome}` as MessageKey);
+}
+
 let sessions: SessionSummary[] = [];
 let pressure = new Map<string, TokenPressure>();
 let sessionTotal = 0;
@@ -134,20 +148,22 @@ interface Badge {
 }
 
 /** Live word per worker state, in the user's vocabulary rather than the protocol's. */
-const AGENT_BADGE: Record<AgentState, Badge> = {
-  invited: { text: 'opening', tone: 'is-active' },
-  active: { text: 'joined', tone: 'is-active' },
-  // Still working, as far as this app knows — only its browser tab is gone. Said as
-  // "no tab" rather than "detached" because that is the part a user can act on.
-  detached: { text: 'no tab', tone: 'is-active' },
-  // Between jobs, not over. Its chat is intact and the prime can put it back to work in it,
-  // so the word has to read as a pause rather than as an ending — a user who reads "finished"
-  // here closes the tab, which is the one thing that costs nothing and helps nothing.
-  sleeping: { text: 'sleeping', tone: '' },
-  waking: { text: 'waking', tone: 'is-active' },
-  finished: { text: 'finished', tone: 'is-finished' },
-  failed: { text: 'failed', tone: 'is-failed' }
-};
+function agentBadge(state: AgentState): Badge {
+  const labels: Record<AgentState, MessageKey> = {
+    invited: 'agents.stateOpening',
+    active: 'agents.stateJoined',
+    detached: 'agents.stateNoTab',
+    sleeping: 'agents.stateSleeping',
+    waking: 'agents.stateWaking',
+    finished: 'agents.stateFinished',
+    failed: 'agents.stateFailed'
+  };
+  return {
+    text: tr(labels[state]),
+    tone:
+      state === 'finished' ? 'is-finished' : state === 'failed' ? 'is-failed' : ['invited', 'active', 'detached', 'waking'].includes(state) ? 'is-active' : ''
+  };
+}
 
 /**
  * What a row is, and what it is doing right now.
@@ -164,9 +180,9 @@ function sessionBadges(summary: SessionSummary): Badge[] {
   const origin = summary.origin;
   // The one session that is not a chat. Saying so on the row is what stops it reading
   // as a chat that mysteriously lost its name.
-  if (summary.conversationId === null) return [{ text: 'not a chat', tone: '' }];
+  if (summary.conversationId === null) return [{ text: tr('sessions.notChat'), tone: '' }];
   if (origin?.kind === 'worker') badges.push({ text: origin.agentId ?? 'worker', tone: '' });
-  else if (origin?.kind === 'resume') badges.push({ text: 'resumed', tone: '' });
+  else if (origin?.kind === 'resume') badges.push({ text: tr('sessions.resumed'), tone: '' });
   else if (summary.agents.includes('prime')) badges.push({ text: 'prime', tone: '' });
 
   // Agent ids are reused across runs (`worker-1`, `worker-2`, ...). Matching only by that
@@ -180,7 +196,7 @@ function sessionBadges(summary: SessionSummary): Badge[] {
       )
     : undefined;
   if (agent) {
-    badges.push(AGENT_BADGE[agent.state]);
+    badges.push(agentBadge(agent.state));
     return badges;
   }
 
@@ -196,7 +212,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   const top = el('div', 'sess-top');
   const title = el('b', '', summary.title || tr('sessions.untitled'));
   title.title = summary.title;
-  const when = el('em', '', ago(summary.updatedAt));
+  const when = el('em', '', displayAgo(summary.updatedAt));
   top.append(title, when);
 
   const bits: string[] = [
@@ -217,7 +233,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   const share = level && level.limit > 0 ? Math.min(100, (level.estimated / level.limit) * 100) : 0;
   fill.style.width = `${share.toFixed(1)}%`;
   bar.append(fill);
-  bar.title = `~${compactNumber(summary.estimatedTokens)} rough context tokens from messages and tool I/O; transient progress is excluded`;
+  bar.title = tr('sessions.contextEstimate', { tokens: compactNumber(summary.estimatedTokens) });
 
   const remove = document.createElement('button');
   remove.className = 'btn sess-del';
@@ -332,12 +348,14 @@ function paintSessions(): void {
   $('sessionsEmpty').hidden = sessions.length > 0;
 
   const recording = deps.state()?.config.sessions.record === true;
-  const retained = `${sessionTotal} retained session${sessionTotal === 1 ? '' : 's'}`;
-  const shown = sessions.length < sessionTotal ? `${sessions.length} of ${retained} shown` : retained;
-  const more = sessionPageCursor && sessions.length < sessionTotal ? ' · scroll for older history' : '';
+  const retained = tr('sessions.retained', { count: sessionTotal });
+  const shown = sessions.length < sessionTotal
+    ? tr('sessions.retainedShown', { shown: sessions.length, total: sessionTotal })
+    : retained;
+  const more = sessionPageCursor && sessions.length < sessionTotal ? ` · ${tr('sessions.scrollOlder')}` : '';
   $('sessionsFoot').textContent = recording
-    ? `${shown}${more}${activeId ? ' · one live now' : ''}`
-    : `Recording is off · ${shown}${more}`;
+    ? `${shown}${more}${activeId ? ` · ${tr('sessions.oneLive')}` : ''}`
+    : `${tr('sessions.recordingOff')} · ${shown}${more}`;
 }
 
 function canonicalMessageKey(event: SessionEvent): string | null {
@@ -436,7 +454,7 @@ async function loadHandoff(): Promise<void> {
 function textBlock(className: string, value: string, truncated: boolean, chars: number): HTMLElement {
   const node = el('p', className, value);
   if (truncated) {
-    node.append(el('span', 'cut', ` … cut, ${compactNumber(chars)} characters in the original`));
+    node.append(el('span', 'cut', ` ${tr('chat.truncated', { chars: compactNumber(chars) })}`));
   }
   return node;
 }
@@ -586,7 +604,7 @@ function toolBody(event: Extract<SessionEvent, { kind: 'tool_call' }>): HTMLElem
 function eventBody(event: SessionEvent): HTMLElement {
   switch (event.kind) {
     case 'session_start':
-      return el('p', 'meta', `Session started — ${event.title}`);
+      return el('p', 'meta', tr('chat.sessionStarted', { title: event.title }));
     case 'user_message': {
       const box = el('div', 'said is-user');
       box.append(el('b', '', tr('chat.you')));
@@ -595,7 +613,7 @@ function eventBody(event: SessionEvent): HTMLElement {
     }
     case 'assistant_message': {
       const box = el('div', 'said');
-      box.append(el('b', '', event.final ? 'ChatGPT' : 'ChatGPT (partial)'));
+      box.append(el('b', '', event.final ? 'ChatGPT' : tr('chat.partial')));
       box.append(renderedMessage(event.renderedHtml?.text ?? '', event.message.text));
       return box;
     }
@@ -612,7 +630,7 @@ function eventBody(event: SessionEvent): HTMLElement {
       const line = el(
         'p',
         event.outcome === 'completed' ? 'meta' : 'meta is-warn',
-        `Turn ${TURN_OUTCOME_LABELS[event.outcome]}${event.detail ? ` — ${event.detail}` : ''}`
+        `${tr('chat.turnOutcome', { outcome: outcomeLabel(event.outcome) })}${event.detail ? ` — ${event.detail}` : ''}`
       );
       return line;
     }
@@ -635,8 +653,8 @@ function eventBody(event: SessionEvent): HTMLElement {
       // once in the other agent's session, so without this a pair reads as two messages.
       box.title =
         event.delivery === 'sent'
-          ? `Sent by ${event.from}; recorded when the app accepted it`
-          : `Received by ${event.to}; recorded when it acknowledged delivery`;
+          ? tr('chat.agentSentTitle', { from: event.from })
+          : tr('chat.agentReceivedTitle', { to: event.to });
       box.append(el('b', '', `${event.from} → ${event.to}`));
       box.append(textBlock('msg', event.message.text, event.message.truncated, event.message.chars));
       return box;
@@ -645,7 +663,7 @@ function eventBody(event: SessionEvent): HTMLElement {
       return el(
         'p',
         'meta is-good',
-        `Handoff saved — ${compactNumber(event.chars)} characters (${event.reason})`
+        tr('chat.handoffSaved', { chars: compactNumber(event.chars), reason: event.reason })
       );
     default:
       return el('p', 'meta', tr('chat.unknownEvent'));
@@ -700,7 +718,7 @@ function paintAgentFilter(): void {
     if (agentFilter === value) button.classList.add('is-sel');
     return button;
   };
-  buttons.push(chip(null, 'All'));
+  buttons.push(chip(null, tr('chat.all')));
   for (const agent of named) buttons.push(chip(agent, agent));
   if (anyUnattributed) buttons.push(chip(UNATTRIBUTED, tr('chat.unattributed')));
   box.replaceChildren(...buttons);
@@ -774,7 +792,7 @@ function paintDetail(): void {
       el(
         'p',
         'timeline-window-note',
-        `${windowed.omitted} earlier row${windowed.omitted === 1 ? '' : 's'} kept on disk — showing the newest bounded window`
+        tr('chat.timelineWindow', { count: windowed.omitted })
       )
     );
   }
@@ -785,23 +803,26 @@ function paintDetail(): void {
 
   const facts: string[] = [];
   if (summary) {
-    facts.push(`${totalEvents} event${totalEvents === 1 ? '' : 's'}`);
-    if (events.length < totalEvents) facts.push(`showing the last ${events.length}`);
+    facts.push(totalEvents === 1 ? tr('chat.eventOne') : tr('chat.eventCount', { count: totalEvents }));
+    if (events.length < totalEvents) facts.push(tr('chat.showingLast', { count: events.length }));
     if (agentFilter !== null) {
-      facts.push(`filtered to ${agentFilter === UNATTRIBUTED ? 'unattributed' : agentFilter} — ${filtered.length} matched`);
+      facts.push(tr('chat.filtered', {
+        agent: agentFilter === UNATTRIBUTED ? tr('chat.unattributed') : agentFilter,
+        count: filtered.length
+      }));
     }
-    if (windowed.omitted > 0) facts.push(`${shown.length} newest rendered`);
-    facts.push(`~${compactNumber(summary.estimatedTokens)} rough context tokens`);
+    if (windowed.omitted > 0) facts.push(tr('chat.newestRendered', { count: shown.length }));
+    facts.push(tr('chat.contextTokens', { tokens: compactNumber(summary.estimatedTokens) }));
     const level = pressureOf(summary.id);
     if (level && level.level !== 'ok') {
       facts.push(
         level.level === 'huge'
-          ? 'past the compaction threshold — compact before continuing'
-          : 'large — compaction is worth doing soon'
+          ? tr('chat.compactionPast')
+          : tr('chat.compactionSoon')
       );
     }
     if (summary.lastTurnOutcome && summary.lastTurnOutcome !== 'completed') {
-      facts.push(`last turn ${TURN_OUTCOME_LABELS[summary.lastTurnOutcome]}`);
+      facts.push(tr('chat.lastTurn', { outcome: outcomeLabel(summary.lastTurnOutcome) }));
     }
   }
   $('chatFoot').textContent = facts.join(' · ');
@@ -822,7 +843,12 @@ function paintHandoff(): void {
   if (handoff) {
     const parts: HTMLElement[] = [];
     const head = el('p', 'hint');
-    head.textContent = `${compactNumber(handoff.text.length)} characters · from ${handoff.sourceEvents} events (~${compactNumber(handoff.sourceTokens)} tokens) · ${ago(handoff.createdAt)}`;
+    head.textContent = tr('chat.handoffSummary', {
+      chars: compactNumber(handoff.text.length),
+      events: handoff.sourceEvents,
+      tokens: compactNumber(handoff.sourceTokens),
+      ago: displayAgo(handoff.createdAt)
+    });
     parts.push(head);
     for (const note of handoff.notes) parts.push(el('p', 'hint is-warn', note));
     parts.push(el('pre', 'pre', handoff.text));
@@ -877,7 +903,7 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad' } {
   const selected = sessions.find((entry) => entry.id === selectedId) ?? null;
   if (selected && selected.conversationId === null) {
     return {
-      text: 'Work this app could not place in a chat — driven from another device, or with no ChatGPT tab open',
+      text: tr('chat.unplacedWork'),
       tone: ''
     };
   }
@@ -886,21 +912,21 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad' } {
   if (workers.length === 0) return { text: '', tone: '' };
   const count = (state: AgentState): number => workers.filter((agent) => agent.state === state).length;
   const parts: string[] = [];
-  if (count('active') > 0) parts.push(`${count('active')} working`);
+  if (count('active') > 0) parts.push(tr('agents.workerWorking', { count: count('active') }));
   // "invited" is a worker whose ChatGPT tab has been asked for but has not joined yet.
-  if (count('invited') > 0) parts.push(`${count('invited')} opening`);
+  if (count('invited') > 0) parts.push(tr('agents.workerOpening', { count: count('invited') }));
   // Detached is a live worker with no tab: its turn is running on OpenAI's servers and its
   // tool calls still arrive here, so it is counted among the working rather than the lost.
-  if (count('detached') > 0) parts.push(`${count('detached')} working with no tab`);
-  if (count('waking') > 0) parts.push(`${count('waking')} waking up`);
+  if (count('detached') > 0) parts.push(tr('agents.workerNoTab', { count: count('detached') }));
+  if (count('waking') > 0) parts.push(tr('agents.workerWaking', { count: count('waking') }));
   // Said as "waiting" rather than counted with the finished ones: these are the run's reusable
   // chats, and the number the user wants is how much of the run is still available to it.
-  if (count('sleeping') > 0) parts.push(`${count('sleeping')} sleeping`);
-  if (count('finished') > 0) parts.push(`${count('finished')} finished`);
-  if (count('failed') > 0) parts.push(`${count('failed')} failed`);
+  if (count('sleeping') > 0) parts.push(tr('agents.workerSleeping', { count: count('sleeping') }));
+  if (count('finished') > 0) parts.push(tr('agents.workerFinished', { count: count('finished') }));
+  if (count('failed') > 0) parts.push(tr('agents.workerFailed', { count: count('failed') }));
   const live = count('invited') + count('active') + count('detached') + count('waking');
   return {
-    text: `${workers.length === 1 ? '1 worker' : `${workers.length} workers`} · ${parts.join(' · ')}`,
+    text: `${workers.length === 1 ? tr('agents.workerOne') : tr('agents.workerMany', { count: workers.length })} · ${parts.join(' · ')}`,
     tone: count('failed') > 0 ? 'is-bad' : live > 0 ? 'is-live' : ''
   };
 }
@@ -921,11 +947,10 @@ async function showExtensionPath(): Promise<void> {
   const dir = await run(api.extensionPath());
   const node = $('extensionPath');
   if (dir) {
-    node.textContent = `Extension folder: ${dir}`;
+    node.textContent = tr('chat.extensionFolder', { path: dir });
     node.classList.remove('is-warn');
   } else {
-    node.textContent =
-      'The extension folder is missing from this installation. Reinstall the app, or use the extension/ folder from a source checkout.';
+    node.textContent = tr('chat.extensionMissing');
     node.classList.add('is-warn');
     $<HTMLButtonElement>('bridgeFolder').disabled = true;
   }
@@ -941,7 +966,7 @@ function paintSwarm(state: SwarmState): void {
         'p',
         'hint',
         state.retainedHistory
-          ? 'No workers are running. Reusable worker histories are parked and remain available to their prime chats; Clear swarm permanently removes them.'
+          ? tr('agents.noneRetained')
           : tr('agents.none')
       )
     );
@@ -952,7 +977,7 @@ function paintSwarm(state: SwarmState): void {
         const top = el('div', 'model-top');
         top.append(el('b', '', agent.label || agent.id));
         top.append(el('span', 'chip', agent.role));
-        top.append(el('span', `chip is-${agent.state}`, agent.state));
+        top.append(el('span', `chip is-${agent.state}`, agentBadge(agent.state).text));
         // Clearing is offered where the agent is, not only as one global reset at the
         // bottom of a settings form. The two rows mean different things and the tooltip
         // says which: the prime is the run, a worker is one slot.
@@ -963,13 +988,13 @@ function paintSwarm(state: SwarmState): void {
           clear.dataset.clear = agent.id;
           clear.title =
             agent.role === 'prime'
-              ? 'Clear session — ends this run and every worker in it'
-              : `Clear session — ends ${agent.id} and frees its slot`;
+              ? tr('agents.clearRun')
+              : tr('agents.clearWorker', { id: agent.id });
           top.append(clear);
         }
         const sub = el('div', 'model-sub');
-        const bits = [`${agent.pending} pending`, `${agent.delivered} delivered`];
-        if (agent.conversationId) bits.push('chat bound');
+        const bits = [tr('agents.pending', { count: agent.pending }), tr('agents.delivered', { count: agent.delivered })];
+        if (agent.conversationId) bits.push(tr('agents.chatBound'));
         sub.textContent = bits.join(' · ');
         row.append(top, sub);
         if (agent.task) row.append(el('p', 'hint', agent.task));
@@ -1064,7 +1089,7 @@ let goalLoading = false;
 
 /** The release date OpenRouter publishes, as a person would date a model. */
 function releasedOn(created: number): string {
-  if (!created) return 'release date not published';
+  if (!created) return tr('goal.releaseDateUnknown');
   return new Date(created * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
@@ -1119,7 +1144,7 @@ function paintGoalModels(): void {
   }
   const shown = goalModels.length;
   $('goalModelsState').textContent =
-    shown === 0 ? 'No models came back.' : `Showing the ${shown} newest of ${goalTotal}, newest release first.`;
+    shown === 0 ? tr('goal.noModels') : tr('goal.modelsShown', { shown, total: goalTotal });
   $<HTMLButtonElement>('goalMore').disabled = shown >= goalTotal;
   $<HTMLButtonElement>('goalMore').hidden = shown >= goalTotal;
   list.scrollTop = keep;
@@ -1182,22 +1207,22 @@ function applyGoal(state: AppState, previous?: Config): void {
   // shows under the same switch — two places saying the same thing differently is how a
   // missing key turns into a support question.
   $('goalHint').textContent = !config.sessions.record
-    ? 'Turn on session recording first — Goal needs the recorded conversation to decide what is still missing.'
+    ? tr('goal.recordFirst')
     : !state.hasGoalKey
-      ? 'OpenRouter API key essential for goal feature.'
+      ? tr('goal.keyRequired')
       : config.goal.enabled
-        ? 'A second model reads each finished answer and writes your next message, until it decides the goal is met.'
-        : 'Off — nothing is sent to OpenRouter and nothing is typed into your chats.';
+        ? tr('goal.enabledDetail')
+        : tr('goal.disabledDetail');
   $('goalHint').classList.toggle('is-warn', !config.sessions.record || !state.hasGoalKey);
   $('goalModelName').textContent = config.goal.model;
   const goalKey = $<HTMLInputElement>('goalKey');
-  goalKey.placeholder = state.hasGoalKey ? '•••••••• stored' : 'sk-or-v1-…';
+  goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-…';
   goalKey.disabled = !secureStorageAvailable;
   $('goalKeyState').textContent = !secureStorageAvailable
-    ? (state.secureStorage?.detail ?? 'Secure credential storage is unavailable.')
+    ? (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : state.hasGoalKey
-      ? 'A key is stored with secure OS credential storage. Type a new one to replace it.'
-      : 'Stored with secure OS credential storage. It never leaves this app, and the browser is only ever handed the reply.';
+      ? tr('goal.keyStored')
+      : tr('goal.keySafe');
   $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable);
   $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable;
   if (goalModels.length > 0) paintGoalModels();
@@ -1208,7 +1233,7 @@ function wireGoal(save: () => Promise<void>): void {
   $('goalPromptEdit').addEventListener('click', () => {
     const panel = $('goalPromptPanel');
     panel.hidden = !panel.hidden;
-    $('goalPromptEdit').textContent = panel.hidden ? 'Edit prompt' : 'Close prompt';
+    $('goalPromptEdit').textContent = panel.hidden ? tr('goal.editPrompt') : tr('goal.closePrompt');
     if (!panel.hidden) $<HTMLTextAreaElement>('goalPrompt').focus();
   });
   $('goalPromptReset').addEventListener('click', async () => {
@@ -1220,7 +1245,7 @@ function wireGoal(save: () => Promise<void>): void {
   $('goalObjectivePromptEdit').addEventListener('click', () => {
     const panel = $('goalObjectivePromptPanel');
     panel.hidden = !panel.hidden;
-    $('goalObjectivePromptEdit').textContent = panel.hidden ? 'Edit prompt' : 'Close prompt';
+    $('goalObjectivePromptEdit').textContent = panel.hidden ? tr('goal.editPrompt') : tr('goal.closePrompt');
     if (!panel.hidden) $<HTMLTextAreaElement>('goalObjectivePrompt').focus();
   });
   $('goalObjectivePromptReset').addEventListener('click', async () => {
@@ -1233,7 +1258,7 @@ function wireGoal(save: () => Promise<void>): void {
   $('goalPick').addEventListener('click', () => {
     const panel = $('goalModels');
     panel.hidden = !panel.hidden;
-    $('goalPick').textContent = panel.hidden ? 'Select model' : 'Close';
+    $('goalPick').textContent = panel.hidden ? tr('goal.selectModel') : tr('common.close');
     if (!panel.hidden && goalModels.length === 0) void loadGoalModels(true);
   });
   $('goalMore').addEventListener('click', () => void loadGoalModels(false));
@@ -1245,7 +1270,7 @@ function wireGoal(save: () => Promise<void>): void {
     $('goalModelName').textContent = goalModel;
     paintGoalModels();
     void save();
-    toast(`Goal model set to ${goalModel}`);
+    toast(tr('goal.modelSet', { model: goalModel }));
   });
   // On blur, like every other key in this app: not saved keystroke by keystroke, and the
   // field is emptied the moment it has been handed over.
@@ -1280,8 +1305,8 @@ function wireGoal(save: () => Promise<void>): void {
  */
 function applyAutoCompactHint(config: Config): void {
   $('autoCompactHint').textContent = config.compaction.auto
-    ? 'Interrupts the answer at this many tokens, writes a handoff, opens a fresh chat. Once per chat.'
-    : 'Off — only the Compact & resume button in the ChatGPT tab compacts.';
+    ? tr('compaction.autoOnDetail')
+    : tr('compaction.autoOffDetail');
 }
 
 /**
@@ -1329,18 +1354,18 @@ export function chatApply(state: AppState, previous?: Config): void {
   $<HTMLButtonElement>('bridgeUnpair').disabled = !bridge.paired;
   const secureStorageAvailable = state.secureStorage?.available ?? true;
   $('bridgeState').textContent = !browserRequired
-    ? 'Browser-backed features are off. The extension is not needed right now.'
+    ? tr('chat.bridgeNotNeeded')
     : !secureStorageAvailable
-      ? (state.secureStorage?.detail ?? 'Secure credential storage is unavailable, so the extension cannot pair safely.')
+      ? (state.secureStorage?.detail ?? tr('chat.bridgeSecureStorage'))
     : !bridge.running
-      ? 'The local bridge is off even though recording or multi-agent mode needs it.'
+      ? tr('chat.bridgeOff')
       : bridge.present
-        ? `Connected. Listening on 127.0.0.1:${bridge.port ?? '?'} · last message ${ago(bridge.lastSeenAt)}.`
+        ? tr('chat.bridgeConnected', { port: bridge.port ?? '?', ago: displayAgo(bridge.lastSeenAt) })
         : bridge.paired
-          ? `Authorized, but the browser extension is not currently connected. ${
-              bridge.lastSeenAt === null ? 'It has not checked in since this app started.' : `Last seen ${ago(bridge.lastSeenAt)}.`
-            }`
-          : `Listening on 127.0.0.1:${bridge.port ?? '?'} · no browser is authorized or connected yet.`;
+          ? bridge.lastSeenAt === null
+            ? tr('chat.bridgeAuthorizedNever')
+            : tr('chat.bridgeAuthorizedSeen', { ago: displayAgo(bridge.lastSeenAt) })
+          : tr('chat.bridgeListening', { port: bridge.port ?? '?' });
   $('bridgeState').classList.toggle('is-warn', browserRequired && (!bridge.present || !secureStorageAvailable));
   void showExtensionPath();
 

@@ -7,7 +7,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppState, Capabilities, Config, Diagnosis, LaunchAtLoginState, LogEntry } from '../shared/types.js';
+import type { AppState, BrowserFamily, Capabilities, Config, Diagnosis, LaunchAtLoginState, LogEntry } from '../shared/types.js';
 import type {
   Handoff,
   SessionEvent,
@@ -25,6 +25,7 @@ const call = <T>(channel: string, payload?: unknown): Promise<Reply<T>> =>
 export interface SettingsPatch {
   capabilities: Capabilities;
   readOnly: boolean;
+  browser: Config['browser'];
   tunnel: Config['tunnel'];
   ui: Config['ui'];
   sessions: Config['sessions'];
@@ -72,6 +73,7 @@ const api = {
   getState: () => call<AppState>('state:get'),
   getLaunchAtLogin: () => call<LaunchAtLoginState>('startup:get'),
   setLaunchAtLogin: (enabled: boolean) => call<LaunchAtLoginState>('startup:set', { enabled }),
+  getBrowserFamilies: () => call<BrowserFamily[]>('browser:list'),
   getUpdateState: () => call<UpdateUiState>('update:get'),
   checkForUpdate: () => call<UpdateUiState>('update:check'),
   installUpdate: () => call<UpdateUiState>('update:install'),

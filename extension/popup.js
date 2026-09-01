@@ -69,13 +69,18 @@ function stage(name, state, meta) {
 
 /** How the app describes what it placed a call on, in its own words. */
 const ATTRIBUTION = {
-  request_id: 'exact request id',
-  unattributed: 'request id not resolved',
-  agent: 'agent key',
-  turn: 'tool block on the page',
-  generation: 'the only chat generating',
-  inferred: 'not placed in a chat'
+  request_id: 'popup.attribRequest',
+  unattributed: 'popup.attribUnresolved',
+  agent: 'popup.attribAgent',
+  turn: 'popup.attribTurn',
+  generation: 'popup.attribGeneration',
+  inferred: 'popup.attribInferred'
 };
+
+function attribution(value) {
+  const key = ATTRIBUTION[value];
+  return key ? tr(key) : String(value || tr('popup.noRecord'));
+}
 
 /**
  * The three stages, from evidence each layer produced independently.
@@ -93,19 +98,19 @@ function pipeline(info, ready) {
 
   if (!info || !info.isChat) return { read: ['off'], sent: ['off'], proc: ['off'], why: ['', ''] };
   if (!info.recorder) {
-    return { read: ['failed'], sent: ['off'], proc: ['off'], why: ['bad', 'No recorder in this tab. Reload the page.'] };
+    return { read: ['failed'], sent: ['off'], proc: ['off'], why: ['bad', tr('popup.noRecorder')] };
   }
   if (read === 0) {
-    return { read: ['running'], sent: ['off'], proc: ['off'], why: ['', 'Waiting for the first message.'] };
+    return { read: ['running'], sent: ['off'], proc: ['off'], why: ['', tr('popup.waitingFirst')] };
   }
 
   const readStage = ['done', String(read)];
   if (!ready) {
     return {
       read: readStage,
-      sent: ['failed', pending ? `${pending} held` : ''],
+      sent: ['failed', pending ? tr('popup.held', { count: pending }) : ''],
       proc: ['off'],
-      why: ['bad', 'The app is not reachable. Nothing is leaving this browser.']
+      why: ['bad', tr('popup.appUnreachable')]
     };
   }
   if (sent && sent.ok === false) {
@@ -113,7 +118,7 @@ function pipeline(info, ready) {
       read: readStage,
       sent: ['failed', String(sent.error || 'failed')],
       proc: ['off'],
-      why: ['bad', `The app rejected the last delivery (${sent.error || 'failed'}).`]
+      why: ['bad', tr('popup.deliveryRejected', { error: sent.error || 'failed' })]
     };
   }
   // Refused by the extension itself, before anything could be queued for the app. `pending`
@@ -124,22 +129,20 @@ function pipeline(info, ready) {
   if (page.blocked) {
     return {
       read: readStage,
-      sent: ['failed', page.queued ? `${page.queued} held in page` : String(page.blocked)],
+      sent: ['failed', page.queued ? tr('popup.heldInPage', { count: page.queued }) : String(page.blocked)],
       proc: ['off'],
       why: [
         'bad',
-        'The extension is not accepting this tab’s observations (' +
-          String(page.blocked) +
-          '). Reload the ChatGPT tab.'
+        tr('popup.tabBlocked', { error: String(page.blocked) })
       ]
     };
   }
   if (pending > 0) {
     return {
       read: readStage,
-      sent: ['running', `${pending} queued`],
+      sent: ['running', tr('popup.queued', { count: pending })],
       proc: ['off'],
-      why: ['', 'Queued here. Retrying delivery to the app.']
+      why: ['', tr('popup.retryingDelivery')]
     };
   }
 
@@ -149,7 +152,7 @@ function pipeline(info, ready) {
       read: readStage,
       sent: sentStage,
       proc: ['running'],
-      why: ['', 'Delivered. The app has not opened a session for this chat yet.']
+      why: ['', tr('popup.sessionPending')]
     };
   }
 
@@ -163,7 +166,9 @@ function pipeline(info, ready) {
       proc: ['failed', `${placed}/${calls.length}`],
       why: [
         'bad',
-        `The app could not place ${missed.length === 1 ? 'a call' : `${missed.length} calls`} by request id — it fell back to ${ATTRIBUTION[missed[0].app] || missed[0].app}.`
+        missed.length === 1
+          ? tr('popup.callPlacementOne', { fallback: attribution(missed[0].app) })
+          : tr('popup.callPlacementMany', { count: missed.length, fallback: attribution(missed[0].app) })
       ]
     };
   }
@@ -171,7 +176,7 @@ function pipeline(info, ready) {
     read: readStage,
     sent: sentStage,
     proc: ['done', calls.length ? `${placed}/${calls.length}` : ''],
-    why: ['', calls.length ? 'Every tool call matched end to end.' : 'Recording into the app.']
+    why: ['', calls.length ? tr('popup.callsMatched') : tr('popup.recordingIntoApp')]
   };
 }
 
@@ -196,11 +201,11 @@ function paintCalls(page) {
     }
     const tool = document.createElement('span');
     tool.className = 'tool';
-    tool.textContent = entry.tool || 'tool call';
+    tool.textContent = entry.tool || tr('popup.toolCall');
     const id = document.createElement('span');
     id.className = 'id';
     id.textContent = shorten(entry.requestId, 5);
-    line.title = `${entry.requestId} — picked up ${entry.read ? 'yes' : 'no'} · sent ${entry.sent ? 'yes' : 'no'} · app ${ATTRIBUTION[entry.app] || 'no record'}`;
+    line.title = `${entry.requestId} — ${entry.read ? tr('popup.yes') : tr('popup.no')} · ${entry.sent ? tr('popup.yes') : tr('popup.no')} · ${attribution(entry.app)}`;
     line.append(pips, tool, id);
     box.append(line);
   }
@@ -241,11 +246,11 @@ function paintAlert(status, info) {
   const pairError = status && status.pairError;
   const error = page && page.lastError;
   const text = incompatible
-    ? 'The app and this extension speak different bridge protocols.'
+    ? tr('popup.protocolMismatch')
     : pairError && pairError.message
       ? pairError.message
       : pairError && pairError.error === 'secure_storage_unavailable'
-        ? 'Secure credential storage is unavailable. Open ComGu for setup instructions.'
+        ? tr('popup.secureStorageUnavailable')
     : error && Date.now() - error.at < 10 * 60 * 1000
       ? error.text
       : '';
@@ -276,39 +281,39 @@ function paintDetails(status, info) {
   const page = info && info.page;
   const sent = info && info.delivery;
 
-  detail(grid, 'app', status ? `v${status.appVersion || '?'} · port ${status.port || '—'}` : null);
+  detail(grid, tr('popup.detailApp'), status ? `v${status.appVersion || '?'} · port ${status.port || '—'}` : null);
   detail(
     grid,
-    'extension',
+    tr('popup.detailExtension'),
     status ? `v${status.extensionVersion} · protocol ${status.extensionProtocol}` : null,
     status && status.compatible === false
   );
-  detail(grid, 'chat id', (info && info.conversationId) || null);
-  detail(grid, 'app session', (page && page.session) || null, Boolean(page && !page.session));
-  detail(grid, 'tab', info ? `${info.tab} · epoch ${info.epoch ?? '—'}` : null);
+  detail(grid, tr('popup.detailChatId'), (info && info.conversationId) || null);
+  detail(grid, tr('popup.detailAppSession'), (page && page.session) || null, Boolean(page && !page.session));
+  detail(grid, tr('popup.detailTab'), info ? `${info.tab} · epoch ${info.epoch ?? '—'}` : null);
   detail(
     grid,
-    'ownership',
-    info ? (info.terminal ? 'retired' : info.bound ? 'bound' : 'unbound') : null,
+    tr('popup.detailOwnership'),
+    info ? (info.terminal ? tr('popup.retired') : info.bound ? tr('popup.bound') : tr('popup.unbound')) : null,
     Boolean(info && info.terminal)
   );
-  detail(grid, 'recorder', page ? `fiber v${page.recorderVersion} · run ${page.runId}` : 'not attached', !page);
-  detail(grid, 'turn', page ? (page.generating ? `${shorten(page.turnId, 8)} · live` : 'idle') : null);
-  detail(grid, 'observed', page ? `${page.events} events · ${page.calls} calls` : null);
+  detail(grid, tr('popup.detailRecorder'), page ? `fiber v${page.recorderVersion} · run ${page.runId}` : tr('popup.notAttached'), !page);
+  detail(grid, tr('popup.detailTurn'), page ? (page.generating ? `${shorten(page.turnId, 8)} · ${tr('popup.live')}` : tr('popup.idle')) : null);
+  detail(grid, tr('popup.detailObserved'), page ? tr('popup.eventsCalls', { events: page.events, calls: page.calls }) : null);
   detail(
     grid,
-    'in this browser',
-    info ? `${info.pending} held · ${info.pendingAll} total` : null,
+    tr('popup.detailBrowser'),
+    info ? tr('popup.heldTotal', { held: info.pending, total: info.pendingAll }) : null,
     Boolean(info && info.pendingAll)
   );
   detail(
     grid,
-    'last delivery',
-    sent && sent.at ? `${sent.ok ? 'ok' : sent.error || 'failed'} · ${sent.events} · ${ago(sent.at)} ago` : null,
+    tr('popup.detailLastDelivery'),
+    sent && sent.at ? tr('popup.deliveryAgo', { state: sent.ok ? 'ok' : sent.error || 'failed', events: sent.events, ago: ago(sent.at) }) : null,
     Boolean(sent && sent.ok === false)
   );
-  detail(grid, 'delivered', sent ? sent.total : null);
-  detail(grid, 'page sends', page ? `${page.sends} · ${page.failures} failed` : null, Boolean(page && page.failures));
+  detail(grid, tr('popup.detailDelivered'), sent ? sent.total : null);
+  detail(grid, tr('popup.detailPageSends'), page ? tr('popup.pageFailures', { sends: page.sends, failures: page.failures }) : null, Boolean(page && page.failures));
 }
 
 async function refresh() {
@@ -324,14 +329,14 @@ async function refresh() {
   const isChat = Boolean(info && info.isChat);
   const page = info && info.page;
 
-  row('tab', isChat ? 'ok' : 'off', isChat ? '' : 'none open');
-  row('rec', !isChat ? 'off' : info.recorder ? 'ok' : 'no', !isChat ? '' : info.recorder ? (page.generating ? 'answering' : '') : 'reload');
+  row('tab', isChat ? 'ok' : 'off', isChat ? '' : tr('popup.noneOpen'));
+  row('rec', !isChat ? 'off' : info.recorder ? 'ok' : 'no', !isChat ? '' : info.recorder ? (page.generating ? tr('popup.answering') : '') : tr('popup.reload'));
 
   const chatId = info && info.conversationId;
-  idRow('chat', !isChat ? 'off' : chatId ? 'ok' : 'wait', !isChat ? '' : chatId ? shorten(chatId, 8) : 'new chat', chatId);
+  idRow('chat', !isChat ? 'off' : chatId ? 'ok' : 'wait', !isChat ? '' : chatId ? shorten(chatId, 8) : tr('popup.newChat'), chatId);
 
   const requestId = page && page.requestId;
-  idRow('req', !isChat ? 'off' : requestId ? 'ok' : 'wait', !isChat ? '' : requestId ? shorten(requestId, 9) : 'none yet', requestId);
+  idRow('req', !isChat ? 'off' : requestId ? 'ok' : 'wait', !isChat ? '' : requestId ? shorten(requestId, 9) : tr('popup.noneYet'), requestId);
 
   const state = pipeline(info, ready);
   stage('read', ...state.read);
@@ -380,12 +385,12 @@ async function copyInto(button, text) {
   const was = button.textContent;
   try {
     await navigator.clipboard.writeText(text);
-    button.textContent = 'copied';
+    button.textContent = tr('common.copied');
   } catch {
-    button.textContent = 'copy failed';
+    button.textContent = tr('common.copyFailed');
   }
   setTimeout(() => {
-    if (button.textContent === 'copied' || button.textContent === 'copy failed') button.textContent = was;
+    if (button.textContent === tr('common.copied') || button.textContent === tr('common.copyFailed')) button.textContent = was;
   }, 900);
 }
 

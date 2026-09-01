@@ -24,7 +24,7 @@ describe('ComGu branding', () => {
     expect(manifest.action.default_title).toBe('ComGu');
     expect(surfaces).toContain("export const CONNECTOR_BRAND = 'ComGu'");
     expect(main).toContain("title: 'ComGu'");
-    expect(main).toContain('`ComGu — ${label.toLowerCase()}`');
+    expect(main).toContain('tray.setToolTip(`ComGu');
   });
 
   it('uses the ComGu application identity while preserving protocol compatibility identifiers', async () => {
@@ -73,6 +73,12 @@ describe('ComGu branding', () => {
     expect(pkg.homepage).toBe('https://github.com/Tanaboonnnnn/Com-gu');
     expect(version).toContain('https://github.com/Tanaboonnnnn/Com-gu/releases/download/');
     expect(goal).toContain("'HTTP-Referer': 'https://github.com/Tanaboonnnnn/Com-gu'");
+  });
+
+  it('routes public security reports to the ComGu repository', async () => {
+    const issueConfig = await text('.github/ISSUE_TEMPLATE/config.yml');
+    expect(issueConfig).toContain('https://github.com/Tanaboonnnnn/Com-gu/security/advisories/new');
+    expect(issueConfig).not.toContain('totec448-spec/chat-on-steroids');
   });
 
   it('generates shipped icons from the full-colour ComGu logo source', async () => {

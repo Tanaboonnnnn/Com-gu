@@ -136,6 +136,19 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   expect(w.document.querySelector('[data-step="folder"] h3')!.textContent).toBe('เลือกโฟลเดอร์ที่จะแชร์');
   expect(w.document.querySelector('[data-panel="chat"] h2')!.textContent).toContain('เซสชัน');
   expect(w.document.querySelector('[data-panel="activity"] h2')!.textContent).toContain('กิจกรรม');
+  const readGroup = w.document.querySelector('[data-group="read"]')!;
+  const runGroup = w.document.querySelector('[data-group="run"]')!;
+  expect(readGroup.querySelector('.perm-main b')!.textContent).toBe('ดูไฟล์');
+  expect(runGroup.querySelector('.perm-main b')!.textContent).toBe('รันโปรแกรม');
+  expect(runGroup.textContent).toContain('รันคำสั่ง');
+  expect(runGroup.textContent).toContain('ไม่จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต');
+  expect(readGroup.querySelector('.group-count')!.textContent).toBe('เปิดอยู่ 4 สิทธิ์');
+  expect(w.document.getElementById('connectLabel')!.textContent).toBe('เชื่อมต่อ');
+  expect(w.document.getElementById('wizFolders')!.textContent).toContain('/repo');
+  expect(w.document.getElementById('goalHint')!.textContent).toContain('ฟีเจอร์ Goal ต้องใช้ OpenRouter API key');
+  expect(w.document.getElementById('sessionsEmpty')!.textContent).toContain('ยังไม่มีประวัติ');
+  expect(w.document.querySelector('#chatBody [data-view="settings"] .setting b')!.textContent).toBe('เก็บประวัติ');
+  expect(w.document.getElementById('swarmReset')!.textContent).toBe('ล้าง swarm');
 
   const englishState = structuredClone(state) as any;
   englishState.config.ui.locale = 'en';

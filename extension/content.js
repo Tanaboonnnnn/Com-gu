@@ -4435,7 +4435,9 @@
     const body = document.createElement(entry.kind === 'assistant_message' ? 'div' : 'span');
     body.className = 'clf-stream-text';
     if (entry.kind === 'tool_call') {
-      body.textContent = entry.summary && entry.summary.title ? entry.summary.title : `Ran ${entry.tool || 'tool'}`;
+      body.textContent = entry.summary && entry.summary.title
+        ? entry.summary.title
+        : ui('stream.ranTool', { tool: entry.tool || 'tool' });
       if (entry.summary && entry.summary.detail) {
         const detail = document.createElement('span');
         detail.className = 'clf-tool-detail';
@@ -4445,12 +4447,13 @@
     } else if (entry.kind === 'agent_message') {
       body.textContent = `${entry.from || 'agent'} → ${entry.to || 'agent'}: ${entry.text || ''}`;
     } else if (entry.kind === 'page_tool') {
-      body.textContent = entry.label || 'ChatGPT tool';
+      body.textContent = entry.label || ui('stream.chatgptTool');
     } else if (entry.kind === 'turn_start') {
-      body.textContent = 'Turn started';
+      body.textContent = ui('stream.turnStarted');
     } else if (entry.kind === 'turn_end') {
-      const outcome = entry.outcome ? String(entry.outcome).replace(/_/g, ' ') : 'completed';
-      body.textContent = `Turn ${outcome}${entry.detail ? ` · ${entry.detail}` : ''}`;
+      const outcomeKey = `stream.outcome.${entry.outcome || 'unknown'}`;
+      const outcome = ui(outcomeKey);
+      body.textContent = `${ui('stream.turnOutcome', { outcome })}${entry.detail ? ` · ${entry.detail}` : ''}`;
     } else if (entry.kind === 'assistant_message') {
       appendRenderedHtml(body, entry.renderedHtml, entry.text || '');
     } else {
@@ -4891,7 +4894,7 @@
         const worker = String(data.retiredWorker.id || 'worker');
         const reason = String(data.retiredWorker.reason || 'its sub-agent run ended');
         autoCompactReady = false;
-        localError = `${worker} was retired because ${reason}. This chat can no longer use local tools.`;
+        localError = ui('composer.retiredWorker', { worker, reason });
         if (retirementHandledFor !== forId) {
           retirementHandledFor = forId;
           const stop = CLF_DOM.stopButton();
@@ -5077,21 +5080,21 @@
     if (phase === 'delivering') {
       return {
         mode: 'busy',
-        label: NATIVE_PHASE_LABELS[phase] || 'Saving…',
-        hint: error || 'The brief is finished; waiting for the app to store it.',
+        label: nativePhaseLabel(phase, 'composer.saving'),
+        hint: error || ui('composer.briefStoreWait'),
         action: 'cancel'
       };
     }
 
     if (job && job.busy) {
       if (job.stage === 'opening') {
-        return { mode: 'busy', label: 'Opening…', hint: 'Handoff saved, opening the fresh chat', action: 'cancel' };
+        return { mode: 'busy', label: ui('composer.openingLabel'), hint: ui('composer.handoffSavedOpening'), action: 'cancel' };
       }
       if (job.stage === 'waiting-for-browser') {
         return {
           mode: 'waiting',
-          label: 'Waiting…',
-          hint: job.error || 'The app is trying to open the fresh chat.',
+          label: ui('composer.waitingLabel'),
+          hint: job.error || ui('composer.appOpeningFresh'),
           action: 'cancel'
         };
       }
@@ -5100,8 +5103,8 @@
       // right now; `handoff-pending` is the app saying it has asked and is waiting.
       return {
         mode: 'busy',
-        label: NATIVE_PHASE_LABELS[phase] || 'Asking…',
-        hint: 'ChatGPT is writing the handoff',
+        label: nativePhaseLabel(phase, 'composer.phaseAsking'),
+        hint: ui('composer.writingHandoff'),
         action: 'cancel'
       };
     }
@@ -5113,31 +5116,31 @@
      * is a button that is missing whenever it is wanted.
      */
     if (job && job.stage === 'done') {
-      return { mode: 'done', label: 'Opened', hint: 'The fresh chat is open', action: 'start' };
+      return { mode: 'done', label: ui('composer.opened'), hint: ui('composer.freshOpen'), action: 'start' };
     }
     if (job && job.stage === 'failed') {
       if (job.error === 'cancelled') {
-        return { mode: 'idle', label: 'Compact', hint: 'Resume cancelled', action: 'start' };
+        return { mode: 'idle', label: ui('composer.compact'), hint: ui('composer.resumeCancelled'), action: 'start' };
       }
-      return { mode: 'error', label: 'Failed', hint: job.error || 'Compaction failed', action: 'start' };
+      return { mode: 'error', label: ui('composer.failed'), hint: job.error || ui('composer.compactionFailed'), action: 'start' };
     }
     if (pressedAt > 0 && now - pressedAt < PRESS_GRACE_MS) {
-      return { mode: 'busy', label: 'Starting…', hint: '', action: 'none' };
+      return { mode: 'busy', label: ui('composer.phaseStarting'), hint: '', action: 'none' };
     }
-    if (error) return { mode: 'error', label: 'Failed', hint: error, action: 'start' };
+    if (error) return { mode: 'error', label: ui('composer.failed'), hint: error, action: 'start' };
     if (disconnected) {
       return {
         mode: 'off',
-        label: 'Compact',
-        hint: 'Browser connection is disconnected in ComGu.',
+        label: ui('composer.compact'),
+        hint: ui('composer.browserDisconnected'),
         action: 'none'
       };
     }
     if (!connected) {
       return {
         mode: 'off',
-        label: 'Compact',
-        hint: 'ComGu is not running on this PC.',
+        label: ui('composer.compact'),
+        hint: ui('composer.appNotRunning'),
         action: 'none'
       };
     }
@@ -5146,12 +5149,12 @@
       // still where a goal is written — which is the one thing that can start the chat.
       return {
         mode: 'off',
-        label: 'Compact',
-        hint: 'Nothing to compact yet — send a message, or set a goal and it writes one.',
+        label: ui('composer.compact'),
+        hint: ui('composer.nothingCompact'),
         action: 'none'
       };
     }
-    return { mode: 'idle', label: 'Compact', hint: '', action: 'start' };
+    return { mode: 'idle', label: ui('composer.compact'), hint: '', action: 'start' };
   }
 
   /**
@@ -5179,7 +5182,7 @@
     const objective = goal && typeof goal.objective === 'string' ? goal.objective : '';
     // The app's own reason, rather than this tab's guess. Today there is exactly one: a
     // worker chat, where the prime already writes the user's turns.
-    const from = threshold > 0 ? `from ${roundK(threshold)} tokens` : '';
+    const from = threshold > 0 ? ui('composer.autoFrom', { tokens: roundK(threshold) }) : '';
     // Either half is enough to make the loop run here, which is why the summary line says
     // "on" for a chat that has a goal even while the standing switch is off.
     const running = (goalOn || Boolean(objective)) && hasKey && !blocked;
@@ -5187,34 +5190,34 @@
       // Two short lines rather than a sentence: this is read while reaching for something
       // else, and the only questions it answers are "is it on" and "at what point".
       tip: [
-        auto ? `Auto-compaction on${from ? `, ${from}` : ''}` : 'Auto-compaction off',
+        auto ? `${ui('composer.autoSummaryOn')}${from ? `, ${from}` : ''}` : ui('composer.autoSummaryOff'),
         blocked === 'worker'
-          ? 'Goal off — the prime writes this chat'
+          ? ui('composer.goalPrimeWrites')
           : objective
-            ? 'Goal on — chasing this chat’s goal'
+            ? ui('composer.goalChasing')
             : goalOn
               ? hasKey
-                ? 'Goal on'
-                : 'Goal on — no API key'
-              : 'Goal off'
+                ? ui('composer.goalOn')
+                : ui('composer.goalNoKey')
+              : ui('composer.goalOff')
       ].join('\n'),
       rows: [
         {
           key: 'autoCompact',
-          label: 'Auto-compaction',
+          label: ui('composer.autoLabel'),
           note:
             blocked === 'worker'
-              ? 'off here: worker chats never auto-compact'
+              ? ui('composer.autoWorkerOff')
               : auto
-                ? from || 'threshold set in the app'
-                : 'compact this chat by hand',
+                ? from || ui('composer.autoThresholdApp')
+                : ui('composer.autoManual'),
           on: auto,
           warn: false,
           disabled: blocked === 'worker'
         },
         {
           key: 'goal',
-          label: 'Goal',
+          label: ui('composer.goalLabel'),
           // The missing key is the note, not a separate warning line. It is the answer to
           // the only question somebody switching this on has.
           //
@@ -5224,14 +5227,14 @@
           // setting that had failed to save — which is precisely how it was reported.
           note:
             blocked === 'worker'
-              ? 'off here: the prime agent writes this worker’s messages'
+              ? ui('composer.goalWorkerOff')
               : !hasKey
-                ? 'OpenRouter API key essential for goal feature'
+                ? ui('composer.goalKeyRequired')
                 : objective
-                  ? `on for this chat’s own goal, with ${modelLabel(goal.model)}`
+                  ? ui('composer.goalOwn', { model: modelLabel(goal.model) })
                   : goalOn
-                    ? `replies as you with ${modelLabel(goal.model)}`
-                    : 'reply as you until the goal is met',
+                    ? ui('composer.goalReplies', { model: modelLabel(goal.model) })
+                    : ui('composer.goalUntilMet'),
           on: goalOn,
           warn: !hasKey || blocked === 'worker',
           disabled: blocked === 'worker'
@@ -5246,18 +5249,18 @@
       objective: {
         text: objective,
         editing: Boolean(editing),
-        label: objective ? 'change the goal' : 'add specific goal',
+        label: objective ? ui('composer.goalChange') : ui('composer.goalAdd'),
         /** Shown instead of the link once a goal exists, so it can be read without opening it. */
         summary: objective ? clampLine(objective, 120) : '',
         hint: objective
-          ? 'Replace or clear the goal this chat is being driven towards.'
-          : 'Write what this chat has to reach. The loop then prompts until it is reached.',
+          ? ui('composer.goalReplaceHint')
+          : ui('composer.goalWriteHint'),
         available: hasKey && !blocked,
         unavailable:
           blocked === 'worker'
-            ? 'A worker chat is already driven by its prime.'
+            ? ui('composer.goalWorkerUnavailable')
             : !hasKey
-              ? 'Add an OpenRouter API key in the app first.'
+              ? ui('composer.goalAddKeyFirst')
               : ''
       },
       // The button's old job, kept as a row rather than dropped: pressing the gear must not
@@ -5265,13 +5268,13 @@
       action: {
         label:
           blocked === 'worker'
-            ? 'Compact & resume unavailable'
+            ? ui('composer.compactUnavailable')
             : compact.action === 'cancel'
-              ? 'Cancel compaction'
-              : 'Compact & resume now',
+              ? ui('composer.cancelCompact')
+              : ui('composer.compactResumeNow'),
         hint:
           blocked === 'worker'
-            ? 'Worker chats stay in their existing conversation and are never manually compacted or resumed.'
+            ? ui('composer.compactWorkerHint')
             : compact.hint,
         action: blocked === 'worker' ? 'none' : compact.action
       }
@@ -5491,13 +5494,17 @@
 
   /** Local phases of a ChatGPT-native compaction, as the button says them. */
   const NATIVE_PHASE_LABELS = {
-    requested: 'Starting…',
-    interrupting: 'Stopping…',
-    settling: 'Settling…',
-    prompting: 'Asking…',
-    waiting: 'Writing…',
-    delivering: 'Saving…'
+    requested: 'composer.phaseStarting',
+    interrupting: 'composer.phaseStopping',
+    settling: 'composer.phaseSettling',
+    prompting: 'composer.phaseAsking',
+    waiting: 'composer.phaseWriting',
+    delivering: 'composer.saving'
   };
+
+  function nativePhaseLabel(phase, fallback) {
+    return ui(NATIVE_PHASE_LABELS[phase] || fallback);
+  }
 
   /**
    * A gear, because the control is now a settings control.
@@ -5555,7 +5562,7 @@
     cancel.type = 'button';
     cancel.className = 'clf-cancel';
     cancel.textContent = '×';
-    cancel.setAttribute('aria-label', 'Cancel Compact & resume');
+    cancel.setAttribute('aria-label', ui('composer.cancelCompactAria'));
     pill.append(spinner, text, cancel);
 
     const button = document.createElement('button');
@@ -6021,7 +6028,7 @@
       plus.textContent = objective.summary ? '✎' : '+';
       plus.setAttribute('aria-hidden', 'true');
       const word = document.createElement('span');
-      word.textContent = objectiveBusy ? 'working…' : objectiveError || objective.label;
+      word.textContent = objectiveBusy ? ui('composer.working') : objectiveError || objective.label;
       if (objectiveError) word.dataset.clfWarn = '1';
       link.append(word, plus);
       link.addEventListener('click', (event) => {
@@ -6056,7 +6063,7 @@
     const save = document.createElement('button');
     save.type = 'button';
     save.className = 'clf-menu-goal-save';
-    save.textContent = objectiveBusy ? 'Saving…' : 'Save';
+    save.textContent = objectiveBusy ? ui('composer.saving') : ui('composer.save');
     save.disabled = objectiveBusy || !menuDraft.trim();
     save.addEventListener('click', (event) => {
       event.preventDefault();
@@ -6223,10 +6230,7 @@
     box.className = 'clf-boot';
     const head = document.createElement('summary');
     head.className = 'clf-boot-head';
-    head.textContent =
-      bootstrap === 'worker'
-        ? 'The instruction this app gave the worker — not something you typed'
-        : 'The handoff brief this app carried over — not something you typed';
+    head.textContent = bootstrap === 'worker' ? ui('composer.bootstrapWorker') : ui('composer.bootstrapHandoff');
     box.append(head);
 
     node.dataset.clfBootstrap = bootstrap;
@@ -6271,7 +6275,7 @@
    */
   function modelLabel(id) {
     const name = String(id || '').trim();
-    if (!name) return 'the model';
+    if (!name) return ui('composer.modelGeneric');
     const tail = name.slice(name.lastIndexOf('/') + 1);
     return tail.split(':')[0] || tail;
   }
@@ -6296,7 +6300,12 @@
    * — and a caption on its own only ever answered "what now". It never answered "how far",
    * so a run that had stopped and a run that was merely slow looked identical for minutes.
    */
-  const GOAL_STEPS = ['Answer settling', 'Reading the chat', 'Writing the reply', 'Sending'];
+  const goalSteps = () => [
+    ui('composer.answerSettling'),
+    ui('composer.readingChat'),
+    ui('composer.writingReply'),
+    ui('composer.sending')
+  ];
 
   /**
    * Which of those a phase is.
@@ -6312,50 +6321,50 @@
     if (!goal) return null;
     const draft = goal.draft || null;
     const who = modelLabel(goal.model);
-    const bar = (at, done = false) => ({ steps: GOAL_STEPS, at, done });
+    const bar = (at, done = false) => ({ steps: goalSteps(), at, done });
     const failure = goal.error || (draft && draft.stage === 'failed' ? draft.error || 'OpenRouter did not answer' : '');
     if (failure) {
       const at = draft && draft.stage === 'failed' ? 2 : (GOAL_STEP_AT[goal.phase] ?? 1);
-      return { stage: 'The goal loop stopped', detail: failure, body: '', kind: 'goal-error', ...bar(at) };
+      return { stage: ui('composer.goalStopped'), detail: failure, body: '', kind: 'goal-error', ...bar(at) };
     }
     // A chat opening on a specific goal. There is no answer to read and no turn to settle,
     // so the first two steps of the ordinary run simply did not happen; saying "sending the
     // answer to OpenRouter" about a chat with no answer in it yet would be describing a
     // different run entirely.
     if (goal.opening) {
-      if (goal.phase === 'sending') return { stage: 'Sending it to ChatGPT', detail: '', body: '', kind: 'goal', ...bar(3) };
-      return { stage: `${who} is writing the first message`, detail: '', body: '', kind: 'goal', ...bar(2) };
+      if (goal.phase === 'sending') return { stage: ui('composer.sendingToChatgpt'), detail: '', body: '', kind: 'goal', ...bar(3) };
+      return { stage: ui('composer.writingFirst', { model: who }), detail: '', body: '', kind: 'goal', ...bar(2) };
     }
     if (goal.phase === 'done') {
       // The loop's own success condition, and the one state worth spelling out: nothing was
       // typed, and that is the answer rather than a failure to produce one. The bar stops at
       // the reply for the same reason — there was never anything to send.
-      return { stage: 'Goal reached', detail: 'nothing was sent', body: '', kind: 'goal-done', ...bar(2, true) };
+      return { stage: ui('composer.goalReached'), detail: ui('composer.nothingSent'), body: '', kind: 'goal-done', ...bar(2, true) };
     }
     if (goal.phase === 'settling') {
-      return { stage: 'Checking the answer is finished', detail: '', body: '', kind: 'goal', ...bar(0) };
+      return { stage: ui('composer.checkingFinished'), detail: '', body: '', kind: 'goal', ...bar(0) };
     }
     if (goal.phase === 'sending' && draft && draft.reply) {
-      return { stage: 'Sending it to ChatGPT', detail: '', body: draft.reply, kind: 'goal', ...bar(3) };
+      return { stage: ui('composer.sendingToChatgpt'), detail: '', body: draft.reply, kind: 'goal', ...bar(3) };
     }
     if (goal.phase === 'requesting' && !draft) {
-      return { stage: 'Sending the answer to OpenRouter', detail: who, body: '', kind: 'goal', ...bar(1) };
+      return { stage: ui('composer.sendingToOpenrouter'), detail: who, body: '', kind: 'goal', ...bar(1) };
     }
     if (!draft) return null;
     if (draft.stage === 'no-reply') {
-      return { stage: 'Goal reached', detail: 'nothing was sent', body: '', kind: 'goal-done', ...bar(2, true) };
+      return { stage: ui('composer.goalReached'), detail: ui('composer.nothingSent'), body: '', kind: 'goal-done', ...bar(2, true) };
     }
     if (draft.stage === 'sending') {
-      return { stage: 'Sending the answer to OpenRouter', detail: who, body: '', kind: 'goal', ...bar(1) };
+      return { stage: ui('composer.sendingToOpenrouter'), detail: who, body: '', kind: 'goal', ...bar(1) };
     }
     if (draft.stage === 'answering') {
       // Streamed, so the wait has something in it. The text is the message being written for
       // the user, which is exactly the thing worth reading before it is sent.
-      return { stage: `${who} is answering`, detail: '', body: draft.text || '', kind: 'goal', ...bar(2) };
+      return { stage: ui('composer.modelAnswering', { model: who }), detail: '', body: draft.text || '', kind: 'goal', ...bar(2) };
     }
     if (draft.stage === 'ready') {
       // Written, not yet typed: the third segment is full and the fourth has not started.
-      return { stage: `${who} wrote the next message`, detail: '', body: draft.reply || '', kind: 'goal', ...bar(2, true) };
+      return { stage: ui('composer.modelWroteNext', { model: who }), detail: '', body: draft.reply || '', kind: 'goal', ...bar(2, true) };
     }
     return null;
   }
@@ -6413,7 +6422,7 @@
     close.type = 'button';
     close.textContent = '×';
     close.title = 'Dismiss';
-    close.setAttribute('aria-label', 'Dismiss Goal status');
+    close.setAttribute('aria-label', ui('composer.dismissGoalAria'));
     close.hidden = true;
     close.addEventListener('click', () => {
       // Removing the node alone is not enough: injectStage runs on every activity repaint
@@ -6801,8 +6810,8 @@
     };
 
     if (!current()) return;
-    if (!prompt) return void (await abandon('The app did not send the handoff instruction.'));
-    if (!token) return void (await abandon('The app did not send a compaction token, so nothing could be tracked.'));
+    if (!prompt) return void (await abandon(ui('composer.noHandoffInstruction')));
+    if (!token) return void (await abandon(ui('composer.noCompactionToken')));
 
     try {
       // INTERRUPTING and SETTLING already happened, before the request that produced this
@@ -6813,9 +6822,7 @@
       nativePhase = 'prompting';
       renderControl();
       if (!CLF_DOM.insertPrompt(prompt)) {
-        return void (await abandon(
-          'ChatGPT would not accept the handoff instruction — clear the message box and try again.'
-        ));
+        return void (await abandon(ui('composer.handoffRejected')));
       }
       await sleep(400);
       if (!current()) return;
@@ -6826,9 +6833,7 @@
       const composer = CLF_DOM.composer();
       const normalizePromptText = (value) => String(value || '').replace(/\s+/g, '');
       if (!composer || normalizePromptText(composer.textContent) !== normalizePromptText(prompt)) {
-        return void (await abandon(
-          'The message box changed before the handoff instruction could be sent. Its draft was preserved; nothing was compacted.'
-        ));
+        return void (await abandon(ui('composer.composerChanged')));
       }
       // Armed before the send rather than after it, because the turn can open between the
       // click and the next line of this function. An arming that is never claimed by a
@@ -6845,7 +6850,7 @@
       rememberCapture();
       if (!CLF_DOM.send()) {
         releaseCapture();
-        return void (await abandon('ChatGPT would not send the handoff instruction. Nothing was compacted.'));
+        return void (await abandon(ui('composer.handoffNotSent')));
       }
 
       // WAITING — for one generation, the one this send starts, and for nothing else.
@@ -6853,7 +6858,7 @@
       renderControl();
       void pullActivity();
     } catch (err) {
-      await abandon(`Could not ask ChatGPT for a handoff: ${(err && err.message) || 'unknown error'}`);
+      await abandon(ui('composer.handoffAskFailed', { error: (err && err.message) || ui('composer.unknownError') }));
     } finally {
       // The guard is released either way; `nativePhase` is cleared by the app's job
       // reaching a terminal stage, or by abandon() above.

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import { EN, TH, normalizeLocale, t } from '../src/shared/i18n/index.js';
 
@@ -60,5 +63,41 @@ describe('i18n', () => {
     expect(TH['chat.timeline']).toBe('ไทม์ไลน์');
     expect(TH['activity.title']).toBe('กิจกรรม');
     expect(TH['activity.turnStarted']).toBe('เริ่มเทิร์นแล้ว');
+    expect(TH['permissions.cap.command.label']).toBe('รันคำสั่ง');
+    expect(TH['permissions.cap.command.detail']).toContain('ไม่จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต');
+    expect(TH['goal.modelsShown']).toContain('แสดง');
+    expect(TH['agents.workerWorking']).toBe('{count} กำลังทำงาน');
+    expect(TH['tray.open']).toBe('เปิด ComGu');
+    expect(TH['tray.quit']).toBe('ออกจาก ComGu');
+  });
+
+  it('does not leave deterministic English leaf copy outside the i18n surface', () => {
+    const html = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'index.html'), 'utf8');
+    const document = new JSDOM(html).window.document;
+    // These nodes are deliberately repainted from live state after startup. Giving them a
+    // static data-i18n attribute would overwrite the live value on every state refresh.
+    const dynamic = new Set([
+      'versionBtn',
+      'wizFolders',
+      'backgroundRunningCopy',
+      'minimizeToTrayCopy',
+      'chatTitle',
+      'updateTitle'
+    ]);
+    const untranslated: string[] = [];
+    for (const node of document.querySelectorAll<HTMLElement>('body *')) {
+      if (node.children.length > 0 || node.closest('script, style, svg, code, pre')) continue;
+      const text = (node.textContent ?? '').trim().replace(/\s+/g, ' ');
+      if (!text || !/[A-Za-z]/.test(text)) continue;
+      if (node.tagName === 'OPTION' && (node as HTMLOptionElement).value === 'en') continue;
+      if (dynamic.has(node.id)) continue;
+      if (
+        node.hasAttribute('data-i18n') ||
+        node.hasAttribute('data-i18n-title') ||
+        node.hasAttribute('data-i18n-placeholder')
+      ) continue;
+      untranslated.push(`${node.tagName.toLowerCase()}#${node.id}: ${text}`);
+    }
+    expect(untranslated).toEqual([]);
   });
 });

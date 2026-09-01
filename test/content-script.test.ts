@@ -6433,6 +6433,18 @@ describe('the Compact & resume control', () => {
 
     expect(live.document.querySelector('.clf-menu')?.getAttribute('aria-label')).toBe('การตั้งค่า ComGu');
     expect(live.document.querySelector('.clf-menu-action')?.textContent).toContain('ย่อบริบท');
+    const thaiSheet = live.hook.settingsView({
+      context: { auto: true, threshold: 400_000, warn: 400_000, limit: 533_333, locale: 'th' },
+      goal: { enabled: true, hasKey: true, model: 'deepseek/deepseek-v4-flash', objective: '', blocked: '' },
+      compact: { action: 'start', hint: '' },
+      editing: false
+    });
+    expect(thaiSheet.rows.map((row) => row.label)).toEqual(['ย่อบริบทอัตโนมัติ', 'เป้าหมาย']);
+    expect(thaiSheet.objective.label).toBe('เพิ่มเป้าหมายเฉพาะแชตนี้');
+    expect(live.hook.goalStageView({ phase: 'settling', error: '', model: 'deepseek/deepseek-v4-flash', draft: null })).toMatchObject({
+      stage: 'กำลังตรวจว่าคำตอบจบแล้ว',
+      steps: ['รอคำตอบนิ่ง', 'กำลังอ่านแชต', 'กำลังเขียนข้อความถัดไป', 'กำลังส่ง']
+    });
     expect(pageText.textContent).toBe('Save');
   });
   /**

@@ -2,7 +2,7 @@ import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { launchCommand } from './exec.js';
-import type { BrowserFamily, BrowserPreference } from '../shared/types.js';
+import { BROWSER_FAMILIES, type BrowserFamily, type BrowserPreference } from '../shared/types.js';
 
 export interface BrowserCandidate {
   family: BrowserFamily;
@@ -133,6 +133,19 @@ export function browserCandidates(
   }
 
   return [];
+}
+
+export function installedBrowserFamilies(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home = env.HOME ?? env.USERPROFILE ?? os.homedir(),
+  usable: Exists = (candidate) => isExecutableBrowser(candidate, platform)
+): BrowserFamily[] {
+  const seen = new Set<BrowserFamily>();
+  for (const item of browserCandidates(platform, env, home)) {
+    if (usable(item.executable)) seen.add(item.family);
+  }
+  return BROWSER_FAMILIES.filter((family) => seen.has(family));
 }
 
 /** Backward-compatible path-only projection used by existing probes/tests. */

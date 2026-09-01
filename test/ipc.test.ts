@@ -93,6 +93,7 @@ function settings(over: { record: boolean; multiAgent: boolean }) {
   return {
     capabilities: base.capabilities,
     readOnly: base.readOnly,
+    browser: base.browser,
     tunnel: base.tunnel,
     ui: base.ui,
     sessions: { ...base.sessions, record: over.record },

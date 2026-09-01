@@ -2,6 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   findPreferredBrowser,
+  installedBrowserFamilies,
   openInPreferredBrowser,
   preferredBrowserCandidates,
   resolveBrowserCandidates
@@ -9,6 +10,17 @@ import {
 
 
 describe('browser-backed ChatGPT commands', () => {
+  it('lists only browser families that are actually installed', () => {
+    const env = {
+      LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local',
+      ProgramFiles: 'C:\\Program Files'
+    };
+    const brave = 'C:\\Users\\example\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
+    const edge = 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe';
+    expect(installedBrowserFamilies('win32', env, 'C:\\Users\\example', (candidate) => candidate === brave || candidate === edge))
+      .toEqual(['brave', 'edge']);
+  });
+
   it('detects Brave, Chrome, Edge and Chromium Windows families from known install locations', () => {
     const env = {
       LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local',
