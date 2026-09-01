@@ -1081,7 +1081,7 @@ describe('a pipeline stopped early by Select-Object -First', () => {
     // Keep this integration probe bounded: it only needs enough native output to prove that
     // Select-Object closes the pipe early.  A huge producer made the full parallel suite
     // scheduler-sensitive even though the shell behaviour under test was unchanged.
-    const generator = 'cmd /c "for /l %i in (1,1,4000) do @echo line%i"';
+    const generator = 'cmd /c "for /l %i in (1,1,500) do @echo line%i"';
     expect(run(`${generator} | Select-Object -First 5 | Out-Null`)).not.toBe(0);
     // -Wait drains instead of stopping, which is the remedy the note hands the model.
     expect(run(`${generator} | Select-Object -First 5 -Wait | Out-Null`)).toBe(0);
