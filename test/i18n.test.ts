@@ -17,6 +17,10 @@ describe('i18n', () => {
     expect(Object.keys(TH).sort()).toEqual(Object.keys(EN).sort());
   });
 
+  it('keeps the secure-storage recovery message as natural Thai copy', () => {
+    expect(TH['setup.secureStorageUnreadable']).toBe('ปลดล็อกข้อมูลรับรองที่บันทึกไว้ไม่ได้ ไฟล์ที่เข้ารหัสเดิมจึงถูกเก็บไว้โดยไม่แก้ไข');
+  });
+
   it('interpolates named values without evaluating HTML', () => {
     expect(t('en', 'common.count', { count: 3 })).toBe('3 items');
     expect(t('th', 'common.count', { count: 3 })).toBe('3 รายการ');

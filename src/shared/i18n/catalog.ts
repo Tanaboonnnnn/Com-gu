@@ -586,7 +586,7 @@ export const TH: Record<MessageKey, string> = {
   'setup.chooseFolderStep': 'เลือกโฟลเดอร์ที่อนุญาตให้ ChatGPT ใช้งาน — ขั้นตอนที่ 1',
   'setup.createTunnelStep': 'สร้าง Tunnel แล้ววาง ID — ขั้นตอนที่ 2',
   'setup.secureStorageUnavailable': 'ที่เก็บข้อมูลรับรองแบบปลอดภัยใช้งานไม่ได้',
-  'setup.secureStorageUnreadable': '?????????????????????????????????? ????????????????????????????',
+  'setup.secureStorageUnreadable': 'ปลดล็อกข้อมูลรับรองที่บันทึกไว้ไม่ได้ ไฟล์ที่เข้ารหัสเดิมจึงถูกเก็บไว้โดยไม่แก้ไข',
   'setup.addApiKeyStep': 'เพิ่ม API key ที่จำกัดสิทธิ์ — ขั้นตอนที่ 3',
   'setup.cloudflaredMissing': 'ไม่พบ cloudflared ในเครื่องนี้',
   'setup.switchLight': 'เปลี่ยนเป็นโหมดสว่าง',
