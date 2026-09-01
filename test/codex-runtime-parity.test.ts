@@ -263,7 +263,7 @@ describe('Codex unified exec runtime parity', () => {
       shellType: process.platform === 'win32' ? 'powershell' : 'bash',
       hookCommand: 'pipe exit-code parity child',
       processId,
-      yieldTimeMs: 250,
+      yieldTimeMs: 10_000,
       maxOutputTokens: undefined,
       truncationPolicy,
       cwd: process.cwd(),

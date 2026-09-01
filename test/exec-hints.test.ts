@@ -1078,10 +1078,11 @@ describe('a pipeline stopped early by Select-Object -First', () => {
       }
     };
 
-    // Keep this integration probe bounded: it only needs enough native output to prove that
-    // Select-Object closes the pipe early.  A huge producer made the full parallel suite
-    // scheduler-sensitive even though the shell behaviour under test was unchanged.
-    const generator = 'cmd /c "for /l %i in (1,1,500) do @echo line%i"';
+    // The producer must outgrow the pipe buffer. A tiny cmd loop can finish before Select-Object
+    // closes its read end (especially on Windows ARM64), making the observed native exit code a
+    // scheduler race. Node keeps writing well past the first five lines, so the cut is observable
+    // without the very large/slow cmd loop that previously made this probe load-sensitive.
+    const generator = `node -e "for(let i=0;i<10000;i++) console.log('line'+i)"`;
     expect(run(`${generator} | Select-Object -First 5 | Out-Null`)).not.toBe(0);
     // -Wait drains instead of stopping, which is the remedy the note hands the model.
     expect(run(`${generator} | Select-Object -First 5 -Wait | Out-Null`)).toBe(0);
