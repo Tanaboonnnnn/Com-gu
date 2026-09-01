@@ -1065,22 +1065,27 @@ describe('a pipeline stopped early by Select-Object -First', () => {
       try {
         execFileSync('powershell.exe', ['-NoProfile', '-Command', command], {
           cwd: process.cwd(),
-          stdio: ['ignore', 'pipe', 'pipe']
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 10_000
         });
         return 0;
       } catch (error) {
-        return (error as { status?: number }).status ?? -1;
+        const result = error as { status?: number; signal?: string; code?: string };
+        if (result.code === 'ETIMEDOUT' || result.signal) {
+          throw new Error('PowerShell cut-pipeline probe did not terminate within 10 seconds');
+        }
+        return result.status ?? -1;
       }
     };
 
-    // One native process with far more to write than the stage will take, so the cut lands
-    // while it is still writing. A cmdlet loop would not do: stopping it leaves $LASTEXITCODE
-    // holding the status of whichever child had already finished, which is 0.
-    const generator = 'cmd /c "for /l %i in (1,1,20000) do @echo line%i"';
+    // Keep this integration probe bounded: it only needs enough native output to prove that
+    // Select-Object closes the pipe early.  A huge producer made the full parallel suite
+    // scheduler-sensitive even though the shell behaviour under test was unchanged.
+    const generator = 'cmd /c "for /l %i in (1,1,4000) do @echo line%i"';
     expect(run(`${generator} | Select-Object -First 5 | Out-Null`)).not.toBe(0);
     // -Wait drains instead of stopping, which is the remedy the note hands the model.
     expect(run(`${generator} | Select-Object -First 5 -Wait | Out-Null`)).toBe(0);
-  });
+  }, 20_000);
 });
 
 describe('hinting at a search path that does not exist', () => {
