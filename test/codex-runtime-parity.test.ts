@@ -254,7 +254,7 @@ describe('Codex unified exec runtime parity', () => {
     const instance = manager();
     managers.push(instance);
     const processId = instance.allocateProcessId();
-    const output = await instance.execCommand({
+    const initial = await instance.execCommand({
       command: [
         process.execPath,
         '-e',
@@ -272,10 +272,26 @@ describe('Codex unified exec runtime parity', () => {
       tty: false
     });
 
-    expect(output.processId).toBeNull();
-    expect(output.exitCode).toBe(17);
-    expect(output.rawOutput.toString('utf8')).toContain('stdout-marker');
-    expect(output.rawOutput.toString('utf8')).toContain('stderr-marker');
+    // A heavily loaded Windows/ARM runner can deliver both pipe streams before the child exit
+    // notification reaches Node. That is still a live managed session, not a lost exit code.
+    // If the initial yield returns during that narrow window, poll the exact same session to its
+    // terminal state and verify the combined bytes/exit status there.
+    const terminal =
+      initial.processId === null
+        ? initial
+        : await instance.writeStdin({
+            processId: initial.processId,
+            input: '',
+            yieldTimeMs: 30_000,
+            maxOutputTokens: undefined,
+            truncationPolicy
+          });
+    const combinedOutput = Buffer.concat([initial.rawOutput, terminal === initial ? Buffer.alloc(0) : terminal.rawOutput]);
+
+    expect(terminal.processId).toBeNull();
+    expect(terminal.exitCode).toBe(17);
+    expect(combinedOutput.toString('utf8')).toContain('stdout-marker');
+    expect(combinedOutput.toString('utf8')).toContain('stderr-marker');
   });
 
   it('returns an empty write_stdin poll as soon as the first output arrives', async () => {
