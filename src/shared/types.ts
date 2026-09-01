@@ -372,6 +372,31 @@ export interface BridgeStatus {
   lastSeenAt: number | null;
 }
 
+export type UpdateArch = 'x64' | 'arm64';
+
+export interface UpdateAsset {
+  name: string;
+  url: string;
+}
+
+export type UpdateCheckResult =
+  | { status: 'current'; currentVersion: string; latestVersion: string }
+  | {
+      status: 'available';
+      currentVersion: string;
+      latestVersion: string;
+      releaseName: string;
+      releaseNotes: string;
+      releaseUrl: string;
+      /** Exact installer for this host plus SHA256SUMS.txt; no arbitrary release assets. */
+      assets: UpdateAsset[];
+    }
+  | { status: 'error'; currentVersion: string; message: string };
+
+export type UpdateDownloadResult =
+  | { status: 'downloaded'; version: string; installerPath: string; sha256: string }
+  | { status: 'error'; message: string };
+
 /**
  * Whether the enabled product surface currently needs the companion browser extension.
  *
