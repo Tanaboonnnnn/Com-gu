@@ -54,6 +54,7 @@ import { tokenPressure } from '../shared/session.js';
 import { forgetWorkspaceRoot, renameWorkspaceRoot } from './workspace.js';
 import { hostPlatformInfo } from './platform.js';
 import { checkForUpdate, downloadUpdate, installDownloadedUpdate } from './updater.js';
+import { launchAtLoginState, setLaunchAtLogin } from './startup.js';
 import type { UpdateCheckResult } from '../shared/types.js';
 
 type UpdateUiState =
@@ -336,6 +337,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   runBackgroundUpdateCheck = async () => {
     await runUpdateCheck();
   };
+
+  // Launch-at-login belongs to the OS, not config.json. Read it fresh whenever the UI asks.
+  handle('startup:get', async () => launchAtLoginState());
+  handle('startup:set', async (payload) => {
+    const { enabled } = z.object({ enabled: z.boolean() }).strict().parse(payload);
+    return setLaunchAtLogin(enabled);
+  });
 
   handle('update:get', async () => updateState);
   handle('update:check', async () => runUpdateCheck());

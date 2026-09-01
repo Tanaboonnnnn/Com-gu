@@ -7,7 +7,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppState, Capabilities, Config, Diagnosis, LogEntry } from '../shared/types.js';
+import type { AppState, Capabilities, Config, Diagnosis, LaunchAtLoginState, LogEntry } from '../shared/types.js';
 import type {
   Handoff,
   SessionEvent,
@@ -70,6 +70,8 @@ export type UpdateUiState =
 
 const api = {
   getState: () => call<AppState>('state:get'),
+  getLaunchAtLogin: () => call<LaunchAtLoginState>('startup:get'),
+  setLaunchAtLogin: (enabled: boolean) => call<LaunchAtLoginState>('startup:set', { enabled }),
   getUpdateState: () => call<UpdateUiState>('update:get'),
   checkForUpdate: () => call<UpdateUiState>('update:check'),
   installUpdate: () => call<UpdateUiState>('update:install'),

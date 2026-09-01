@@ -85,6 +85,12 @@ export interface SecureStorageInfo {
   detail: string | null;
 }
 
+/** OS-owned launch-at-login registration. This is deliberately not part of Config. */
+export interface LaunchAtLoginState {
+  supported: boolean;
+  enabled: boolean;
+}
+
 export interface Root {
   /** Virtual name exposed to the model, e.g. "project" for /project. */
   name: string;

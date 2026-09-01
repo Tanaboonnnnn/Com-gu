@@ -1,9 +1,5 @@
-﻿import { app } from 'electron';
-
-export interface LaunchAtLoginState {
-  supported: boolean;
-  enabled: boolean;
-}
+import { app } from 'electron';
+import type { LaunchAtLoginState } from '../shared/types.js';
 
 function supported(platform: NodeJS.Platform): boolean {
   return platform === 'win32' || platform === 'darwin';
