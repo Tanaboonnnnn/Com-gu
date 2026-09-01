@@ -76,6 +76,7 @@
           <span id="headerSub">Not set up yet</span>
         </span>
         <span class="state">
+          <button class="btn version-btn" id="versionBtn" type="button">Version</button>
           <label class="locale-picker" title="Language">
             <span class="sr-only" data-i18n="language.label">Language</span>
             <select id="localeSelect" aria-label="Language">
@@ -706,6 +707,18 @@
           <svg class="ico" viewBox="0 0 24 24"><use href="#i-pulse" /></svg>Activity
         </button>
       </nav>
+    </div>
+
+    <div class="update-overlay" id="updatePanel" hidden>
+      <section class="update-panel" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+        <h2 id="updateTitle">ComGu update</h2>
+        <p id="updateSummary"></p>
+        <pre id="updateNotes"></pre>
+        <div class="update-actions">
+          <button class="btn" id="updateCancel" type="button">Close</button>
+          <button class="btn btn-solid" id="updateInstall" type="button">Download and install</button>
+        </div>
+      </section>
     </div>
 
     <script type="module" src="./main.ts"></script>

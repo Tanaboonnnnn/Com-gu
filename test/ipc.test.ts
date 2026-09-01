@@ -32,6 +32,15 @@ vi.mock('electron', () => ({
 // This suite owns IPC behavior, not Electron's packaged-vs-checkout path discovery.
 vi.mock('../src/main/extension-path.js', () => ({ extensionDir: () => process.cwd() }));
 
+const updaterCheck = vi.fn();
+const updaterDownload = vi.fn();
+const updaterInstall = vi.fn();
+vi.mock('../src/main/updater.js', () => ({
+  checkForUpdate: updaterCheck,
+  downloadUpdate: updaterDownload,
+  installDownloadedUpdate: updaterInstall
+}));
+
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
 const { initSecretsPath, resetSecretsCacheForTests } = await import('../src/main/secrets.js');
 const { appendEvent, createSession, initSessionStore, resetSessionStoreForTests } = await import('../src/main/session/store.js');
@@ -124,6 +133,9 @@ beforeEach(async () => {
   vi.mocked(shell.openPath).mockReset().mockResolvedValue('');
   vi.mocked(shell.openExternal).mockReset().mockResolvedValue(undefined);
   vi.mocked(app.getVersion).mockReset().mockReturnValue('0.0.0');
+  updaterCheck.mockReset();
+  updaterDownload.mockReset();
+  updaterInstall.mockReset();
   resetSwarm();
   resetBridgeForTests();
   resetWorkspaces();
@@ -134,6 +146,70 @@ beforeEach(async () => {
     ...defaultConfig(),
     sessions: { ...defaultConfig().sessions, record: true },
     multiAgent: { enabled: true, maxWorkers: 3 }
+  });
+});
+
+describe('updater IPC boundary', () => {
+  it('returns only normalized release state and never exposes release asset URLs', async () => {
+    vi.mocked(app.getVersion).mockReturnValue('2.0.2');
+    registerIpc(() => currentWindow as any);
+    updaterCheck.mockResolvedValueOnce({
+      status: 'available',
+      currentVersion: '2.0.2',
+      latestVersion: '2.1.0',
+      releaseName: 'ComGu 2.1.0',
+      releaseNotes: 'Safe notes',
+      releaseUrl: 'https://example.invalid/release',
+      assets: [
+        { name: 'ComGu-Setup-x64.exe', url: 'https://example.invalid/installer' },
+        { name: 'SHA256SUMS.txt', url: 'https://example.invalid/sums' }
+      ]
+    });
+
+    const reply = await handlers.get('update:check')!(null, undefined) as any;
+    expect(reply.ok).toBe(true);
+    expect(reply.data).toEqual({
+      status: 'available',
+      currentVersion: '2.0.2',
+      latestVersion: '2.1.0',
+      releaseName: 'ComGu 2.1.0',
+      releaseNotes: 'Safe notes'
+    });
+    expect(JSON.stringify(reply.data)).not.toMatch(/https?:|ComGu-Setup|SHA256SUMS/);
+  });
+
+  it('downloads and launches only after the explicit install channel is invoked', async () => {
+    vi.mocked(app.getVersion).mockReturnValue('2.0.2');
+    registerIpc(() => currentWindow as any);
+    updaterCheck.mockResolvedValueOnce({
+      status: 'available', currentVersion: '2.0.2', latestVersion: '2.1.0',
+      releaseName: 'ComGu 2.1.0', releaseNotes: '', releaseUrl: 'https://example.invalid/release',
+      assets: [
+        { name: 'ComGu-Setup-x64.exe', url: 'https://example.invalid/installer' },
+        { name: 'SHA256SUMS.txt', url: 'https://example.invalid/sums' }
+      ]
+    });
+    await handlers.get('update:check')!(null, undefined);
+    expect(updaterDownload).not.toHaveBeenCalled();
+    expect(updaterInstall).not.toHaveBeenCalled();
+
+    updaterDownload.mockResolvedValueOnce({
+      status: 'downloaded', version: '2.1.0', installerPath: 'C:\\temp\\ComGu-Setup-x64.exe', sha256: 'a'.repeat(64)
+    });
+    updaterInstall.mockResolvedValueOnce(undefined);
+    const installed = await handlers.get('update:install')!(null, undefined) as any;
+    expect(installed.ok).toBe(true);
+    expect(updaterDownload).toHaveBeenCalledTimes(1);
+    expect(updaterInstall).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(installed.data)).not.toContain('C:\\temp');
+  });
+
+  it('keeps update network failures as normal updater state instead of throwing IPC errors', async () => {
+    vi.mocked(app.getVersion).mockReturnValue('2.0.2');
+    registerIpc(() => currentWindow as any);
+    updaterCheck.mockResolvedValueOnce({ status: 'error', currentVersion: '2.0.2', message: 'Update check failed.' });
+    const reply = await handlers.get('update:check')!(null, undefined) as any;
+    expect(reply).toEqual({ ok: true, data: { status: 'error', currentVersion: '2.0.2', message: 'Update check failed.' } });
   });
 });
 

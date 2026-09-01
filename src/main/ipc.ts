@@ -8,6 +8,7 @@
  * key but can never read it back.
  */
 
+import path from 'node:path';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import { z } from 'zod';
 import { CAPABILITIES, GOAL_REASONING_LEVELS, type AppState, type Config } from '../shared/types.js';
@@ -52,6 +53,29 @@ import {
 import { tokenPressure } from '../shared/session.js';
 import { forgetWorkspaceRoot, renameWorkspaceRoot } from './workspace.js';
 import { hostPlatformInfo } from './platform.js';
+import { checkForUpdate, downloadUpdate, installDownloadedUpdate } from './updater.js';
+import type { UpdateCheckResult } from '../shared/types.js';
+
+type UpdateUiState =
+  | { status: 'idle' | 'checking' | 'unsupported'; currentVersion: string }
+  | { status: 'current'; currentVersion: string; latestVersion: string }
+  | {
+      status: 'available';
+      currentVersion: string;
+      latestVersion: string;
+      releaseName: string;
+      releaseNotes: string;
+    }
+  | { status: 'downloading'; currentVersion: string; latestVersion: string }
+  | { status: 'launched'; currentVersion: string; latestVersion: string }
+  | { status: 'error'; currentVersion: string; message: string };
+
+let runBackgroundUpdateCheck: (() => Promise<void>) | null = null;
+
+/** Called once by startup. Checks only: Policy B never downloads or launches here. */
+export async function checkForUpdatesInBackground(): Promise<void> {
+  await runBackgroundUpdateCheck?.();
+}
 
 /** The only URLs the renderer may ask the OS to open. */
 const ALLOWED_LINKS = new Set([
@@ -267,6 +291,89 @@ function handle<T>(channel: string, fn: (payload: unknown) => Promise<T>): void 
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
+  const push = (channel: string, ...args: unknown[]): void => {
+    const target = getWindow();
+    if (!target || target.isDestroyed()) return;
+    target.webContents.send(channel, ...args);
+  };
+
+  const currentVersion = app.getVersion();
+  let updateState: UpdateUiState = { status: 'idle', currentVersion };
+  let availableRelease: Extract<UpdateCheckResult, { status: 'available' }> | null = null;
+  let updateCheckInFlight: Promise<UpdateUiState> | null = null;
+
+  const publishUpdateState = (next: UpdateUiState): UpdateUiState => {
+    updateState = next;
+    push('update:changed', next);
+    return next;
+  };
+
+  const runUpdateCheck = (): Promise<UpdateUiState> => {
+    if (updateCheckInFlight) return updateCheckInFlight;
+    if (process.platform !== 'win32' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
+      return Promise.resolve(publishUpdateState({ status: 'unsupported', currentVersion }));
+    }
+    publishUpdateState({ status: 'checking', currentVersion });
+    updateCheckInFlight = checkForUpdate({ currentVersion, arch: process.arch }).then((result) => {
+      if (result.status === 'available') {
+        availableRelease = result;
+        return publishUpdateState({
+          status: 'available',
+          currentVersion,
+          latestVersion: result.latestVersion,
+          releaseName: result.releaseName,
+          releaseNotes: result.releaseNotes
+        });
+      }
+      availableRelease = null;
+      return publishUpdateState(result);
+    }).finally(() => {
+      updateCheckInFlight = null;
+    });
+    return updateCheckInFlight;
+  };
+
+  runBackgroundUpdateCheck = async () => {
+    await runUpdateCheck();
+  };
+
+  handle('update:get', async () => updateState);
+  handle('update:check', async () => runUpdateCheck());
+  handle('update:install', async () => {
+    if (!availableRelease) return publishUpdateState({ status: 'error', currentVersion, message: 'Check for an update first.' });
+    if (process.platform !== 'win32' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
+      return publishUpdateState({ status: 'unsupported', currentVersion });
+    }
+    const release = availableRelease;
+    publishUpdateState({ status: 'downloading', currentVersion, latestVersion: release.latestVersion });
+    const downloaded = await downloadUpdate({
+      arch: process.arch,
+      version: release.latestVersion,
+      assets: release.assets,
+      stagingDir: path.join(app.getPath('temp'), 'comgu-updates', `v${release.latestVersion}`)
+    });
+    if (downloaded.status === 'error') {
+      return publishUpdateState({ status: 'error', currentVersion, message: downloaded.message });
+    }
+    try {
+      await installDownloadedUpdate({
+        installerPath: downloaded.installerPath,
+        sha256: downloaded.sha256,
+        launch: async (installerPath) => {
+          const error = await shell.openPath(installerPath);
+          if (error) throw new Error(`Could not open the verified installer: ${error}`);
+        }
+      });
+      return publishUpdateState({ status: 'launched', currentVersion, latestVersion: release.latestVersion });
+    } catch (error) {
+      return publishUpdateState({
+        status: 'error',
+        currentVersion,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   handle('state:get', async () => {
     const state = await buildState();
     // Native package smoke uses this as the end-to-end renderer readiness barrier. Unlike
@@ -643,12 +750,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * sat draining a half-closed tunnel socket forever, with no window, no tray, and the
    * single-instance lock still held.
    */
-  const push = (channel: string, ...args: unknown[]): void => {
-    const target = getWindow();
-    if (!target || target.isDestroyed()) return;
-    target.webContents.send(channel, ...args);
-  };
-
   let statePushGeneration = 0;
   const pushState = (): void => {
     const generation = ++statePushGeneration;

@@ -12,7 +12,7 @@
  * process instead of freezing at a number that is quietly going stale.
  */
 
-import type { AppApi, SettingsPatch } from '../preload/index.js';
+import type { AppApi, SettingsPatch, UpdateUiState } from '../preload/index.js';
 import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
 import type { AppState, Capability, LogEntry, SurfaceStatus } from '../shared/types.js';
 import {
@@ -36,6 +36,34 @@ declare global {
 }
 
 const api = window.api;
+
+let latestUpdateState: UpdateUiState | null = null;
+let updatePanelRequested = false;
+
+function paintUpdate(next: UpdateUiState): void {
+  latestUpdateState = next;
+  const button = $<HTMLButtonElement>('versionBtn');
+  button.disabled = next.status === 'checking' || next.status === 'downloading';
+  button.classList.toggle('has-update', next.status === 'available');
+  button.textContent = next.status === 'available' ? `v${next.latestVersion} available` : `v${next.currentVersion}`;
+
+  if (!updatePanelRequested) return;
+  const panel = $('updatePanel');
+  panel.hidden = false;
+  const install = $<HTMLButtonElement>('updateInstall');
+  install.hidden = next.status !== 'available';
+  install.disabled = next.status === 'downloading';
+  $('updateTitle').textContent = next.status === 'available' ? next.releaseName : 'ComGu update';
+  $('updateNotes').textContent = next.status === 'available' ? next.releaseNotes : '';
+  $('updateSummary').textContent =
+    next.status === 'available' ? `Installed v${next.currentVersion}. v${next.latestVersion} is ready.` :
+    next.status === 'checking' ? 'Checking for updates…' :
+    next.status === 'current' ? `v${next.currentVersion} is up to date.` :
+    next.status === 'downloading' ? `Downloading and verifying v${next.latestVersion}…` :
+    next.status === 'launched' ? 'Verified installer opened. Follow the installer to finish updating.' :
+    next.status === 'unsupported' ? 'Automatic updates are available on Windows x64 and ARM64.' :
+    next.status === 'error' ? next.message : `Installed v${next.currentVersion}.`;
+}
 
 /** Same shape the platform uses; mirrored here only to grey out step 2 until it is valid. */
 const TUNNEL_ID_PATTERN = /^tunnel_[0-9a-f]{32}$/;
@@ -1310,6 +1338,24 @@ $('localeSelect').addEventListener('change', () => {
   void save({ locale });
 });
 
+$('versionBtn').addEventListener('click', async () => {
+  updatePanelRequested = true;
+  paintUpdate(latestUpdateState ?? { status: 'checking', currentVersion: '' });
+  const next = await run(api.checkForUpdate());
+  if (next) paintUpdate(next);
+});
+
+$('updateCancel').addEventListener('click', () => {
+  updatePanelRequested = false;
+  $('updatePanel').hidden = true;
+});
+
+$('updateInstall').addEventListener('click', async () => {
+  if (latestUpdateState?.status !== 'available') return;
+  const next = await run(api.installUpdate());
+  if (next) paintUpdate(next);
+});
+
 $('themeBtn').addEventListener('click', () => {
   if (!state) return;
   // A save can still be waiting on main-process lifecycle work. Toggle from the latest
@@ -1404,6 +1450,7 @@ $('bridgeDownload').addEventListener('click', () => void run(api.downloadExtensi
 api.onStateChanged(apply);
 api.onLogEntry(addLogLine);
 api.onSwarmChanged(paintAgentFilter);
+api.onUpdateStateChanged(paintUpdate);
 
 async function refresh(): Promise<void> {
   const next = await run(api.getState());
@@ -1415,6 +1462,8 @@ initChat({ save: () => save(), state: () => state });
 
 void (async () => {
   await refresh();
+  const update = await run(api.getUpdateState());
+  if (update) paintUpdate(update);
   // A first run has nothing set up, so open on the wizard rather than an empty Home.
   if (state && missingStep(state)?.step === 'folder') showTab('setup');
   const entries = await run(api.getLog());

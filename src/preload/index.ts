@@ -61,8 +61,18 @@ export interface SessionDetail {
   nextFrom: number;
 }
 
+export type UpdateUiState =
+  | { status: 'idle' | 'checking' | 'unsupported'; currentVersion: string }
+  | { status: 'current'; currentVersion: string; latestVersion: string }
+  | { status: 'available'; currentVersion: string; latestVersion: string; releaseName: string; releaseNotes: string }
+  | { status: 'downloading' | 'launched'; currentVersion: string; latestVersion: string }
+  | { status: 'error'; currentVersion: string; message: string };
+
 const api = {
   getState: () => call<AppState>('state:get'),
+  getUpdateState: () => call<UpdateUiState>('update:get'),
+  checkForUpdate: () => call<UpdateUiState>('update:check'),
+  installUpdate: () => call<UpdateUiState>('update:install'),
   saveSettings: (patch: SettingsPatch, base: SettingsPatch) => call<AppState>('settings:save', { patch, base }),
   addRoot: () => call<AppState>('roots:add'),
   removeRoot: (name: string) => call<AppState>('roots:remove', { name }),
@@ -108,6 +118,11 @@ const api = {
     const wrapped = (_event: unknown, state: AppState): void => listener(state);
     ipcRenderer.on('state:changed', wrapped);
     return () => ipcRenderer.removeListener('state:changed', wrapped);
+  },
+  onUpdateStateChanged: (listener: (state: UpdateUiState) => void): (() => void) => {
+    const wrapped = (_event: unknown, state: UpdateUiState): void => listener(state);
+    ipcRenderer.on('update:changed', wrapped);
+    return () => ipcRenderer.removeListener('update:changed', wrapped);
   },
   onLogEntry: (listener: (entry: LogEntry) => void): (() => void) => {
     const wrapped = (_event: unknown, entry: LogEntry): void => listener(entry);

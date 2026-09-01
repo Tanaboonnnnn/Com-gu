@@ -347,6 +347,22 @@ describe('the session timeline', () => {
 });
 
 describe('the window as a whole', () => {
+  it('puts the manual version control immediately left of the language selector', () => {
+    const version = document.getElementById('versionBtn');
+    const locale = document.querySelector('.locale-picker');
+    expect(version).not.toBeNull();
+    expect(locale).not.toBeNull();
+    expect(version!.nextElementSibling).toBe(locale);
+  });
+
+  it('has an initially hidden update confirmation panel with an explicit install action', () => {
+    const panel = document.getElementById('updatePanel');
+    expect(panel).not.toBeNull();
+    expect(panel!.hasAttribute('hidden')).toBe(true);
+    expect(panel!.querySelector('#updateInstall')).not.toBeNull();
+    expect(panel!.querySelector('#updateCancel')).not.toBeNull();
+  });
+
   it('keeps the Home activity strip shorter than the three setup/status cards', () => {
     expect(rule("[data-panel='home']")).toContain('grid-template-rows: 300px minmax(0, 1fr)');
   });

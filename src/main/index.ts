@@ -6,7 +6,7 @@ import path from 'node:path';
 import { app, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session, shell } from 'electron';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
 import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
-import { registerIpc } from './ipc.js';
+import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
 import { logError, logInfo, logWarn } from './logger.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
@@ -342,6 +342,10 @@ void app.whenReady().then(async () => {
   onStatusChange(refreshTray);
 
   logInfo('app started');
+
+  // Policy B: learn whether an update exists once per launch, but never make startup wait
+  // for GitHub and never download or launch an installer without a later explicit user action.
+  void checkForUpdatesInBackground();
 
   // Historical Unattributed repair may legitimately scan and rewrite a large legacy bucket.
   // It is maintenance, not a prerequisite for showing the app or accepting new exact-id

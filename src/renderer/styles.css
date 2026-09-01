@@ -220,6 +220,71 @@ header {
   font-size: 12px;
 }
 
+.version-btn {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.version-btn.has-update {
+  color: var(--ink);
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 42%);
+}
+
+.update-overlay[hidden] {
+  display: none;
+}
+
+.update-panel {
+  width: min(560px, 100%);
+  max-height: min(560px, calc(100vh - 48px));
+  overflow: hidden auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  box-shadow: var(--lift);
+}
+
+.update-panel h2 {
+  margin-bottom: 6px;
+  font-size: 17px;
+}
+
+.update-panel > p {
+  color: var(--soft);
+}
+
+#updateNotes {
+  margin-top: 14px;
+  max-height: 300px;
+  overflow: hidden auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.5 var(--mono);
+  color: var(--soft);
+  background: var(--sunk);
+  border-radius: var(--r-sm);
+  padding: 10px;
+}
+
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
 /* The honest status line: a colour, a word, and how old the proof is. */
 .live {
   display: flex;
