@@ -55,6 +55,7 @@ const {
   failWorkerRevival,
   noteWorkerRevived,
   onReviveRequest,
+  onPrimeWakeRequest,
   pendingWorkerRevivals,
   primeConversationGone,
   WORKER_CONTEXT_CEILING_TOKENS,
@@ -374,6 +375,24 @@ describe('at-least-once delivery', () => {
     expect(ended).toEqual([]);
     expect(swarmRunning()).toBe(true);
     expect(pendingCount(PRIME_ID)).toBe(2);
+  });
+
+  it('requests one exact-prime wake only after worker inbox work becomes publishable', () => {
+    const wakes: string[] = [];
+    onPrimeWakeRequest((conversationId) => wakes.push(conversationId));
+    startSwarm(1);
+    const worker = startWorker('worker-1');
+
+    const staged = stageMessages(worker.caller, [{ to: PRIME_ID, text: 'new worker finding' }]);
+    expect(wakes).toEqual([]);
+    expect(pendingCount(PRIME_ID)).toBe(0);
+
+    staged.commit();
+    expect(wakes).toEqual([PRIME_CHAT]);
+    expect(pendingCount(PRIME_ID)).toBe(1);
+
+    finishAgent(worker.caller, 'worker finished after the finding');
+    expect(wakes).toEqual([PRIME_CHAT, PRIME_CHAT]);
   });
 
   it('releases the global run as soon as the last worker stops while preserving the prime report', () => {

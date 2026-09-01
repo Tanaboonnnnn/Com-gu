@@ -72,6 +72,7 @@ import {
   finishWorkerConversation,
   noteWorkerRevived,
   onReviveRequest,
+  onPrimeWakeRequest,
   onSpawnRequest,
   onSwarmEnd,
   pendingWorkerRevivals,
@@ -262,6 +263,11 @@ type CommandSpec =
    */
   | { type: 'revive'; agent: string; conversationId: string; runId: string }
   /**
+   * One app-authored nudge to the exact prime chat after worker-origin broker work arrives.
+   * It carries no worker data: the durable inbox remains the only source of those reports.
+   */
+  | { type: 'prime-wake'; conversationId: string }
+  /**
    * The replacement chat for a Compact & Resume.
    *
    * Carries the continuation's token rather than the brief: the transaction owns the text,
@@ -382,6 +388,12 @@ const commandLeaseWrites = new Map<string, Promise<boolean>>();
 const commandRedeems = new Map<string, Promise<void>>();
 let requestWindow = { start: Date.now(), count: 0 };
 const listeners = new Set<() => void>();
+/** Worker-report edges waiting for their exact prime chat to become idle. */
+const pendingPrimeWakes = new Set<string>();
+/** A nudge ChatGPT accepted but whose assistant turn has not yet been observed settling. */
+const primeWakeAwaitingTurn = new Set<string>();
+/** Exact primes for which that post-nudge turn_start has been observed. */
+const primeWakeSawTurn = new Set<string>();
 let extensionVersion: string | null = null;
 let versionWarned = false;
 
@@ -841,6 +853,64 @@ function chatIsWorking(conversationId: string): boolean {
   return Boolean(current && (current.generating || current.activeTurnId));
 }
 
+/** Fixed user-turn nudge. Worker result bytes stay exclusively in the durable broker inbox. */
+const PRIME_WAKE_TEXT =
+  'Worker updates are waiting. Call agents action=status now, read the pending reports, then continue the run from them.';
+
+/**
+ * Records one worker-report edge for the exact prime chat and consumes it with one browser
+ * command only when that chat is idle. A command already queued/leased is the latch: more
+ * reports before its ACK are covered by the same status nudge rather than creating a wake loop.
+ */
+function requestPrimeWake(conversationId: string): void {
+  if (!conversationId || agentForOwnedConversation(conversationId) !== PRIME_ID) return;
+  if (commands.some((command) => command.spec.type === 'prime-wake' && command.spec.conversationId === conversationId)) {
+    return;
+  }
+  pendingPrimeWakes.add(conversationId);
+  maybeDeliverPrimeWake(conversationId);
+}
+
+function maybeDeliverPrimeWake(conversationId: string): void {
+  if (!pendingPrimeWakes.has(conversationId)) return;
+  if (agentForOwnedConversation(conversationId) !== PRIME_ID) {
+    pendingPrimeWakes.delete(conversationId);
+    return;
+  }
+  // The previous nudge was accepted as a real user message, but the recorder may not have seen
+  // its ChatGPT turn_start yet. Treat that ACK-to-observation gap as busy too; otherwise a fresh
+  // worker report can submit a second nudge into the same turn before Stop ever mounts.
+  if (primeWakeAwaitingTurn.has(conversationId)) return;
+  // Absence from the recorder is not proof of idleness: the exact prime tab may be closed,
+  // reloading, or not yet have published its current turn. Auto-wake only from affirmative
+  // page-liveness evidence that this conversation exists and has no active/generating turn.
+  const livePrime = liveConversations().find((entry) => entry.conversationId === conversationId);
+  if (!livePrime) return;
+  if (chatIsWorking(conversationId)) return;
+  if (commands.some((command) => command.spec.type === 'prime-wake' && command.spec.conversationId === conversationId)) {
+    pendingPrimeWakes.delete(conversationId);
+    return;
+  }
+  pendingPrimeWakes.delete(conversationId);
+  queue({ type: 'prime-wake', conversationId });
+  void deliver();
+}
+
+function notePrimeWakeLifecycle(conversationId: string, observations: readonly ChatObservation[]): void {
+  if (!primeWakeAwaitingTurn.has(conversationId)) return;
+  if (observations.some((entry) => entry.kind === 'turn_start') || chatIsWorking(conversationId)) {
+    primeWakeSawTurn.add(conversationId);
+  }
+  if (
+    primeWakeSawTurn.has(conversationId) &&
+    observations.some((entry) => entry.kind === 'turn_end') &&
+    !chatIsWorking(conversationId)
+  ) {
+    primeWakeSawTurn.delete(conversationId);
+    primeWakeAwaitingTurn.delete(conversationId);
+  }
+}
+
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const { ok: originAllowed, origin } = originOf(req);
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -1114,6 +1184,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           releaseQuiescentRun();
         }
       }
+      notePrimeWakeLifecycle(id, observations);
+      // A report may have arrived while this exact prime turn was still open. `/events` is
+      // where recorder liveness learns `turn_end`, so re-check the deferred one-shot here rather
+      // than polling or waking from a timer.
+      maybeDeliverPrimeWake(id);
       return json(res, 200, { sessionId: result.sessionId, stored: result.stored }, origin);
     } finally {
       observationWritesInFlight -= 1;
@@ -1907,14 +1982,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       // handed a command that would put nothing, or scaffolding alone, into a real chat.
       return json(res, 404, { error: 'no_such_command' }, origin);
     }
-    if (
-      reportedConversation &&
-      (command.spec.type !== 'revive' || command.spec.conversationId !== reportedConversation)
-    ) {
-      // An existing ChatGPT page is allowed to claim exactly one kind of command: a revival
-      // naming that exact chat. This check happens before the command acquires an owner, so a
-      // copied/stale worker or resume marker cannot steal the real fresh page's lease merely by
-      // being opened inside some already-existing conversation.
+    const exactTarget =
+      command.spec.type === 'revive' || command.spec.type === 'prime-wake' ? command.spec.conversationId : null;
+    if (reportedConversation && exactTarget !== reportedConversation) {
+      // An existing ChatGPT page is allowed to claim only a command naming that exact chat.
+      // This check happens before the command acquires an owner, so a copied/stale worker or
+      // resume marker cannot steal the real fresh page's lease merely by being opened inside
+      // some already-existing conversation.
       return json(res, 409, { error: 'command_wrong_conversation' }, origin);
     }
     // One command, one page. `client` is the page's own per-document id, and the first one
@@ -2113,6 +2187,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
             completedAt: Date.now()
           };
         }
+      } else if (command.spec.type === 'prime-wake') {
+        const wrongChat = conversation !== command.spec.conversationId;
+        receipt = {
+          id,
+          client: client || command.owner,
+          conversationId: conversation,
+          outcome: wrongChat ? 'terminal-failure' : 'committed',
+          committed: !wrongChat,
+          error: wrongChat ? 'the prime wake was acknowledged from a different conversation' : null,
+          completedAt: Date.now()
+        };
       } else if (command.spec.type === 'resume') {
         // Narrowed above.
         if (!conversation) return json(res, 503, { error: 'conversation_required', retryable: true }, origin);
@@ -2320,6 +2405,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       // the receipt itself is durable rather than treating an ambiguous local disk failure as
       // completion.
       return json(res, 503, { error: 'command_receipt_not_durable', retryable: true }, origin);
+    }
+    if (command.spec.type === 'prime-wake' && receipt.committed) {
+      primeWakeAwaitingTurn.add(command.spec.conversationId);
+      // `send()` can make ChatGPT mount the new turn before its ACK reaches the app. Preserve
+      // that already-observed active state so the later turn_end releases the latch instead of
+      // waiting forever for a turn_start that happened a few milliseconds earlier.
+      if (chatIsWorking(command.spec.conversationId)) primeWakeSawTurn.add(command.spec.conversationId);
+      else primeWakeSawTurn.delete(command.spec.conversationId);
     }
     // A failed bootstrap/revival can be the transition that frees the final worker slot, and
     // unlike an MCP call there is no dispatcher epilogue after this ACK. Settle the durable
@@ -2550,6 +2643,7 @@ let bridgeShutdownRequested = false;
 let bridgeRecovering = false;
 let dropSpawnRequestListener: (() => void) | null = null;
 let dropReviveRequestListener: (() => void) | null = null;
+let dropPrimeWakeRequestListener: (() => void) | null = null;
 
 function runStaleSwarmSweep(): Promise<boolean> {
   if (staleSweepInFlight) return staleSweepInFlight;
@@ -2675,6 +2769,13 @@ async function startBridgeOnce(epoch: number): Promise<number | null> {
       dropReviveRequestListener = onReviveRequest((revivals: WorkerRevival[]) => {
         for (const revival of revivals) queueWorkerRevival(revival.id, revival.conversationId);
       });
+      // Worker reports are broker data, not browser-command payload. This listener carries only
+      // the exact prime conversation and asks the bridge for one fixed nudge after that chat is
+      // idle. Repeated reports before the nudge coalesce behind the same one-shot latch.
+      dropPrimeWakeRequestListener?.();
+      dropPrimeWakeRequestListener = onPrimeWakeRequest((conversationId) => {
+        requestPrimeWake(conversationId);
+      });
       // When a run ends — cleared in the app, finished, or taken over by another chat —
       // its worker chats must stop existing everywhere at once. A queued bootstrap that
       // outlives its run is a tab that opens later, introduces itself as a worker of
@@ -2743,6 +2844,8 @@ export async function stopBridge(): Promise<void> {
     dropSpawnRequestListener = null;
     dropReviveRequestListener?.();
     dropReviveRequestListener = null;
+    dropPrimeWakeRequestListener?.();
+    dropPrimeWakeRequestListener = null;
     if (staleSwarmTimer) clearInterval(staleSwarmTimer);
     staleSwarmTimer = null;
     await new Promise<void>((resolve) => {
@@ -2794,6 +2897,7 @@ export function shutdownBridge(): Promise<void> {
 function specKey(spec: CommandSpec): string {
   if (spec.type === 'worker') return `worker:${spec.agent}`;
   if (spec.type === 'revive') return `revive:${spec.agent}`;
+  if (spec.type === 'prime-wake') return `prime-wake:${spec.conversationId}`;
   return `resume:${spec.sessionId}`;
 }
 
@@ -2805,7 +2909,7 @@ function specKey(spec: CommandSpec): string {
  * run A can be adopted by run B after a crash/restart and keep A's command id alive.
  */
 function commandKey(spec: CommandSpec): string {
-  return spec.type === 'resume' ? specKey(spec) : `${specKey(spec)}:${spec.runId}`;
+  return spec.type === 'resume' || spec.type === 'prime-wake' ? specKey(spec) : `${specKey(spec)}:${spec.runId}`;
 }
 
 const commandPhase = (command: Command): CommandPhase => (command.claimedAt === null ? 'queued' : 'leased');
@@ -3384,7 +3488,9 @@ async function deliverOne(): Promise<void> {
   changed();
   // A revival is the one command that must not open a fresh composer: it names the chat the
   // worker already has, so the page lands on it and the marker it redeems names it back.
-  const url = commandUrl(command.id, command.spec.type === 'revive' ? command.spec.conversationId : null);
+  const targetConversation =
+    command.spec.type === 'revive' || command.spec.type === 'prime-wake' ? command.spec.conversationId : null;
+  const url = commandUrl(command.id, targetConversation);
   // The recorder can see a brand-new ChatGPT conversation before that page's content script has
   // redeemed this command. Arm the session-transfer gate before the browser gets any chance to
   // create B, otherwise that early observation invents a shadow session for B and the real A→B
@@ -3392,8 +3498,8 @@ async function deliverOne(): Promise<void> {
   // gate; commit/abort/drop clears it through the continuation state machine.
   if (command.spec.type === 'resume') noteResumeOpening(command.spec.token);
   logInfo(
-    command.spec.type === 'revive'
-      ? `bridge: reopening the ChatGPT chat of ${specKey(command.spec)}`
+    targetConversation
+      ? `bridge: reopening the exact ChatGPT chat for ${specKey(command.spec)}`
       : `bridge: opening a fresh ChatGPT chat for ${specKey(command.spec)}`
   );
   try {
@@ -3416,8 +3522,12 @@ async function deliverOne(): Promise<void> {
  * the app (or a test run) open, and disarmed by `retire()` on every path that finishes a
  * command — so a command that succeeds costs one cleared timer and nothing else.
  */
-function waitingForRevivalReadiness(command: Command): boolean {
-  return command.spec.type === 'revive' && command.claimedAt !== null && command.owner === null;
+function waitingForExactChatReadiness(command: Command): boolean {
+  return (
+    (command.spec.type === 'revive' || command.spec.type === 'prime-wake') &&
+    command.claimedAt !== null &&
+    command.owner === null
+  );
 }
 
 function commandDeadlineDelay(command: Command, now = Date.now()): number | null {
@@ -3428,7 +3538,7 @@ function commandDeadlineDelay(command: Command, now = Date.now()): number | null
   // a failed broker revival. Once a document actually redeems (`owner !== null`), the ordinary
   // short acknowledgement deadline applies again: text may be about to cross the irreversible
   // send boundary and a dead document must not own it indefinitely.
-  if (waitingForRevivalReadiness(command)) return null;
+  if (waitingForExactChatReadiness(command)) return null;
   const claimedAt = command.claimedAt ?? now;
   return claimedAt + COMMAND_DEADLINE_MS - now;
 }
@@ -3539,6 +3649,7 @@ function retire(command: Command, why: string): void {
  * anything at all.
  */
 function bootstrapText(spec: CommandSpec, summary: string): string {
+  if (spec.type === 'prime-wake') return PRIME_WAKE_TEXT;
   if (spec.type === 'revive') {
     // Written by the broker, out of that worker's own inbox, at the moment the page asks.
     // Empty means the broker no longer considers this worker to be waking, and an empty
@@ -3598,10 +3709,10 @@ function describe(command: Command, client: string | null, claimedSummary?: stri
     kind: 'open-chat',
     type: spec.type,
     text,
-    agent: spec.type === 'resume' ? null : spec.agent,
+    agent: spec.type === 'worker' || spec.type === 'revive' ? spec.agent : null,
     // The fence the page enforces before it types. Only a revival has one: the other two
     // kinds open a chat that does not exist yet, so there is nothing to compare against.
-    conversationId: spec.type === 'revive' ? spec.conversationId : null
+    conversationId: spec.type === 'revive' || spec.type === 'prime-wake' ? spec.conversationId : null
   };
 }
 
@@ -3677,10 +3788,20 @@ function tidyCommands(): void {
   const wakingWorkers = new Set(pendingWorkerRevivals().map((revival) => revival.id));
   for (const command of [...commands]) {
     const workerAgent = command.spec.type === 'worker' ? command.spec.agent : null;
-    if (command.spec.type !== 'resume' && command.spec.runId !== runId) {
+    if (
+      (command.spec.type === 'worker' || command.spec.type === 'revive') &&
+      command.spec.runId !== runId
+    ) {
       // Run turnover is an identity boundary. A command from the retired incarnation is not
       // evidence that the same friendly worker id in the current run is already opening.
       retire(command, `its worker run ${command.spec.runId} is no longer current`);
+      continue;
+    }
+    if (
+      command.spec.type === 'prime-wake' &&
+      agentForOwnedConversation(command.spec.conversationId) !== PRIME_ID
+    ) {
+      retire(command, 'its exact prime conversation no longer owns an agent history');
       continue;
     }
     if (command.spec.type === 'revive' && !wakingWorkers.has(command.spec.agent)) {
@@ -3697,7 +3818,7 @@ function tidyCommands(): void {
       retire(command, 'its worker is bound and running');
       continue;
     }
-    if (now - command.createdAt > COMMAND_TTL_MS && !waitingForRevivalReadiness(command)) {
+    if (now - command.createdAt > COMMAND_TTL_MS && !waitingForExactChatReadiness(command)) {
       drop(command, 'it has been waiting too long to still be what the user expects');
     }
   }
@@ -3706,7 +3827,7 @@ function tidyCommands(): void {
 /** Whether a page is already working on this command, with time still on its deadline. */
 const isLeased = (command: Command): boolean => {
   if (command.claimedAt === null) return false;
-  if (waitingForRevivalReadiness(command)) return true;
+  if (waitingForExactChatReadiness(command)) return true;
   if (Date.now() - command.claimedAt < COMMAND_DEADLINE_MS) return true;
   if (command.spec.type !== 'resume') return false;
   const state = continuationByToken(command.spec.token)?.state;
@@ -3727,8 +3848,8 @@ function nextDeliverable(): Command | null {
   // open attempt. It must stay durable without monopolising the global browser-delivery slot:
   // unrelated workers/resumes can still open their own marker-addressed pages while this one
   // waits. A document-owned lease remains exclusive and still blocks the next irreversible send.
-  if (commands.some((command) => isLeased(command) && !waitingForRevivalReadiness(command))) return null;
-  return commands.find((command) => !waitingForRevivalReadiness(command)) ?? null;
+  if (commands.some((command) => isLeased(command) && !waitingForExactChatReadiness(command))) return null;
+  return commands.find((command) => !waitingForExactChatReadiness(command)) ?? null;
 }
 
 /**
@@ -3751,7 +3872,7 @@ function commandOrigin(id: string): SessionOrigin | null {
   // A revival opens no chat, so it names none. The conversation it lands in was recorded as a
   // worker chat when it was first opened, and rewriting that origin now would only overwrite
   // the task this worker was actually created for with whatever it is being asked next.
-  if (spec.type === 'revive') return null;
+  if (spec.type === 'revive' || spec.type === 'prime-wake') return null;
   return { kind: 'resume', fromSessionId: spec.sessionId, agentId: null, task: '' };
 }
 
@@ -3874,6 +3995,15 @@ function restoredCommandSpec(version: number, raw: Partial<CommandSpec>): Comman
     return { type: 'revive', agent: revive.agent, conversationId: revive.conversationId, runId: revive.runId };
   }
   if (
+    version >= 4 &&
+    raw.type === 'prime-wake' &&
+    typeof (raw as Partial<Extract<CommandSpec, { type: 'prime-wake' }>>).conversationId === 'string'
+  ) {
+    const wake = raw as Extract<CommandSpec, { type: 'prime-wake' }>;
+    if (agentForOwnedConversation(wake.conversationId) !== PRIME_ID) return null;
+    return { type: 'prime-wake', conversationId: wake.conversationId };
+  }
+  if (
     raw.type === 'resume' &&
     typeof (raw as Partial<Extract<CommandSpec, { type: 'resume' }>>).sessionId === 'string' &&
     typeof (raw as Partial<Extract<CommandSpec, { type: 'resume' }>>).token === 'string'
@@ -3914,7 +4044,13 @@ function planCommandRestore(
   now: number
 ): CommandRestorePlan | null {
   const version = saved.version;
-  if (version !== 1 && version !== 2 && version !== 3 && version !== 4 || !Array.isArray(saved.commands)) return null;
+  if (
+    version !== 1 &&
+    version !== 2 &&
+    version !== 3 &&
+    version !== 4 ||
+    !Array.isArray(saved.commands)
+  ) return null;
 
   const plannedCommands = [...commands];
   const plannedReceipts = commandReceipts
@@ -4002,7 +4138,7 @@ function planCommandRestore(
   for (const command of plannedCommands) {
     if (
       command.spec.type !== 'revive' ||
-      waitingForRevivalReadiness(command) ||
+      waitingForExactChatReadiness(command) ||
       now - command.createdAt <= COMMAND_TTL_MS
     ) continue;
     expiredRevivals.push({ id: command.id, spec: command.spec });
@@ -4114,6 +4250,9 @@ export function resetBridgeForTests(): void {
   browserPresenceTimer = null;
   commands = [];
   commandReceipts = [];
+  pendingPrimeWakes.clear();
+  primeWakeAwaitingTurn.clear();
+  primeWakeSawTurn.clear();
   commandRetirementsAwaitingBroker.clear();
   commandLeaseWrites.clear();
   commandRedeems.clear();

@@ -341,6 +341,7 @@ const dormantRuns = new Map<string, DormantRun>();
 let livenessFloor = 0;
 
 let spawnRequest: ((workers: WorkerSpawn[]) => void) | null = null;
+let primeWakeRequest: ((conversationId: string) => void) | null = null;
 const listeners = new Set<() => void>();
 const endListeners = new Set<(reason: string, retired: RetiredChat[]) => void>();
 let persist: (() => void) | null = null;
@@ -556,6 +557,23 @@ export function onSpawnRequest(handler: (workers: WorkerSpawn[]) => void): () =>
   return () => {
     if (spawnRequest === handler) spawnRequest = null;
   };
+}
+
+/**
+ * Registers the browser-side nudge requested when new worker-origin work becomes visible in
+ * the prime inbox. This is an edge notification, not an inbox reader: unread reports remain
+ * durable broker data and are still delivered/acknowledged only through the normal agents tool.
+ */
+export function onPrimeWakeRequest(handler: (conversationId: string) => void): () => void {
+  primeWakeRequest = handler;
+  return () => {
+    if (primeWakeRequest === handler) primeWakeRequest = null;
+  };
+}
+
+function requestPrimeWake(prime: Agent): void {
+  const conversationId = prime.info.conversationId;
+  if (conversationId && primeWakeRequest) primeWakeRequest(conversationId);
 }
 
 // ------------------------------------------------------------------ identity
@@ -1597,6 +1615,9 @@ function stageMessagesActive(
       // No new durable fact: the exact queue entries were already in the snapshot that crossed
       // the acceptance barrier. This only publishes them to live inbox readers and the UI.
       changed('telemetry');
+      for (const recipient of recipients) {
+        if (recipient.info.role === 'prime') requestPrimeWake(recipient);
+      }
     },
     rollback: () => {
       if (settled) return;
@@ -1975,6 +1996,7 @@ function publishFinish(agent: Agent, info: AgentInfo, report: AgentMessage, dura
   recount(prime);
   logInfo(`multi-agent: ${agent.info.id} ${info.state === 'finished' ? 'finished for good' : 'is sleeping'}`);
   changed(durability);
+  requestPrimeWake(prime);
 }
 
 /** Whether this exact run object still owns its agent map, active or parked. */
@@ -2160,6 +2182,7 @@ export function failAgent(
   recount(prime);
   logWarn(`multi-agent: ${id} failed — ${reason}`);
   changed();
+  requestPrimeWake(prime);
   return { info: { ...agent.info }, report: { ...report }, repeat: false };
 }
 
@@ -2207,6 +2230,7 @@ function sleepAgent(agent: Agent, reason: string): FinishResult | null {
   recount(prime);
   logInfo(`multi-agent: ${agent.info.id} ${terminal ? 'finished for good' : 'is sleeping'} — ${reason}`);
   changed();
+  requestPrimeWake(prime);
   return { info: { ...agent.info }, report: { ...report }, repeat: false };
 }
 
@@ -2579,6 +2603,7 @@ function finishStoppedWorkerAtCeiling(agent: Agent, reason: string, sleptAt = Da
   if (!prime) throw new AgentError(`Cannot find the prime that owns ${agent.info.id}.`);
   prime.queue.push(report);
   recount(prime);
+  requestPrimeWake(prime);
   return report;
 }
 
@@ -2637,6 +2662,7 @@ export function failWorkerRevival(id: string, why: string): AgentMessage | null 
   recount(prime);
   logWarn(`multi-agent: could not wake ${id} — ${why}`);
   changed();
+  requestPrimeWake(prime);
   return report;
 }
 
@@ -2913,6 +2939,7 @@ export function noteAgentAlive(conversationId: string | null | undefined, source
     const prime = primeAgent();
     prime.queue.push(report);
     recount(prime);
+    requestPrimeWake(prime);
   }
   logInfo(`multi-agent: ${agent.info.id} revived from ${was} — conversation ${conversationId} is still alive (${source})`);
   changed();
@@ -3862,6 +3889,7 @@ export function resetAgentsForTests(): void {
   retiredWorkers.clear();
   livenessFloor = 0;
   spawnRequest = null;
+  primeWakeRequest = null;
   reviveRequest = null;
   persist = null;
   persistNow = null;

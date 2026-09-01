@@ -354,6 +354,156 @@ describe('who is allowed to talk to it', () => {
   });
 });
 
+// -------------------------------------------------------------- prime wake
+
+describe('prime inbox auto-wake', () => {
+  const primeChat = 'aaaaaaaa-1111-4222-8333-aaaaaaaaaaaa';
+  const workerChat = 'bbbbbbbb-1111-4222-8333-bbbbbbbbbbbb';
+
+  it('opens only the exact idle prime chat with a fixed app nudge and leaves worker reports unread', async () => {
+    await pair();
+    spawn({ workers: [{ task: 'report one result' }], caller: { conversationId: primeChat } });
+    await waitForOpened(1);
+    const workerBoot = await redeem(undefined, 'worker-tab');
+    const workerAck = await request('POST', '/commands/ack', {
+      body: { id: workerBoot.id, client: 'worker-tab', status: 'sent', conversationId: workerChat, agent: 'worker-1' }
+    });
+    expect(workerAck.status).toBe(200);
+    opened.length = 0;
+    anonymousRedeemIndex = 0;
+    await request('POST', '/events', {
+      body: {
+        conversationId: primeChat,
+        events: [
+          { kind: 'turn_start', time: Date.now(), turnId: 'prime-idle-proof' },
+          { kind: 'turn_end', time: Date.now() + 1, turnId: 'prime-idle-proof', outcome: 'completed' }
+        ]
+      }
+    });
+
+    finishAgent({ conversationId: workerChat }, 'SECRET-WORKER-RESULT that must stay in the broker inbox');
+    await waitForOpened(1);
+
+    const url = new URL(opened[0]!);
+    expect(url.pathname).toBe(`/c/${primeChat}`);
+    expect([...url.searchParams.keys()]).toEqual(['clf']);
+    expect(opened[0]).not.toContain('SECRET-WORKER-RESULT');
+    expect(pendingCommands().map((entry) => entry.what)).toEqual([`prime-wake:${primeChat}`]);
+
+    const id = url.searchParams.get('clf')!;
+    const redeemed = await request('POST', '/commands/redeem', {
+      body: { id, client: 'prime-tab', conversationId: primeChat }
+    });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body.command).toMatchObject({
+      type: 'prime-wake',
+      conversationId: primeChat,
+      agent: null
+    });
+    expect(redeemed.body.command.text).toContain('agents action=status');
+    expect(redeemed.body.command.text).not.toContain('SECRET-WORKER-RESULT');
+
+    const ack = await request('POST', '/commands/ack', {
+      body: { id, client: 'prime-tab', status: 'sent', conversationId: primeChat }
+    });
+    expect(ack.status).toBe(200);
+    expect(pendingCommands()).toEqual([]);
+    expect(swarmStateForCaller({ conversationId: primeChat }).agents.find((entry) => entry.id === PRIME_ID)?.pending).toBe(1);
+  });
+
+  it('coalesces reports while the prime is busy and wakes once when that exact turn settles', async () => {
+    await pair();
+    spawn({ workers: [{ task: 'send findings' }], caller: { conversationId: primeChat } });
+    await waitForOpened(1);
+    const workerBoot = await redeem(undefined, 'worker-tab');
+    const workerAck = await request('POST', '/commands/ack', {
+      body: { id: workerBoot.id, client: 'worker-tab', status: 'sent', conversationId: workerChat, agent: 'worker-1' }
+    });
+    expect(workerAck.status).toBe(200);
+    opened.length = 0;
+    anonymousRedeemIndex = 0;
+
+    await request('POST', '/events', {
+      body: {
+        conversationId: primeChat,
+        events: [{ kind: 'turn_start', time: Date.now(), turnId: 'prime-busy-turn' }]
+      }
+    });
+    const first = stageMessages({ conversationId: workerChat }, [{ to: PRIME_ID, text: 'finding one' }]);
+    first.commit();
+    const second = stageMessages({ conversationId: workerChat }, [{ to: PRIME_ID, text: 'finding two' }]);
+    second.commit();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(opened).toEqual([]);
+    expect(pendingCommands()).toEqual([]);
+
+    await request('POST', '/events', {
+      body: {
+        conversationId: primeChat,
+        events: [{ kind: 'turn_end', time: Date.now(), turnId: 'prime-busy-turn', outcome: 'completed' }]
+      }
+    });
+    await waitForOpened(1);
+    expect(pendingCommands().map((entry) => entry.what)).toEqual([`prime-wake:${primeChat}`]);
+
+    await request('POST', '/events', { body: { conversationId: primeChat, events: [] } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(opened).toHaveLength(1);
+  });
+
+  it('does not overlap a second wake in the ACK-to-turn-start gap of the first nudge', async () => {
+    await pair();
+    spawn({ workers: [{ task: 'send sequential findings' }], caller: { conversationId: primeChat } });
+    await waitForOpened(1);
+    const workerBoot = await redeem(undefined, 'worker-tab');
+    expect((await request('POST', '/commands/ack', {
+      body: { id: workerBoot.id, client: 'worker-tab', status: 'sent', conversationId: workerChat, agent: 'worker-1' }
+    })).status).toBe(200);
+    opened.length = 0;
+    anonymousRedeemIndex = 0;
+    await request('POST', '/events', {
+      body: {
+        conversationId: primeChat,
+        events: [
+          { kind: 'turn_start', time: Date.now(), turnId: 'prime-idle-before-wake' },
+          { kind: 'turn_end', time: Date.now() + 1, turnId: 'prime-idle-before-wake', outcome: 'completed' }
+        ]
+      }
+    });
+
+    const first = stageMessages({ conversationId: workerChat }, [{ to: PRIME_ID, text: 'first report' }]);
+    first.commit();
+    await waitForOpened(1);
+    const firstWakeId = new URL(opened[0]!).searchParams.get('clf')!;
+    expect((await request('POST', '/commands/redeem', {
+      body: { id: firstWakeId, client: 'prime-tab', conversationId: primeChat }
+    })).status).toBe(200);
+    expect((await request('POST', '/commands/ack', {
+      body: { id: firstWakeId, client: 'prime-tab', status: 'sent', conversationId: primeChat }
+    })).status).toBe(200);
+    opened.length = 0;
+
+    // The send ACK arrives before the recorder necessarily sees ChatGPT mount Stop/turn_start.
+    // New worker data in this gap must latch, not submit another user nudge into the same turn.
+    const second = stageMessages({ conversationId: workerChat }, [{ to: PRIME_ID, text: 'second report' }]);
+    second.commit();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(opened).toEqual([]);
+
+    await request('POST', '/events', {
+      body: { conversationId: primeChat, events: [{ kind: 'turn_start', time: Date.now(), turnId: 'wake-turn' }] }
+    });
+    expect(opened).toEqual([]);
+    await request('POST', '/events', {
+      body: {
+        conversationId: primeChat,
+        events: [{ kind: 'turn_end', time: Date.now(), turnId: 'wake-turn', outcome: 'completed' }]
+      }
+    });
+    await waitForOpened(1);
+  });
+});
+
 // -------------------------------------------------------------- provisioning
 
 describe('provisioning', () => {
