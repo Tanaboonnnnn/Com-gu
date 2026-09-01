@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComGu companion",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "description": "Records your ChatGPT session into the local ComGu app and labels its MCP tool calls with what they actually did.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "scripting", "alarms"],

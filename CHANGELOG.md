@@ -9,6 +9,30 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
+## [3.0.0] — 2026-09-02
+
+3.0 is the major ComGu integration release: complete ComGu identity/migration, full live Thai UI, verified cross-platform updates, Windows launch-at-login, browser-family affinity, durable prime auto-wake, and hardening around ChatGPT approval/Fiber orchestration.
+
+### Added
+- Verified updater targets for Windows EXE, macOS DMG, Linux DEB and AppImage with exact asset matching and SHA-256 verification.
+- Windows launch-at-login control backed by the actual Electron login-item state.
+- Setup browser-family selection for Brave, Chrome, Edge and Chromium, including `same as prime` affinity.
+- Durable one-shot prime wake when worker reports arrive while the exact prime conversation is idle.
+
+### Changed
+- Completed ComGu application/package/installer identity and copy-first migration of legacy config and encrypted secrets.
+- Expanded natural Thai localization across desktop, diagnostics, updater and companion-extension UI with live switching.
+- Worker spawn, revival, Compact & Resume and prime wake now preserve proven browser family and fail closed when an explicit target is unavailable.
+- Updater IPC is platform-neutral and never auto-downloads or auto-installs an available release.
+- Release support is Apple-silicon-only on macOS; Linux continues to ship x64/ARM64 DEB and AppImage packages.
+
+### Fixed
+- Preserved native ChatGPT approval controls when ComGu renders replacement activity.
+- Refreshed hidden-tab terminal Fiber scans so Goal/continuation state can settle correctly.
+- Reduced load sensitivity in PowerShell pipeline integration probes without weakening their shell-behavior assertions.
+
+### Known release caveat
+- macOS DMG/ZIP artifacts are publisher-unsigned and unnotarized. Gatekeeper may warn on first open.
 ## [2.0.2] — 2026-08-26
 
 2.0.2 is the first **ComGu** friend build: a rebrand and continuation of the original project with
