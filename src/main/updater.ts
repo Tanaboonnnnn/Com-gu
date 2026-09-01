@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
-  UpdateArch,
   UpdateAsset,
+  UpdateTarget,
   UpdateCheckResult,
   UpdateDownloadResult
 } from '../shared/types.js';
@@ -29,8 +29,26 @@ interface GitHubRelease {
   assets?: unknown;
 }
 
-export function installerAssetName(arch: UpdateArch): string {
-  return `ComGu-Setup-${arch}.exe`;
+export function installerAssetName(target: UpdateTarget): string {
+  if (target.platform === 'win32') return `ComGu-Setup-${target.arch}.exe`;
+  if (target.platform === 'darwin') return `ComGu-macOS-${target.arch}.dmg`;
+  return target.linuxFormat === 'appimage'
+    ? `ComGu-Linux-${target.arch}.AppImage`
+    : `ComGu-Linux-${target.arch}.deb`;
+}
+
+export function resolveUpdateTarget(
+  platform: string,
+  arch: string,
+  env: Readonly<Record<string, string | undefined>> = process.env
+): UpdateTarget | null {
+  if (arch !== 'x64' && arch !== 'arm64') return null;
+  if (platform === 'win32') return { platform: 'win32', arch };
+  if (platform === 'darwin') return arch === 'arm64' ? { platform: 'darwin', arch: 'arm64' } : null;
+  if (platform === 'linux') {
+    return { platform: 'linux', arch, linuxFormat: env.APPIMAGE ? 'appimage' : 'deb' };
+  }
+  return null;
 }
 
 function parseSemver(value: string): [number, number, number] | null {
@@ -69,7 +87,7 @@ function releaseAssets(value: unknown): UpdateAsset[] | null {
 
 export async function checkForUpdate(options: {
   currentVersion: string;
-  arch: UpdateArch;
+  target: UpdateTarget;
   fetcher?: Fetcher;
 }): Promise<UpdateCheckResult> {
   const fetcher = options.fetcher ?? fetch;
@@ -89,7 +107,7 @@ export async function checkForUpdate(options: {
     }
 
     const assets = releaseAssets(release.assets);
-    if (!assets || !exactAsset(assets, installerAssetName(options.arch)) || !exactAsset(assets, CHECKSUM_ASSET)) {
+    if (!assets || !exactAsset(assets, installerAssetName(options.target)) || !exactAsset(assets, CHECKSUM_ASSET)) {
       throw new Error('release assets are ambiguous or incomplete');
     }
     if (typeof release.html_url !== 'string') throw new Error('missing release URL');
@@ -100,7 +118,7 @@ export async function checkForUpdate(options: {
       releaseName: typeof release.name === 'string' ? release.name : release.tag_name,
       releaseNotes: typeof release.body === 'string' ? release.body : '',
       releaseUrl: release.html_url,
-      assets: [exactAsset(assets, installerAssetName(options.arch))!, exactAsset(assets, CHECKSUM_ASSET)!]
+      assets: [exactAsset(assets, installerAssetName(options.target))!, exactAsset(assets, CHECKSUM_ASSET)!]
     };
   } catch {
     return { status: 'error', currentVersion: options.currentVersion, message: 'Update check failed.' };
@@ -108,13 +126,13 @@ export async function checkForUpdate(options: {
 }
 
 export async function downloadUpdate(options: {
-  arch: UpdateArch;
+  target: UpdateTarget;
   version: string;
   assets: UpdateAsset[];
   stagingDir: string;
   fetcher?: Fetcher;
 }): Promise<UpdateDownloadResult> {
-  const installerName = installerAssetName(options.arch);
+  const installerName = installerAssetName(options.target);
   const installerAsset = exactAsset(options.assets, installerName);
   const checksumAsset = exactAsset(options.assets, CHECKSUM_ASSET);
   if (!installerAsset || !checksumAsset) return { status: 'error', message: 'Release assets are incomplete.' };
@@ -138,6 +156,9 @@ export async function downloadUpdate(options: {
     }
     await mkdir(options.stagingDir, { recursive: true });
     await writeFile(installerPath, installer, { flag: 'w' });
+    if (options.target.platform === 'linux' && options.target.linuxFormat === 'appimage') {
+      await chmod(installerPath, 0o755);
+    }
     return { status: 'downloaded', version: options.version, installerPath, sha256: actual };
   } catch {
     await rm(installerPath, { force: true }).catch(() => undefined);

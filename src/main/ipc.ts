@@ -53,7 +53,7 @@ import {
 import { tokenPressure } from '../shared/session.js';
 import { forgetWorkspaceRoot, renameWorkspaceRoot } from './workspace.js';
 import { hostPlatformInfo } from './platform.js';
-import { checkForUpdate, downloadUpdate, installDownloadedUpdate } from './updater.js';
+import { checkForUpdate, downloadUpdate, installDownloadedUpdate, resolveUpdateTarget } from './updater.js';
 import { launchAtLoginState, setLaunchAtLogin } from './startup.js';
 import { installedBrowserFamilies } from './browser.js';
 import type { UpdateCheckResult } from '../shared/types.js';
@@ -316,11 +316,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   const runUpdateCheck = (): Promise<UpdateUiState> => {
     if (updateCheckInFlight) return updateCheckInFlight;
-    if (process.platform !== 'win32' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
-      return Promise.resolve(publishUpdateState({ status: 'unsupported', currentVersion }));
-    }
+    const target = resolveUpdateTarget(process.platform, process.arch, process.env);
+    if (!target) return Promise.resolve(publishUpdateState({ status: 'unsupported', currentVersion }));
     publishUpdateState({ status: 'checking', currentVersion });
-    updateCheckInFlight = checkForUpdate({ currentVersion, arch: process.arch }).then((result) => {
+    updateCheckInFlight = checkForUpdate({ currentVersion, target }).then((result) => {
       if (result.status === 'available') {
         availableRelease = result;
         return publishUpdateState({
@@ -355,13 +354,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle('update:check', async () => runUpdateCheck());
   handle('update:install', async () => {
     if (!availableRelease) return publishUpdateState({ status: 'error', currentVersion, message: 'Check for an update first.' });
-    if (process.platform !== 'win32' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
-      return publishUpdateState({ status: 'unsupported', currentVersion });
-    }
+    const target = resolveUpdateTarget(process.platform, process.arch, process.env);
+    if (!target) return publishUpdateState({ status: 'unsupported', currentVersion });
     const release = availableRelease;
     publishUpdateState({ status: 'downloading', currentVersion, latestVersion: release.latestVersion });
     const downloaded = await downloadUpdate({
-      arch: process.arch,
+      target,
       version: release.latestVersion,
       assets: release.assets,
       stagingDir: path.join(app.getPath('temp'), 'comgu-updates', `v${release.latestVersion}`)

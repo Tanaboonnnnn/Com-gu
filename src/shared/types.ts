@@ -388,6 +388,12 @@ export interface BridgeStatus {
 }
 
 export type UpdateArch = 'x64' | 'arm64';
+export type UpdatePlatform = 'win32' | 'darwin' | 'linux';
+export type UpdateLinuxFormat = 'appimage' | 'deb';
+export type UpdateTarget =
+  | { platform: 'win32'; arch: UpdateArch }
+  | { platform: 'darwin'; arch: 'arm64' }
+  | { platform: 'linux'; arch: UpdateArch; linuxFormat: UpdateLinuxFormat };
 
 export interface UpdateAsset {
   name: string;

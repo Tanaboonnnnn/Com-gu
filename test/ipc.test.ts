@@ -35,11 +35,15 @@ vi.mock('../src/main/extension-path.js', () => ({ extensionDir: () => process.cw
 const updaterCheck = vi.fn();
 const updaterDownload = vi.fn();
 const updaterInstall = vi.fn();
-vi.mock('../src/main/updater.js', () => ({
-  checkForUpdate: updaterCheck,
-  downloadUpdate: updaterDownload,
-  installDownloadedUpdate: updaterInstall
-}));
+vi.mock('../src/main/updater.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/main/updater.js')>();
+  return {
+    ...actual,
+    checkForUpdate: updaterCheck,
+    downloadUpdate: updaterDownload,
+    installDownloadedUpdate: updaterInstall
+  };
+});
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
 const { initSecretsPath, resetSecretsCacheForTests } = await import('../src/main/secrets.js');

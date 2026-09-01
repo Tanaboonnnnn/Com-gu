@@ -8,7 +8,8 @@ import {
   checkForUpdate,
   downloadUpdate,
   installerAssetName,
-  installDownloadedUpdate
+  installDownloadedUpdate,
+  resolveUpdateTarget
 } from '../src/main/updater.js';
 
 const RELEASE_URL = 'https://github.com/Tanaboonnnnn/Com-gu/releases/tag/v2.1.0';
@@ -33,9 +34,21 @@ function release(assets: Array<{ name: string; browser_download_url: string }>, 
 }
 
 describe('updater core', () => {
-  it('maps Windows architectures to exact installer asset names', () => {
-    expect(installerAssetName('x64')).toBe('ComGu-Setup-x64.exe');
-    expect(installerAssetName('arm64')).toBe('ComGu-Setup-arm64.exe');
+  it('maps each supported host to the exact release asset users can install', () => {
+    expect(installerAssetName({ platform: 'win32', arch: 'x64' })).toBe('ComGu-Setup-x64.exe');
+    expect(installerAssetName({ platform: 'win32', arch: 'arm64' })).toBe('ComGu-Setup-arm64.exe');
+    expect(installerAssetName({ platform: 'darwin', arch: 'arm64' })).toBe('ComGu-macOS-arm64.dmg');
+    expect(installerAssetName({ platform: 'linux', arch: 'x64', linuxFormat: 'deb' })).toBe('ComGu-Linux-x64.deb');
+    expect(installerAssetName({ platform: 'linux', arch: 'arm64', linuxFormat: 'appimage' })).toBe('ComGu-Linux-arm64.AppImage');
+  });
+
+  it('derives a safe updater target from the host and Linux package form', () => {
+    expect(resolveUpdateTarget('win32', 'x64', {})).toEqual({ platform: 'win32', arch: 'x64' });
+    expect(resolveUpdateTarget('darwin', 'arm64', {})).toEqual({ platform: 'darwin', arch: 'arm64' });
+    expect(resolveUpdateTarget('darwin', 'x64', {})).toBeNull();
+    expect(resolveUpdateTarget('linux', 'x64', { APPIMAGE: '/opt/ComGu.AppImage' })).toEqual({ platform: 'linux', arch: 'x64', linuxFormat: 'appimage' });
+    expect(resolveUpdateTarget('linux', 'arm64', {})).toEqual({ platform: 'linux', arch: 'arm64', linuxFormat: 'deb' });
+    expect(resolveUpdateTarget('freebsd', 'x64', {})).toBeNull();
   });
 
   it('reports a newer stable release without downloading anything', async () => {
@@ -49,7 +62,7 @@ describe('updater core', () => {
       )
     );
 
-    const result = await checkForUpdate({ currentVersion: '2.0.2', arch: 'x64', fetcher });
+    const result = await checkForUpdate({ currentVersion: '2.0.2', target: { platform: 'win32', arch: 'x64' }, fetcher });
 
     expect(result).toEqual({
       status: 'available',
@@ -71,7 +84,7 @@ describe('updater core', () => {
       jsonResponse({ ...release([]), tag_name: 'v2.0.2' })
     );
 
-    await expect(checkForUpdate({ currentVersion: '2.0.2', arch: 'x64', fetcher })).resolves.toEqual({
+    await expect(checkForUpdate({ currentVersion: '2.0.2', target: { platform: 'win32', arch: 'x64' }, fetcher })).resolves.toEqual({
       status: 'current',
       currentVersion: '2.0.2',
       latestVersion: '2.0.2'
@@ -87,7 +100,7 @@ describe('updater core', () => {
       ]
     ]) {
       const fetcher = vi.fn(async () => jsonResponse(release(assets)));
-      const result = await checkForUpdate({ currentVersion: '2.0.2', arch: 'x64', fetcher });
+      const result = await checkForUpdate({ currentVersion: '2.0.2', target: { platform: 'win32', arch: 'x64' }, fetcher });
       expect(result.status).toBe('error');
     }
   });
@@ -97,7 +110,7 @@ describe('updater core', () => {
       throw new Error('offline');
     });
 
-    const result = await checkForUpdate({ currentVersion: '2.0.2', arch: 'x64', fetcher });
+    const result = await checkForUpdate({ currentVersion: '2.0.2', target: { platform: 'win32', arch: 'x64' }, fetcher });
     expect(result).toEqual({ status: 'error', currentVersion: '2.0.2', message: 'Update check failed.' });
   });
 
@@ -113,7 +126,7 @@ describe('updater core', () => {
     });
 
     const downloaded = await downloadUpdate({
-      arch: 'x64',
+      target: { platform: 'win32', arch: 'x64' },
       version: '2.1.0',
       assets: [
         { name: 'ComGu-Setup-x64.exe', url: 'https://download/x64' },
@@ -139,7 +152,7 @@ describe('updater core', () => {
     );
 
     const result = await downloadUpdate({
-      arch: 'x64',
+      target: { platform: 'win32', arch: 'x64' },
       version: '2.1.0',
       assets: [
         { name: 'ComGu-Setup-x64.exe', url: 'https://download/x64' },
