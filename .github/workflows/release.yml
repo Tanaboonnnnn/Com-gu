@@ -191,7 +191,7 @@ jobs:
         run: |
           set -euo pipefail
           deb_smoke_root="$(mktemp -d)"
-          trap 'rm -rf "$deb_smoke_root"' EXIT
+          trap 'rm -rf "$deb_smoke_root" || true' EXIT
           mkdir -p \
             "$deb_smoke_root/home" \
             "$deb_smoke_root/config" \

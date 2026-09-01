@@ -188,7 +188,7 @@ describe('cross-platform packaging targets', () => {
     expect(workflow).toContain("grep -Fxq 'Name=ComGu' \"$desktop\"");
     expect(workflow).toContain("grep -Fxq 'Icon=comgu' \"$desktop\"");
     expect(debGui).toContain('deb_smoke_root="$(mktemp -d)"');
-    expect(debGui).toContain("trap 'rm -rf \"$deb_smoke_root\"' EXIT");
+    expect(debGui).toContain("trap 'rm -rf \"$deb_smoke_root\" || true' EXIT");
     expect(debGui).toContain('HOME="$deb_smoke_root/home"');
     expect(debGui).toContain('XDG_CONFIG_HOME="$deb_smoke_root/config"');
     expect(debGui).toContain('XDG_CACHE_HOME="$deb_smoke_root/cache"');
