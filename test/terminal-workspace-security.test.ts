@@ -16,7 +16,9 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(created.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    created.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  );
 });
 
 describe.skipIf(process.platform !== 'win32')('Windows command WorkspaceScope confinement', () => {
@@ -111,8 +113,32 @@ describe.skipIf(process.platform !== 'win32')('Windows command WorkspaceScope co
         };
       });
 
-      expect(output.rawOutput.toString('utf8')).toContain('DENIED');
-      expect(output.rawOutput.toString('utf8')).not.toContain('ESCAPED=manager-outside-secret');
+      let rawOutput = output.rawOutput.toString('utf8');
+      let liveProcessId = output.processId;
+      // MXC startup can legitimately outlive the initial 2 s exec yield on a loaded Windows
+      // host. Follow the same live session instead of mistaking "still running" for a failed
+      // confinement proof. Polling stays bounded and presents the exact Run/scope authority on
+      // every continuation, which also exercises the stale-session fence.
+      for (let poll = 0; poll < 3 && liveProcessId !== null && !rawOutput.includes('DENIED'); poll += 1) {
+        const polled = await manager.writeStdin({
+          processId: liveProcessId,
+          input: '',
+          yieldTimeMs: 5_000,
+          maxWriteStdinYieldTimeMs: 5_000,
+          maxOutputTokens: 2_000,
+          truncationPolicy: { kind: 'tokens', tokens: 2_000 },
+          authority: {
+            conversationId: 'conv-scope',
+            runId: 'run-scope',
+            scopeFingerprint: 'scope-fingerprint'
+          }
+        });
+        rawOutput += polled.rawOutput.toString('utf8');
+        liveProcessId = polled.processId;
+      }
+
+      expect(rawOutput).toContain('DENIED');
+      expect(rawOutput).not.toContain('ESCAPED=manager-outside-secret');
     } finally {
       await manager.terminateAllProcesses();
     }
