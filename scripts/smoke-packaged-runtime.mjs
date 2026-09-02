@@ -104,6 +104,8 @@ for (const relative of [
 if (targetPlatform === 'win32') {
   required(`THIRD-PARTY-NOTICES-sharp-win32-${targetArch}.md`);
   required(`app.asar.unpacked/node_modules/@img/sharp-win32-${targetArch}/LICENSE`);
+  required(`app.asar.unpacked/node_modules/@microsoft/mxc-sdk/bin/${targetArch}/wxc-exec.exe`);
+  required(`app.asar.unpacked/node_modules/@microsoft/mxc-sdk/bin/${targetArch}/wxc-host-prep.exe`);
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/conpty.node`);
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/conpty_console_list.node`);
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/conpty/OpenConsole.exe`);

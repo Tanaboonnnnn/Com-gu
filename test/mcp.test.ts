@@ -406,6 +406,15 @@ describe('active Run file authority', () => {
       expectOutside(intercepted);
       await expect(fs.stat(shellPatchTarget)).rejects.toMatchObject({ code: 'ENOENT' });
 
+      // Task 5: once the request becomes a real shell process, the same Worker A scope must be
+      // enforced by the OS for the whole descendant tree rather than by command-text parsing.
+      const escapedTerminal = await asWorker('exec_command', {
+        cmd: `Get-Content -Raw -LiteralPath ${JSON.stringify(path.join(rootB, 'secret-b.txt'))}`,
+        workdir: '/a',
+        yield_time_ms: 2_000
+      });
+      expect(textOf(escapedTerminal)).not.toContain('worker must never read');
+
       // Absolute file calls in an active Run cannot become anonymous/global authority.
       const unidentified = await modern('tools/call', { name: 'read', arguments: { paths: ['/b/secret-b.txt'] } });
       expect(failed(unidentified), textOf(unidentified)).toBe(true);

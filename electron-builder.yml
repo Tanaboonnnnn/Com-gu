@@ -36,6 +36,7 @@ npmRebuild: false
 
 asarUnpack:
   - '**/node_modules/node-pty/**'
+  - '**/node_modules/@microsoft/mxc-sdk/**'
   - '**/node_modules/sharp/**'
   - '**/node_modules/@img/**'
   - '**/node_modules/tree-sitter/**'

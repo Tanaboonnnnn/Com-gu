@@ -44,6 +44,7 @@ import {
   UNIFIED_EXEC_ENV
 } from './unified-exec-constants.js';
 import { terminateProcessTree } from '../exec.js';
+import { spawnSandboxedCommand } from '../run/command-sandbox.js';
 import { prefixPowershellScriptWithUtf8, type ShellType } from './shell.js';
 
 // --------------------------------------------------------------------------- errors
@@ -54,7 +55,8 @@ export type UnifiedExecErrorKind =
   | 'unknown_process_id'
   | 'write_to_stdin'
   | 'stdin_closed'
-  | 'missing_command_line';
+  | 'missing_command_line'
+  | 'workspace_session_stale';
 
 /**
  * `UnifiedExecError`, with both of the Rust renderings it is shown through.
@@ -105,6 +107,15 @@ export class UnifiedExecError extends Error {
     return new UnifiedExecError('missing_command_line', 'missing command line for unified exec request', null, null);
   }
 
+  static workspaceSessionStale(): UnifiedExecError {
+    return new UnifiedExecError(
+      'workspace_session_stale',
+      'WORKSPACE_SESSION_STALE: the terminal session no longer matches the caller Run/workspace scope and was terminated.',
+      null,
+      null
+    );
+  }
+
   /** The `{err:?}` rendering of the Rust enum. */
   debug(): string {
     switch (this.kind) {
@@ -120,6 +131,8 @@ export class UnifiedExecError extends Error {
         return 'StdinClosed';
       case 'missing_command_line':
         return 'MissingCommandLine';
+      case 'workspace_session_stale':
+        return 'WorkspaceSessionStale';
     }
   }
 }
@@ -227,6 +240,7 @@ export interface SpawnParams {
   cwd: string;
   env: NodeJS.ProcessEnv;
   tty: boolean;
+  sandboxRoots?: readonly string[];
 }
 
 const EARLY_EXIT_GRACE_PERIOD_MS = 150;
@@ -302,6 +316,59 @@ class UnifiedExecProcess {
     const file = params.command[0];
     if (file === undefined || params.command.length === 0) throw UnifiedExecError.missingCommandLine();
     const args = params.command.slice(1);
+
+    if (params.sandboxRoots) {
+      let sandboxed;
+      try {
+        sandboxed = await spawnSandboxedCommand({
+          command: params.command,
+          cwd: params.cwd,
+          roots: params.sandboxRoots,
+          env: params.env,
+          tty: params.tty
+        });
+      } catch (error) {
+        throw UnifiedExecError.createProcess(error instanceof Error ? error.message : String(error));
+      }
+
+      if (sandboxed.kind === 'pty') {
+        const handle = sandboxed.process;
+        const managed = new UnifiedExecProcess(true, handle.pid);
+        managed.pty = handle;
+        handle.onData((data) => managed.pushChunk(Buffer.from(data, 'utf8')));
+        handle.onExit((event) => {
+          managed.signalExit(event.exitCode);
+          managed.closeOutput();
+        });
+        await managed.waitForEarlyExit();
+        return managed;
+      }
+
+      const child = sandboxed.process;
+      const managed = new UnifiedExecProcess(false, child.pid ?? -1);
+      managed.child = child;
+      for (const stream of [child.stdout, child.stderr]) {
+        if (!stream) continue;
+        managed.openStreams += 1;
+        stream.on('data', (chunk: Buffer) => managed.pushChunk(chunk));
+        stream.on('end', () => managed.streamEnded());
+        stream.on('error', () => managed.streamEnded());
+      }
+      if (managed.openStreams === 0) managed.closeOutput();
+      child.once('error', (error: Error) => {
+        managed.failure = error.message;
+        managed.signalExit(null);
+        managed.closeOutput();
+      });
+      child.once('exit', (code, signal) => {
+        managed.signalExit(code === null && signal ? null : code);
+      });
+      await managed.waitForEarlyExit();
+      if (managed.failure !== null && child.pid === undefined) {
+        throw UnifiedExecError.createProcess(managed.failure);
+      }
+      return managed;
+    }
 
     if (params.tty) {
       const pty = await loadPty();
@@ -605,6 +672,14 @@ export interface ExecCommandRequest {
   displayCwd: string;
   env: NodeJS.ProcessEnv;
   tty: boolean;
+  sandbox?: Readonly<{
+    roots: readonly string[];
+    authority: Readonly<{
+      conversationId: string;
+      runId: string;
+      scopeFingerprint: string;
+    }>;
+  }>;
 }
 
 export interface WriteStdinRequest {
@@ -614,6 +689,11 @@ export interface WriteStdinRequest {
   maxOutputTokens: number | undefined;
   truncationPolicy: TruncationPolicy;
   maxWriteStdinYieldTimeMs?: number;
+  authority?: Readonly<{
+    conversationId: string;
+    runId: string;
+    scopeFingerprint: string;
+  }>;
 }
 
 export interface BackgroundTerminalInfo {
@@ -632,6 +712,11 @@ interface ProcessEntry {
   tty: boolean;
   initialExecCommandActive: boolean;
   lastUsed: number;
+  sandboxAuthority?: Readonly<{
+    conversationId: string;
+    runId: string;
+    scopeFingerprint: string;
+  }>;
 }
 
 export class UnifiedExecProcessManager {
@@ -676,7 +761,8 @@ export class UnifiedExecProcessManager {
         shellType: request.shellType,
         cwd: request.cwd,
         env: request.env,
-        tty: request.tty
+        tty: request.tty,
+        ...(request.sandbox ? { sandboxRoots: request.sandbox.roots } : {})
       });
     } catch (error) {
       this.releaseProcessId(request.processId);
@@ -697,7 +783,8 @@ export class UnifiedExecProcessManager {
         hookCommand: request.hookCommand,
         tty: request.tty,
         initialExecCommandActive: true,
-        lastUsed: start
+        lastUsed: start,
+        ...(request.sandbox ? { sandboxAuthority: Object.freeze({ ...request.sandbox.authority }) } : {})
       });
     }
 
@@ -756,6 +843,20 @@ export class UnifiedExecProcessManager {
   async writeStdin(request: WriteStdinRequest): Promise<ExecCommandToolOutput> {
     const entry = this.processes.get(request.processId);
     if (!entry) throw UnifiedExecError.unknownProcessId(request.processId);
+
+    const expected = entry.sandboxAuthority;
+    const supplied = request.authority;
+    if (
+      expected &&
+      (!supplied ||
+        supplied.conversationId !== expected.conversationId ||
+        supplied.runId !== expected.runId ||
+        supplied.scopeFingerprint !== expected.scopeFingerprint)
+    ) {
+      if (!entry.process.hasExited()) await entry.process.terminate();
+      this.releaseProcessId(request.processId);
+      throw UnifiedExecError.workspaceSessionStale();
+    }
     const locked = entry.process;
 
     // Reads and writes against one session must not overlap: they share a draining buffer.

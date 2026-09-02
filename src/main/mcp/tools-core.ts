@@ -96,6 +96,7 @@ import {
 import { childEnv } from '../exec.js';
 import { locateRipgrep } from '../ripgrep.js';
 import { ensureDevToolchain } from '../toolchain.js';
+import { workspaceRootsFingerprint } from '../run/scope.js';
 import {
   agentForCaller,
   noteAgentContextTokens,
@@ -147,6 +148,33 @@ import { registerSessionTool as registerSessionSearchReadTool } from './session-
 
 /** Entries one `read` of a directory returns before it says it stopped. */
 const MAX_DIR_ENTRIES = 200;
+
+function currentRunTerminalSandbox(roots: readonly Root[]):
+  | Readonly<{
+      roots: readonly string[];
+      authority: Readonly<{ conversationId: string; runId: string; scopeFingerprint: string }>;
+    }>
+  | undefined {
+  if (!swarmRunning()) return undefined;
+  const caller = currentCall()?.caller;
+  if (!caller?.conversationId) {
+    throw new SandboxError(
+      'WORKSPACE_SCOPE_REQUIRED: an active Run terminal operation requires the exact caller identity and workspace scope.'
+    );
+  }
+  const runId = statusForCaller(caller).runId;
+  if (!runId) {
+    throw new SandboxError('WORKSPACE_SCOPE_REQUIRED: the caller has no active Run terminal authority.');
+  }
+  return Object.freeze({
+    roots: Object.freeze(roots.map((root) => root.path)),
+    authority: Object.freeze({
+      conversationId: caller.conversationId,
+      runId,
+      scopeFingerprint: workspaceRootsFingerprint(roots)
+    })
+  });
+}
 /** Files one glob may expand to. A pattern is a convenience, not a way to bulk-read a repo. */
 const MAX_GLOB_MATCHES = 20;
 /** Files a single `read` call may touch after every path and glob is expanded. */
@@ -633,6 +661,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       async (input) =>
         reg.guarded('command', 'exec_command', async () => {
           const roots = effectiveRootsForCall(ctx);
+          const commandSandbox = currentRunTerminalSandbox(roots);
           const dir = await resolveCwd(ctx, input.workdir);
           const rawCommands = input.cmd === undefined ? input.cmds! : [input.cmd];
           const isBatch = input.cmd === undefined;
@@ -760,7 +789,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               cwd: dir.real,
               displayCwd: dir.virtual,
               env: execChildEnvironment(),
-              tty: input.tty ?? DEFAULT_TTY
+              tty: input.tty ?? DEFAULT_TTY,
+              ...(commandSandbox ? { sandbox: commandSandbox } : {})
             });
             // Which chat may later write to this session id. Codex gets this for free from a
             // per-conversation manager; see codex/ownership.ts for why one is needed here.
@@ -867,12 +897,14 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             );
           }
           try {
+            const sandbox = swarmRunning() ? currentRunTerminalSandbox(effectiveRootsForCall(ctx)) : undefined;
             const output = await unifiedExecManager.writeStdin({
               processId: input.session_id,
               input: input.chars ?? '',
               yieldTimeMs: input.yield_time_ms ?? DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
               maxOutputTokens: input.max_output_tokens,
-              truncationPolicy: EXEC_OUTPUT_CEILING_POLICY
+              truncationPolicy: EXEC_OUTPUT_CEILING_POLICY,
+              ...(sandbox ? { authority: sandbox.authority } : {})
             });
             if (output.processId === null) forgetExecOwner(input.session_id);
             noteExec({

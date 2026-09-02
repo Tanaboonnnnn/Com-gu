@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CommandSandboxUnavailableError,
   commandSandboxCapability,
+  commandSandboxHostPreparation,
   requireCommandSandbox,
   type WorkspaceScope
 } from '../src/main/run/command-sandbox.js';
@@ -12,16 +13,25 @@ const scope: WorkspaceScope = {
 };
 
 describe('command sandbox confinement contract', () => {
-  it('does not claim filesystem confinement without an OS-enforced backend', () => {
+  it.skipIf(process.platform !== 'win32')('reports the proven MXC ProcessContainer backend only when host preparation is complete', () => {
+    const preparation = commandSandboxHostPreparation();
     const capability = commandSandboxCapability(scope, 'win32');
 
-    expect(capability).toEqual({
-      available: false,
-      filesystemConfinement: 'unavailable',
-      backend: null,
-      scope,
-      reason: 'windows_backend_unavailable'
-    });
+    if (preparation.required) {
+      expect(capability).toMatchObject({
+        available: false,
+        filesystemConfinement: 'unavailable',
+        backend: null,
+        reason: 'windows_host_preparation_required'
+      });
+    } else {
+      expect(capability).toMatchObject({
+        available: true,
+        filesystemConfinement: 'os-enforced',
+        backend: 'mxc-processcontainer'
+      });
+    }
+    expect(capability.scope).toEqual(scope);
   });
 
   it('snapshots the effective multi-root scope immutably', () => {
@@ -40,10 +50,39 @@ describe('command sandbox confinement contract', () => {
     expect(Object.isFrozen(capability.scope.roots)).toBe(true);
   });
 
+  it('detects required MXC host preparation from the read-only platform probe', () => {
+    const preparation = commandSandboxHostPreparation({
+      isSupported: true,
+      availableMethods: ['processcontainer'],
+      isolationTier: 'appcontainer-dacl',
+      isolationWarnings: [
+        'Run wxc-host-prep prepare-system-drive (elevated) to grant the minimal metadata ACEs.',
+        'Run wxc-host-prep prepare-null-device (elevated) to allow the null device.'
+      ]
+    });
+
+    expect(preparation.required).toBe(true);
+    expect(preparation.steps).toEqual(['prepare-system-drive', 'prepare-null-device']);
+    expect(Object.isFrozen(preparation.steps)).toBe(true);
+  });
+
+  it.skipIf(process.platform !== 'win32')('requires host preparation before returning a usable capability', () => {
+    const preparation = commandSandboxHostPreparation();
+    if (preparation.required) {
+      expect(() => requireCommandSandbox(scope, 'win32')).toThrow('windows_host_preparation_required');
+    } else {
+      expect(requireCommandSandbox(scope, 'win32')).toMatchObject({
+        available: true,
+        filesystemConfinement: 'os-enforced',
+        backend: 'mxc-processcontainer'
+      });
+    }
+  });
+
   it('fails closed with a stable diagnostic when trustworthy confinement is unavailable', () => {
     let thrown: unknown;
     try {
-      requireCommandSandbox(scope, 'win32');
+      requireCommandSandbox(scope, 'linux');
     } catch (error) {
       thrown = error;
     }
@@ -51,8 +90,8 @@ describe('command sandbox confinement contract', () => {
     expect(thrown).toBeInstanceOf(CommandSandboxUnavailableError);
     const error = thrown as CommandSandboxUnavailableError;
     expect(error.name).toBe('CommandSandboxUnavailableError');
-    expect(error.message).toBe('Command sandbox unavailable: windows_backend_unavailable');
-    expect(error.capability.reason).toBe('windows_backend_unavailable');
+    expect(error.message).toBe('Command sandbox unavailable: unsupported_platform');
+    expect(error.capability.reason).toBe('unsupported_platform');
     expect(error.capability.available).toBe(false);
     expect(error.capability.filesystemConfinement).toBe('unavailable');
     expect(error.capability.backend).toBeNull();

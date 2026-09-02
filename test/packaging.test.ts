@@ -430,6 +430,17 @@ describe('cross-platform packaging targets', () => {
     expect(notes).toContain('Monterey or newer');
   });
 
+  it('ships the MXC ProcessContainer executor as a real file for the packaged Windows runtime', () => {
+    const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const builder = yamlFile('electron-builder.yml');
+    const packagedRuntime = readFileSync(path.join(root, 'scripts', 'smoke-packaged-runtime.mjs'), 'utf8');
+
+    expect(pkg.dependencies['@microsoft/mxc-sdk']).toBe('0.8.0');
+    expect(builder.asarUnpack).toContain('**/node_modules/@microsoft/mxc-sdk/**');
+    expect(packagedRuntime).toContain("@microsoft/mxc-sdk/bin/${targetArch}/wxc-exec.exe");
+    expect(packagedRuntime).toContain("@microsoft/mxc-sdk/bin/${targetArch}/wxc-host-prep.exe");
+  });
+
   it('hides Electron helper parentheses from otool-classic without changing the inspected file', () => {
     const file = '/Applications/ComGu.app/Contents/Frameworks/ComGu Helper (GPU).app/Contents/MacOS/ComGu Helper (GPU)';
     const calls: Array<{ kind: string; args: unknown[] }> = [];

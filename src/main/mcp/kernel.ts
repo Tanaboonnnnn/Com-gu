@@ -610,7 +610,7 @@ function needsWorkspaceIdentity(name: string, args: unknown): boolean {
     typeof value === 'string' && !isAbsoluteVirtualPath(value) && !isNativeWindowsPath(value);
   // During an active Run every filesystem operation is caller-scoped, including an absolute
   // path. Absolute spelling proves location, never identity/authority.
-  if (swarmRunning() && ['read', 'view_image', 'find', 'apply_patch', 'exec_command'].includes(name)) return true;
+  if (swarmRunning() && ['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)) return true;
   if (name === 'read') {
     const paths = Array.isArray(input['paths']) ? input['paths'] : [];
     return paths.some(relative);

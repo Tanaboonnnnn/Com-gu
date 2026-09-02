@@ -44,6 +44,7 @@
     "test:kill": "node scripts/kill-stray-vitest.mjs"
   },
   "dependencies": {
+    "@microsoft/mxc-sdk": "0.8.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "node-pty": "1.2.0-beta.15",

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Root } from '../../shared/types.js';
 import type { WorkspaceScope, WorkspaceScopeErrorCode, WorkspaceScopeSelection } from './types.js';
 
@@ -101,6 +102,18 @@ export function effectiveWorkspaceRoots(scope: WorkspaceScope, approvedRoots: re
     return Object.freeze({ name: root.name, path: root.path });
   });
   return Object.freeze(roots);
+}
+
+/** Stable equality guard for authority already resolved to canonical approved roots. */
+export function workspaceRootsFingerprint(roots: readonly Root[]): string {
+  const hash = createHash('sha256');
+  for (const root of roots) {
+    hash.update(root.name);
+    hash.update('\0');
+    hash.update(root.path);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
 }
 
 /** Parse the exact persisted authority shape; legacy name-only scopes intentionally restore as null. */
