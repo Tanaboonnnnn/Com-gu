@@ -141,6 +141,38 @@ export function clampWorkspaceForScope(key: string, rootNames: readonly string[]
   return true;
 }
 
+/**
+ * Resolves the Prime's effective cwd once, then clamps and mirrors that one value atomically.
+ *
+ * The Prime has two supported identities (`chat:<conversation>` and `agent:prime`). They may
+ * legitimately diverge between ordinary path calls and agent-attributed calls. Scope binding
+ * must therefore decide from the effective/newest cwd before deleting either mirror; otherwise
+ * deleting an out-of-scope newest chat value can expose an older in-scope agent mirror and make
+ * a worker inherit stale state. If the effective cwd is out of scope, clear both identities.
+ */
+export function clampPrimeWorkspaceForScope(
+  primeConversationId: string | null,
+  rootNames: readonly string[]
+): Workspace | null {
+  prune();
+  const keys = [...(primeConversationId ? [`chat:${primeConversationId}`] : []), 'agent:prime'];
+  let found: Workspace | null = null;
+  for (const key of keys) {
+    const held = workspaces.get(key);
+    if (held && (!found || held.at > found.at)) found = held;
+  }
+  if (!found) return null;
+
+  const root = found.virtual.split('/').filter(Boolean)[0] ?? '';
+  if (!rootNames.includes(root)) {
+    for (const key of keys) workspaces.delete(key);
+    return null;
+  }
+
+  for (const key of keys) setWorkspaceFor(key, { virtual: found.virtual, real: found.real });
+  return found;
+}
+
 /** Sets the workspace for the call currently running, if it has an identity. */
 export function setCurrentWorkspace(workspace: Omit<Workspace, 'at'>): boolean {
   const key = workspaceKey();

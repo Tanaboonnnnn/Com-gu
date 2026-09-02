@@ -86,7 +86,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentInfo, AgentMessage, AgentState, SwarmState } from '../shared/session.js';
 import { getConfig } from './config.js';
 import { logInfo, logWarn } from './logger.js';
-import { clampWorkspaceForScope, inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
+import { clampPrimeWorkspaceForScope, clampWorkspaceForScope, inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
 import { bindRunWorkspaceScope, effectiveWorkerWorkspaceScope, restoreRunWorkspaceScope } from './run/state.js';
 import { effectiveWorkspaceRoots, parseWorkspaceScopeSelection, workspaceScopeNames } from './run/scope.js';
 import type { WorkspaceScope, WorkspaceScopeSelection } from './run/types.js';
@@ -1137,11 +1137,8 @@ function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
 }
 
 function initializeSpawnWorkspaces(owner: Run, created: readonly Agent[]): void {
-  const runRootNames = owner.scope ? workspaceScopeNames(owner.scope) : null;
-  if (runRootNames) {
-    clampWorkspaceForScope(`chat:${owner.primeConversationId}`, runRootNames);
-    clampWorkspaceForScope('agent:prime', runRootNames);
-  }
+  const runRootNames = owner.scope ? workspaceScopeNames(owner.scope) : [];
+  clampPrimeWorkspaceForScope(owner.primeConversationId, runRootNames);
   for (const agent of created) {
     inheritWorkspace(agent.info.id, owner.primeConversationId);
     if (agent.scope) clampWorkspaceForScope(`agent:${agent.info.id}`, workspaceScopeNames(agent.scope));

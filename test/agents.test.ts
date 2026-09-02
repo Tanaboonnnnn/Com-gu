@@ -237,6 +237,41 @@ describe('spawning a run', () => {
     expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
   });
 
+  it('clears Prime and worker cwd when a new Run intentionally has no workspace scope', () => {
+    setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/project/src', real: 'C:\\work\\project\\src' });
+
+    spawn({ caller: prime, workers: [{ task: 'scope-less work' }] });
+
+    expect(workspaceForChat(PRIME_CHAT)).toBeNull();
+    expect(workspaceEntries().find((entry) => entry.key === 'agent:prime')).toBeUndefined();
+    expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
+  });
+
+  it('does not fall back to an older Prime mirror when the latest Prime cwd is outside the new scope', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    setWorkspaceFor('agent:prime', { virtual: '/project/src', real: 'C:\\work\\project\\src' });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/shared/docs', real: 'C:\\work\\shared\\docs' });
+
+    spawn({
+      caller: prime,
+      workspaceScope: { primaryRoot: 'project', sharedRoots: [] },
+      workers: [{ task: 'must start with no cwd' }]
+    });
+
+    expect(workspaceForChat(PRIME_CHAT)).toBeNull();
+    expect(workspaceEntries().find((entry) => entry.key === 'agent:prime')).toBeUndefined();
+    expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
+  });
+
   it('rejects run-scope mutation and a repeated worker-scope mutation with stable escalation before creating anything', async () => {
     const base = defaultConfig();
     await saveConfig({
@@ -753,10 +788,11 @@ describe('at-least-once delivery', () => {
     startSwarm(1);
     const worker = startWorker('worker-1');
 
-    // Spawn mirrored project A into `agent:prime`. During the live run the prime is resolved
-    // under that agent identity, so an explicit absolute-path call now moves only that key to B.
+    // A scope-less Run clears the pre-run chat cwd rather than treating convenience state as
+    // authority. During the live run an explicit absolute-path call may still learn a fresh
+    // agent-scoped cwd; release then carries that newly learned value back to the chat key.
     setWorkspaceFor('agent:prime', { virtual: '/root/project-b', real: 'C:\\root\\project-b' });
-    expect(workspaceForChat(PRIME_CHAT)?.virtual).toBe('/root/project-a');
+    expect(workspaceForChat(PRIME_CHAT)).toBeNull();
 
     fillContext('c-worker-1');
     finishAgent(worker.caller, 'done');
