@@ -170,6 +170,56 @@ describe.skipIf(process.platform !== 'win32')('Windows command WorkspaceScope co
     }
   }, 30_000);
 
+  it('terminates a pre-Run unrestricted session when write_stdin later presents Run authority', async () => {
+    const allowed = await tempDir('comgu-pre-run-');
+    const shell = findPowerShell();
+    expect(shell).toBeTruthy();
+    const manager = new UnifiedExecProcessManager(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS);
+    const processId = manager.allocateProcessId();
+
+    try {
+      const started = await manager.execCommand({
+        command: [
+          shell!,
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Write-Output 'READY'; while ($true) { Start-Sleep -Milliseconds 200 }`
+        ],
+        shellType: 'powershell',
+        hookCommand: 'pre-run unrestricted session',
+        processId,
+        yieldTimeMs: 500,
+        maxOutputTokens: 2_000,
+        truncationPolicy: { kind: 'tokens', tokens: 2_000 },
+        cwd: allowed,
+        displayCwd: '/scope',
+        env: process.env,
+        tty: true
+      });
+      expect(started.processId).toBe(processId);
+
+      await expect(
+        manager.writeStdin({
+          processId,
+          input: '',
+          yieldTimeMs: 100,
+          maxOutputTokens: 2_000,
+          truncationPolicy: { kind: 'tokens', tokens: 2_000 },
+          authority: {
+            conversationId: 'conv-now-in-run',
+            runId: 'run-now-active',
+            scopeFingerprint: 'scope-now-active'
+          }
+        })
+      ).rejects.toThrow('WORKSPACE_SESSION_STALE');
+      expect(manager.listProcesses()).toEqual([]);
+    } finally {
+      await manager.terminateAllProcesses();
+    }
+  }, 30_000);
+
   it('confines nested child processes, environment expansion, redirection, and junction targets', async () => {
     const allowed = await tempDir('comgu-tree-scope-');
     const outside = await tempDir('comgu-tree-outside-');

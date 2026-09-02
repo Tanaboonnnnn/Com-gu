@@ -846,13 +846,14 @@ export class UnifiedExecProcessManager {
 
     const expected = entry.sandboxAuthority;
     const supplied = request.authority;
-    if (
-      expected &&
-      (!supplied ||
-        supplied.conversationId !== expected.conversationId ||
-        supplied.runId !== expected.runId ||
-        supplied.scopeFingerprint !== expected.scopeFingerprint)
-    ) {
+    const authorityMismatch =
+      Boolean(expected) !== Boolean(supplied) ||
+      (expected !== undefined &&
+        supplied !== undefined &&
+        (supplied.conversationId !== expected.conversationId ||
+          supplied.runId !== expected.runId ||
+          supplied.scopeFingerprint !== expected.scopeFingerprint));
+    if (authorityMismatch) {
       if (!entry.process.hasExited()) await entry.process.terminate();
       this.releaseProcessId(request.processId);
       throw UnifiedExecError.workspaceSessionStale();
