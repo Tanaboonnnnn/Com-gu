@@ -23,7 +23,7 @@ function escalation(): never {
   throw new WorkspaceScopeError('WORKSPACE_SCOPE_ESCALATION', ESCALATION_TEXT);
 }
 
-function parseSelection(input: unknown): WorkspaceScopeSelection {
+export function parseWorkspaceScopeSelection(input: unknown): WorkspaceScopeSelection {
   if (!input || typeof input !== 'object' || Array.isArray(input)) required();
   const record = input as Record<string, unknown>;
   const keys = Object.keys(record);
@@ -37,26 +37,43 @@ function parseSelection(input: unknown): WorkspaceScopeSelection {
   };
 }
 
-function snapshot(primaryRoot: string, sharedRoots: readonly string[]): WorkspaceScope {
-  return Object.freeze({ primaryRoot, sharedRoots: Object.freeze([...sharedRoots]) });
+function snapshot(
+  primaryRoot: string,
+  sharedRoots: readonly string[],
+  identities: readonly Readonly<{ name: string; path: string }>[]
+): WorkspaceScope {
+  return Object.freeze({
+    primaryRoot,
+    sharedRoots: Object.freeze([...sharedRoots]),
+    rootIdentities: Object.freeze(identities.map((root) => Object.freeze({ name: root.name, path: root.path })))
+  });
 }
 
-function validatedScope(allowedNames: ReadonlySet<string>, input: unknown, outOfBounds: () => never): WorkspaceScope {
-  const selection = parseSelection(input);
+function validatedScope(
+  allowedRoots: ReadonlyMap<string, Readonly<{ name: string; path: string }>>,
+  input: unknown,
+  outOfBounds: () => never
+): WorkspaceScope {
+  const selection = parseWorkspaceScopeSelection(input);
   const seen = new Set<string>();
-  if (!allowedNames.has(selection.primaryRoot)) outOfBounds();
+  if (!allowedRoots.has(selection.primaryRoot)) outOfBounds();
   seen.add(selection.primaryRoot);
   for (const name of selection.sharedRoots) {
-    if (!allowedNames.has(name) || seen.has(name)) outOfBounds();
+    if (!allowedRoots.has(name) || seen.has(name)) outOfBounds();
     seen.add(name);
   }
-  return snapshot(selection.primaryRoot, selection.sharedRoots);
+  const names = [selection.primaryRoot, ...selection.sharedRoots];
+  return snapshot(
+    selection.primaryRoot,
+    selection.sharedRoots,
+    names.map((name) => allowedRoots.get(name) as Readonly<{ name: string; path: string }>)
+  );
 }
 
 export function createWorkspaceScope(approvedRoots: readonly Root[], input: unknown): WorkspaceScope {
-  const names = new Set(approvedRoots.map((root) => root.name));
-  if (names.size === 0) required();
-  return validatedScope(names, input, escalation);
+  const roots = new Map(approvedRoots.map((root) => [root.name, root]));
+  if (roots.size === 0) required();
+  return validatedScope(roots, input, escalation);
 }
 
 export function workspaceScopeNames(scope: WorkspaceScope): readonly string[] {
@@ -64,16 +81,47 @@ export function workspaceScopeNames(scope: WorkspaceScope): readonly string[] {
 }
 
 export function narrowWorkspaceScope(scope: WorkspaceScope, input?: unknown): WorkspaceScope {
-  if (input === undefined) return snapshot(scope.primaryRoot, scope.sharedRoots);
-  return validatedScope(new Set(workspaceScopeNames(scope)), input, escalation);
+  const roots = new Map(scope.rootIdentities.map((root) => [root.name, root]));
+  if (input === undefined) return snapshot(scope.primaryRoot, scope.sharedRoots, scope.rootIdentities);
+  return validatedScope(roots, input, escalation);
 }
 
 export function effectiveWorkspaceRoots(scope: WorkspaceScope, approvedRoots: readonly Root[]): readonly Root[] {
   const byName = new Map(approvedRoots.map((root) => [root.name, root]));
+  const persisted = new Map(scope.rootIdentities.map((root) => [root.name, root.path]));
   const roots = workspaceScopeNames(scope).map((name) => {
     const root = byName.get(name);
-    if (!root) escalation();
+    if (!root || persisted.get(name) !== root.path) escalation();
     return Object.freeze({ name: root.name, path: root.path });
   });
   return Object.freeze(roots);
+}
+
+/** Parse the exact persisted authority shape; legacy name-only scopes intentionally restore as null. */
+export function restoreWorkspaceScopeSnapshot(input: unknown): WorkspaceScope | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const record = input as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'primaryRoot' && key !== 'sharedRoots' && key !== 'rootIdentities')) {
+    return null;
+  }
+  let selection: WorkspaceScopeSelection;
+  try {
+    selection = parseWorkspaceScopeSelection({ primaryRoot: record.primaryRoot, sharedRoots: record.sharedRoots });
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(record.rootIdentities)) return null;
+  const identities: Array<{ name: string; path: string }> = [];
+  for (const value of record.rootIdentities) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const root = value as Record<string, unknown>;
+    if (Object.keys(root).some((key) => key !== 'name' && key !== 'path')) return null;
+    if (typeof root.name !== 'string' || !root.name || typeof root.path !== 'string' || !root.path) return null;
+    identities.push({ name: root.name, path: root.path });
+  }
+  const names = [selection.primaryRoot, ...selection.sharedRoots];
+  if (new Set(names).size !== names.length) return null;
+  if (identities.length !== names.length) return null;
+  if (identities.some((root, index) => root.name !== names[index])) return null;
+  return snapshot(selection.primaryRoot, selection.sharedRoots, identities);
 }

@@ -88,6 +88,7 @@ import { getConfig } from './config.js';
 import { logInfo, logWarn } from './logger.js';
 import { inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
 import { bindRunWorkspaceScope, effectiveWorkerWorkspaceScope, restoreRunWorkspaceScope } from './run/state.js';
+import { effectiveWorkspaceRoots } from './run/scope.js';
 import type { WorkspaceScope } from './run/types.js';
 
 export const PRIME_ID = 'prime';
@@ -1049,8 +1050,6 @@ export interface SpawnInput {
    */
   context?: string | null;
   caller: Caller;
-  /** Internal Task-2 seam. MCP does not expose this selection until a later task. */
-  workspaceScope?: unknown;
 }
 
 export interface SpawnResult {
@@ -1077,6 +1076,8 @@ interface SpawnOptions {
   deferDelivery?: boolean;
   /** Internal half of stageSpawn(): hide new topology from ordinary publication until commit. */
   stageTopology?: boolean;
+  /** Internal-only authority seam; never accepted from model-facing SpawnInput. */
+  workspaceScope?: unknown;
 }
 
 function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
@@ -1135,6 +1136,11 @@ export function stageSpawn(input: SpawnInput): StagedSpawn {
     commit: () => settleSpawnStage(stage, true),
     rollback: () => settleSpawnStage(stage, false)
   };
+}
+
+/** Internal Task-2 seam for app-owned authority binding; MCP continues to call stageSpawn(). */
+export function spawnWithWorkspaceScope(input: SpawnInput, workspaceScope: unknown): SpawnResult {
+  return spawn(input, { workspaceScope });
 }
 
 /**
@@ -1246,9 +1252,9 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
         // 32 bits wide; keep the full UUID and shorten it only where a UI chooses to render it.
         runId: randomUUID(),
         scope:
-          input.workspaceScope === undefined
+          options.workspaceScope === undefined
             ? null
-            : bindRunWorkspaceScope(getConfig().roots, input.workspaceScope),
+            : bindRunWorkspaceScope(getConfig().roots, options.workspaceScope),
         primeConversationId: conversationId,
         startedAt: Date.now(),
         agents: new Map([[PRIME_ID, makePrime(conversationId)]]),
@@ -2747,22 +2753,22 @@ export function workspaceScopeForCaller(caller: Caller, requestedWorkerScope?: u
   if (run) {
     const member = agentForConversationId(caller.conversationId);
     if (member) {
-      ownerScope = run.scope;
-      worker = member.info.role === 'worker';
+      if (member.info.role === 'worker' && hasStopped(member.info.state)) {
+        ownerScope = null;
+      } else {
+        ownerScope = run.scope;
+        worker = member.info.role === 'worker';
+      }
     }
   }
   if (!ownerScope) {
     const dormant = dormantRunForPrime(caller.conversationId);
     if (dormant) ownerScope = dormant.scope;
-    else {
-      const dormantWorker = dormantAgentForConversation(caller.conversationId);
-      if (dormantWorker) {
-        ownerScope = dormantWorker.owner.scope;
-        worker = true;
-      }
-    }
   }
   const scope = effectiveWorkerWorkspaceScope(ownerScope, worker ? requestedWorkerScope : undefined);
+  // A persisted scope is authority only while the exact approved root identities still exist.
+  // Name reuse after roots:remove + roots:add must not silently rebind old authority to a new path.
+  effectiveWorkspaceRoots(scope, getConfig().roots);
   return scope;
 }
 

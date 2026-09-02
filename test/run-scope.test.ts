@@ -28,10 +28,19 @@ describe('run workspace scope', () => {
     sharedRoots.push('docs');
     input.primaryRoot = 'docs';
 
-    expect(scope).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(scope).toEqual({
+      primaryRoot: 'project',
+      sharedRoots: ['shared'],
+      rootIdentities: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ]
+    });
     expect(workspaceScopeNames(scope)).toEqual(['project', 'shared']);
     expect(Object.isFrozen(scope)).toBe(true);
     expect(Object.isFrozen(scope.sharedRoots)).toBe(true);
+    expect(Object.isFrozen(scope.rootIdentities)).toBe(true);
+    expect(Object.isFrozen(scope.rootIdentities[0])).toBe(true);
   });
 
   it('derives only currently approved Root snapshots for the selected names', () => {
@@ -44,6 +53,18 @@ describe('run workspace scope', () => {
     ]);
     expect(Object.isFrozen(roots)).toBe(true);
     expect(Object.isFrozen(roots[0])).toBe(true);
+  });
+
+  it('fails closed when an approved root name is reused for a different path', () => {
+    const scope = createWorkspaceScope(approvedRoots, { primaryRoot: 'project', sharedRoots: ['shared'] });
+    const changedApproval: readonly Root[] = [
+      { name: 'project', path: 'D:\\different\\project' },
+      { name: 'shared', path: 'C:\\work\\shared' }
+    ];
+
+    expect(() => effectiveWorkspaceRoots(scope, changedApproval)).toThrowError(
+      'WORKSPACE_SCOPE_ESCALATION: requested workspace scope exceeds the prime/run workspace scope.'
+    );
   });
 
   it('rejects empty, duplicate, unknown, and widening-shaped selections', () => {
@@ -74,7 +95,11 @@ describe('run workspace scope', () => {
 
     expect(inherited).toEqual(runScope);
     expect(inherited).not.toBe(runScope);
-    expect(narrowed).toEqual({ primaryRoot: 'shared', sharedRoots: [] });
+    expect(narrowed).toEqual({
+      primaryRoot: 'shared',
+      sharedRoots: [],
+      rootIdentities: [{ name: 'shared', path: 'C:\\work\\shared' }]
+    });
     expect(() =>
       narrowWorkspaceScope(runScope, { primaryRoot: 'project', sharedRoots: ['outside'] })
     ).toThrowError(
@@ -92,7 +117,8 @@ describe('run workspace scope', () => {
       'WORKSPACE_SCOPE_REQUIRED: this run has no workspace authority. Start a scoped run before accessing workspace resources.'
     );
     expect(restoreRunWorkspaceScope(undefined)).toBeNull();
-    expect(restoreRunWorkspaceScope({ primaryRoot: 'project', sharedRoots: ['shared'] })).toEqual(runScope);
+    expect(restoreRunWorkspaceScope({ primaryRoot: 'project', sharedRoots: ['shared'] })).toBeNull();
+    expect(restoreRunWorkspaceScope(runScope)).toEqual(runScope);
     expect(restoreRunWorkspaceScope({ primaryRoot: 'project', sharedRoots: ['project'] })).toBeNull();
   });
 });

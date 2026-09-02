@@ -2,6 +2,8 @@
 export interface WorkspaceScope {
   readonly primaryRoot: string;
   readonly sharedRoots: readonly string[];
+  /** Immutable approval identities captured when the scope was granted. */
+  readonly rootIdentities: readonly Readonly<{ name: string; path: string }>[];
 }
 
 export interface WorkspaceScopeSelection {

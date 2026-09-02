@@ -10,7 +10,7 @@
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Caller } from '../src/main/agents.js';
+import type { Caller, SpawnInput } from '../src/main/agents.js';
 
 vi.mock('electron', () => ({
   safeStorage: {
@@ -80,6 +80,7 @@ const {
   stageSpawn,
   snapshotSwarm,
   spawn,
+  spawnWithWorkspaceScope,
   swarmRunning,
   swarmState,
   swarmStateForCaller,
@@ -171,6 +172,16 @@ function fillContext(conversationId: string): void {
 }
 
 describe('spawning a run', () => {
+  it('keeps workspace authority out of the model-facing SpawnInput', () => {
+    const input: SpawnInput = {
+      workers: [{ task: 'scoped work' }],
+      caller: prime,
+      // @ts-expect-error workspace authority is app-internal state, never model-facing spawn input.
+      workspaceScope: { primaryRoot: 'project', sharedRoots: [] }
+    };
+    expect(input.workers).toHaveLength(1);
+  });
+
   it('refuses the feature while it is switched off', async () => {
     await setEnabled(false);
     expect(() => spawn({ workers: [{ task: 'x' }], caller: prime })).toThrow(/not enabled|switched off|disabled/i);
@@ -204,20 +215,17 @@ describe('spawning a run', () => {
       ],
       multiAgent: { enabled: true, maxWorkers: 3 }
     });
-    const result = spawn({
+    const result = spawnWithWorkspaceScope({
       workers: [{ task: 'scoped work' }],
-      caller: prime,
-      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] }
-    });
+      caller: prime
+    }, { primaryRoot: 'project', sharedRoots: ['shared'] });
     const worker = startWorker('worker-1');
 
     expect(result.runId).toBe(currentRunId());
-    expect(workspaceScopeForCaller(prime)).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
-    expect(workspaceScopeForCaller(worker.caller)).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
-    expect(workspaceScopeForCaller(worker.caller, { primaryRoot: 'shared', sharedRoots: [] })).toEqual({
-      primaryRoot: 'shared',
-      sharedRoots: []
-    });
+    expect(workspaceScopeForCaller(prime).primaryRoot).toBe('project');
+    expect(workspaceScopeForCaller(prime).sharedRoots).toEqual(['shared']);
+    expect(workspaceScopeForCaller(worker.caller).primaryRoot).toBe('project');
+    expect(workspaceScopeForCaller(worker.caller, { primaryRoot: 'shared', sharedRoots: [] }).primaryRoot).toBe('shared');
     expect(() =>
       workspaceScopeForCaller(worker.caller, { primaryRoot: 'project', sharedRoots: ['other'] })
     ).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
@@ -234,18 +242,18 @@ describe('spawning a run', () => {
       ],
       multiAgent: { enabled: true, maxWorkers: 3 }
     });
-    spawn({ workers: [{ task: 'alpha work' }], caller: prime, workspaceScope: { primaryRoot: 'alpha', sharedRoots: [] } });
+    spawnWithWorkspaceScope({ workers: [{ task: 'alpha work' }], caller: prime }, { primaryRoot: 'alpha', sharedRoots: [] });
     const alphaWorker = startWorker('worker-1', 'c-alpha-worker');
     finishAgent(alphaWorker.caller, 'alpha done');
     expect(releaseQuiescentRun()).toBe(true);
     expect(currentRunId()).toBeNull();
 
     const betaPrime: Caller = { conversationId: 'c-beta-prime' };
-    spawn({ workers: [{ task: 'beta work' }], caller: betaPrime, workspaceScope: { primaryRoot: 'beta', sharedRoots: [] } });
+    spawnWithWorkspaceScope({ workers: [{ task: 'beta work' }], caller: betaPrime }, { primaryRoot: 'beta', sharedRoots: [] });
     const betaWorker = startWorker('worker-1', 'c-beta-worker');
-    expect(workspaceScopeForCaller(betaPrime)).toEqual({ primaryRoot: 'beta', sharedRoots: [] });
-    expect(workspaceScopeForCaller(betaWorker.caller)).toEqual({ primaryRoot: 'beta', sharedRoots: [] });
-    expect(workspaceScopeForCaller(prime)).toEqual({ primaryRoot: 'alpha', sharedRoots: [] });
+    expect(workspaceScopeForCaller(betaPrime).primaryRoot).toBe('beta');
+    expect(workspaceScopeForCaller(betaWorker.caller).primaryRoot).toBe('beta');
+    expect(workspaceScopeForCaller(prime).primaryRoot).toBe('alpha');
     await setEnabled(true);
   });
 
@@ -256,7 +264,7 @@ describe('spawning a run', () => {
       roots: [{ name: 'project', path: 'C:\\work\\project' }],
       multiAgent: { enabled: true, maxWorkers: 3 }
     });
-    spawn({ workers: [{ task: 'continue' }], caller: prime, workspaceScope: { primaryRoot: 'project', sharedRoots: [] } });
+    spawnWithWorkspaceScope({ workers: [{ task: 'continue' }], caller: prime }, { primaryRoot: 'project', sharedRoots: [] });
     const before = workspaceScopeForCaller(prime);
     expect(beginPrimeTransfer(PRIME_CHAT)).toBe(true);
     expect(freezePrimeTransfer(PRIME_CHAT)).toBe('frozen');
@@ -265,6 +273,108 @@ describe('spawning a run', () => {
     expect(workspaceScopeForCaller({ conversationId: 'c-prime-resumed' })).toEqual(before);
     expect(() => workspaceScopeForCaller(prime)).toThrow();
     await setEnabled(true);
+  });
+
+  it('withholds workspace authority from a sleeping dormant worker until its owner wakes it', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\work\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawnWithWorkspaceScope({ workers: [{ task: 'sleep' }], caller: prime }, { primaryRoot: 'project', sharedRoots: [] });
+    const worker = startWorker('worker-1');
+    finishAgent(worker.caller, 'done');
+    expect(releaseQuiescentRun()).toBe(true);
+
+    expect(workspaceScopeForCaller(prime).primaryRoot).toBe('project');
+    expect(() => workspaceScopeForCaller(worker.caller)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+  });
+
+  it('withholds workspace authority from a sleeping worker even while a sibling keeps the run active', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\work\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawnWithWorkspaceScope(
+      { workers: [{ task: 'sleep first' }, { task: 'keep running' }], caller: prime },
+      { primaryRoot: 'project', sharedRoots: [] }
+    );
+    const sleeping = startWorker('worker-1');
+    startWorker('worker-2');
+    finishAgent(sleeping.caller, 'done');
+
+    expect(currentRunId()).not.toBeNull();
+    expect(() => workspaceScopeForCaller(sleeping.caller)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+  });
+
+  it('revokes a persisted scope when the same approved root name is rebound to another path', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\work\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawnWithWorkspaceScope({ workers: [{ task: 'scoped' }], caller: prime }, { primaryRoot: 'project', sharedRoots: [] });
+    expect(workspaceScopeForCaller(prime).primaryRoot).toBe('project');
+
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'D:\\replacement\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    expect(() => workspaceScopeForCaller(prime)).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
+  });
+
+  it('round-trips scoped active and dormant owner histories without granting dormant workers authority', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'alpha', path: 'C:\\work\\alpha' },
+        { name: 'beta', path: 'C:\\work\\beta' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawnWithWorkspaceScope({ workers: [{ task: 'alpha' }], caller: prime }, { primaryRoot: 'alpha', sharedRoots: [] });
+    const alphaWorker = startWorker('worker-1', 'c-alpha-worker');
+    finishAgent(alphaWorker.caller, 'alpha done');
+    expect(releaseQuiescentRun()).toBe(true);
+
+    const betaPrime: Caller = { conversationId: 'c-beta-prime' };
+    spawnWithWorkspaceScope({ workers: [{ task: 'beta' }], caller: betaPrime }, { primaryRoot: 'beta', sharedRoots: [] });
+    startWorker('worker-1', 'c-beta-worker');
+    const saved = snapshotSwarm();
+    expect(saved?.scope?.primaryRoot).toBe('beta');
+    expect(saved?.dormantRuns?.[0]?.scope?.primaryRoot).toBe('alpha');
+
+    resetAgentsForTests();
+    restoreSwarm(saved);
+    expect(workspaceScopeForCaller(betaPrime).primaryRoot).toBe('beta');
+    expect(workspaceScopeForCaller(prime).primaryRoot).toBe('alpha');
+    expect(() => workspaceScopeForCaller(alphaWorker.caller)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+  });
+
+  it('moves scoped dormant history through Compact & Resume without reviving worker authority', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\work\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawnWithWorkspaceScope({ workers: [{ task: 'park then compact' }], caller: prime }, { primaryRoot: 'project', sharedRoots: [] });
+    const worker = startWorker('worker-1');
+    finishAgent(worker.caller, 'done');
+    expect(releaseQuiescentRun()).toBe(true);
+    expect(beginPrimeTransfer(PRIME_CHAT)).toBe(true);
+    expect(freezePrimeTransfer(PRIME_CHAT)).toBe('frozen');
+    expect(commitPrimeTransfer(PRIME_CHAT, 'c-prime-dormant-resumed')).toBe(true);
+
+    expect(workspaceScopeForCaller({ conversationId: 'c-prime-dormant-resumed' }).primaryRoot).toBe('project');
+    expect(() => workspaceScopeForCaller(prime)).toThrow();
+    expect(() => workspaceScopeForCaller(worker.caller)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
   });
 
   it('restores legacy scope-less history with no authority even when cwd and Config.roots look usable', async () => {
