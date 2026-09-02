@@ -7,30 +7,36 @@
  */
 
 export interface WorkspaceScope {
-  /** Canonical approved root that the process may access. */
-  root: string;
-  /** Canonical working directory inside that root. */
-  cwd: string;
+  /** Canonical approved roots that the process may access. */
+  readonly roots: readonly string[];
+  /** Canonical working directory inside the allowed roots. */
+  readonly cwd: string;
 }
 
 export type CommandSandboxUnavailableReason = 'windows_backend_unavailable' | 'unsupported_platform';
 
 export interface CommandSandboxUnavailable {
-  available: false;
-  filesystemConfinement: 'unavailable';
-  backend: null;
-  scope: WorkspaceScope;
-  reason: CommandSandboxUnavailableReason;
+  readonly available: false;
+  readonly filesystemConfinement: 'unavailable';
+  readonly backend: null;
+  readonly scope: WorkspaceScope;
+  readonly reason: CommandSandboxUnavailableReason;
 }
 
 export interface CommandSandboxAvailable {
-  available: true;
-  filesystemConfinement: 'os-enforced';
-  backend: 'windows-create-process-in-sandbox';
-  scope: WorkspaceScope;
+  readonly available: true;
+  readonly filesystemConfinement: 'os-enforced';
+  /** Backend identifier supplied by the concrete implementation. */
+  readonly backend: string;
+  readonly scope: WorkspaceScope;
 }
 
 export type CommandSandboxCapability = CommandSandboxUnavailable | CommandSandboxAvailable;
+
+function snapshotScope(scope: WorkspaceScope): WorkspaceScope {
+  const roots = Object.freeze([...scope.roots]);
+  return Object.freeze({ roots, cwd: scope.cwd });
+}
 
 export class CommandSandboxUnavailableError extends Error {
   readonly capability: CommandSandboxUnavailable;
@@ -56,22 +62,23 @@ export function commandSandboxCapability(
   scope: WorkspaceScope,
   platform: NodeJS.Platform = process.platform
 ): CommandSandboxCapability {
+  const snapshot = snapshotScope(scope);
   if (platform === 'win32') {
-    return {
+    return Object.freeze({
       available: false,
       filesystemConfinement: 'unavailable',
       backend: null,
-      scope,
+      scope: snapshot,
       reason: 'windows_backend_unavailable'
-    };
+    });
   }
-  return {
+  return Object.freeze({
     available: false,
     filesystemConfinement: 'unavailable',
     backend: null,
-    scope,
+    scope: snapshot,
     reason: 'unsupported_platform'
-  };
+  });
 }
 
 /** Returns a proven sandbox capability or throws before any unrestricted process can spawn. */

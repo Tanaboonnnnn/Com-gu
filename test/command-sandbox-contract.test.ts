@@ -7,12 +7,12 @@ import {
 } from '../src/main/run/command-sandbox.js';
 
 const scope: WorkspaceScope = {
-  root: 'C:\\workspace',
+  roots: ['C:\\workspace', 'C:\\shared'],
   cwd: 'C:\\workspace\\repo'
 };
 
 describe('command sandbox confinement contract', () => {
-  it('never equates an ordinary process launch with filesystem confinement', () => {
+  it('does not claim filesystem confinement without an OS-enforced backend', () => {
     const capability = commandSandboxCapability(scope, 'win32');
 
     expect(capability).toEqual({
@@ -24,10 +24,41 @@ describe('command sandbox confinement contract', () => {
     });
   });
 
-  it('fails closed when trustworthy filesystem confinement is unavailable', () => {
-    expect(() =>
-      requireCommandSandbox(scope, 'win32')
-    ).toThrow(CommandSandboxUnavailableError);
+  it('snapshots the effective multi-root scope immutably', () => {
+    const roots = ['C:\\primary', 'C:\\shared'];
+    const mutableScope = { roots, cwd: 'C:\\primary\\repo' };
+    const capability = commandSandboxCapability(mutableScope, 'win32');
+
+    roots.push('C:\\outside');
+    mutableScope.cwd = 'C:\\outside';
+
+    expect(capability.scope).toEqual({
+      roots: ['C:\\primary', 'C:\\shared'],
+      cwd: 'C:\\primary\\repo'
+    });
+    expect(Object.isFrozen(capability.scope)).toBe(true);
+    expect(Object.isFrozen(capability.scope.roots)).toBe(true);
+  });
+
+  it('fails closed with a stable diagnostic when trustworthy confinement is unavailable', () => {
+    let thrown: unknown;
+    try {
+      requireCommandSandbox(scope, 'win32');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(CommandSandboxUnavailableError);
+    const error = thrown as CommandSandboxUnavailableError;
+    expect(error.name).toBe('CommandSandboxUnavailableError');
+    expect(error.message).toBe('Command sandbox unavailable: windows_backend_unavailable');
+    expect(error.capability.reason).toBe('windows_backend_unavailable');
+    expect(error.capability.available).toBe(false);
+    expect(error.capability.filesystemConfinement).toBe('unavailable');
+    expect(error.capability.backend).toBeNull();
+    expect(error.capability.scope).toEqual(scope);
+    expect(error.capability.scope).not.toBe(scope);
+    expect(error.capability.scope.roots).not.toBe(scope.roots);
   });
 
   it('does not claim confinement on non-Windows platforms without a proven backend', () => {
