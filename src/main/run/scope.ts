@@ -77,4 +77,3 @@ export function effectiveWorkspaceRoots(scope: WorkspaceScope, approvedRoots: re
   });
   return Object.freeze(roots);
 }
-

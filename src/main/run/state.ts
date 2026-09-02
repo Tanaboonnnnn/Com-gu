@@ -31,4 +31,3 @@ export function restoreRunWorkspaceScope(input: unknown): WorkspaceScope | null 
     sharedRoots: Object.freeze([...(record.sharedRoots as string[])])
   });
 }
-

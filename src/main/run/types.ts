@@ -10,4 +10,3 @@ export interface WorkspaceScopeSelection {
 }
 
 export type WorkspaceScopeErrorCode = 'WORKSPACE_SCOPE_REQUIRED' | 'WORKSPACE_SCOPE_ESCALATION';
-
