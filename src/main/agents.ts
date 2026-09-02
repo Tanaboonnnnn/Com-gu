@@ -86,10 +86,10 @@ import { randomUUID } from 'node:crypto';
 import type { AgentInfo, AgentMessage, AgentState, SwarmState } from '../shared/session.js';
 import { getConfig } from './config.js';
 import { logInfo, logWarn } from './logger.js';
-import { inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
+import { clampWorkspaceForScope, inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
 import { bindRunWorkspaceScope, effectiveWorkerWorkspaceScope, restoreRunWorkspaceScope } from './run/state.js';
-import { effectiveWorkspaceRoots } from './run/scope.js';
-import type { WorkspaceScope } from './run/types.js';
+import { effectiveWorkspaceRoots, parseWorkspaceScopeSelection, workspaceScopeNames } from './run/scope.js';
+import type { WorkspaceScope, WorkspaceScopeSelection } from './run/types.js';
 
 export const PRIME_ID = 'prime';
 
@@ -261,6 +261,8 @@ function hasStopped(state: AgentState): boolean {
 interface Agent {
   info: AgentInfo;
   queue: AgentMessage[];
+  /** Effective immutable authority for this exact agent history; null means no filesystem authority. */
+  scope: WorkspaceScope | null;
 }
 
 /**
@@ -862,7 +864,7 @@ Your task:
 ${task}`;
 }
 
-function makeWorker(id: string, label: string, task: string): Agent {
+function makeWorker(id: string, label: string, task: string, scope: WorkspaceScope | null): Agent {
   return {
     info: {
       id,
@@ -884,7 +886,8 @@ function makeWorker(id: string, label: string, task: string): Agent {
       sleptAt: null,
       contextTokens: 0
     },
-    queue: []
+    queue: [],
+    scope
   };
 }
 
@@ -910,7 +913,8 @@ function makePrime(conversationId: string): Agent {
       sleptAt: null,
       contextTokens: 0
     },
-    queue: []
+    queue: [],
+    scope: null
   };
 }
 
@@ -1038,7 +1042,7 @@ export function forgetRetiredWorker(conversationId: string): void {
 // -------------------------------------------------------------------- spawn
 
 export interface SpawnInput {
-  workers: ReadonlyArray<{ label?: string; task: string }>;
+  workers: ReadonlyArray<{ label?: string; task: string; workspaceScope?: WorkspaceScopeSelection }>;
   /**
    * What every worker in this spawn needs to know, written once.
    *
@@ -1049,6 +1053,8 @@ export interface SpawnInput {
    * Written here, this app puts it in front of each worker's own task instead.
    */
   context?: string | null;
+  /** Optional immutable Run authority, selected only by approved virtual root names. */
+  workspaceScope?: WorkspaceScopeSelection;
   caller: Caller;
 }
 
@@ -1080,6 +1086,16 @@ interface SpawnOptions {
   workspaceScope?: unknown;
 }
 
+function sameWorkspaceScope(left: WorkspaceScope, right: WorkspaceScope): boolean {
+  const a = workspaceScopeNames(left);
+  const b = workspaceScopeNames(right);
+  return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
+function scopeEscalation(): never {
+  throw new AgentError('WORKSPACE_SCOPE_ESCALATION: requested workspace scope exceeds or changes the immutable prime/run workspace scope.');
+}
+
 function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
   if (stage.settled) return;
   stage.settled = true;
@@ -1088,6 +1104,7 @@ function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
   if (unpublishedRun === stage.run) unpublishedRun = null;
 
   if (accepted) {
+    initializeSpawnWorkspaces(stage.run, stage.created);
     // The exact topology already crossed the immediate durable barrier. Publishing it changes
     // only live readers and the ordinary/debounced mirror, not the critical durability revision.
     if (run === stage.run) changed('telemetry');
@@ -1119,6 +1136,18 @@ function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
   }
 }
 
+function initializeSpawnWorkspaces(owner: Run, created: readonly Agent[]): void {
+  const runRootNames = owner.scope ? workspaceScopeNames(owner.scope) : null;
+  if (runRootNames) {
+    clampWorkspaceForScope(`chat:${owner.primeConversationId}`, runRootNames);
+    clampWorkspaceForScope('agent:prime', runRootNames);
+  }
+  for (const agent of created) {
+    inheritWorkspace(agent.info.id, owner.primeConversationId);
+    if (agent.scope) clampWorkspaceForScope(`agent:${agent.info.id}`, workspaceScopeNames(agent.scope));
+  }
+}
+
 /**
  * Plans a worker spawn behind the same durable acceptance boundary used by agents::message.
  *
@@ -1126,7 +1155,7 @@ function settleSpawnStage(stage: SpawnStageState, accepted: boolean): void {
  * any failure, and only after commit ask the browser to open the returned worker ids.
  */
 export function stageSpawn(input: SpawnInput): StagedSpawn {
-  const result = spawn(input, { deferDelivery: true, stageTopology: true });
+  const result = spawn(input, { deferDelivery: true, stageTopology: true, workspaceScope: input.workspaceScope });
   const stage = activeSpawnStage;
   // An exact retry can match workers that were already accepted earlier. That is not a new
   // mutation and therefore needs no publication transaction.
@@ -1197,6 +1226,9 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     throw new AgentError(`The shared context is too long (limit ${MAX_CONTEXT_CHARS} characters)`);
   }
 
+  const requestedRunScope = options.workspaceScope ?? input.workspaceScope;
+  const requestedRunSelection = requestedRunScope === undefined ? undefined : parseWorkspaceScopeSelection(requestedRunScope);
+
   const planned = input.workers.map((worker, index) => {
     const task = worker.task.trim();
     if (!task) throw new AgentError(`Worker ${index + 1} has no task. Every worker needs one.`);
@@ -1209,7 +1241,8 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     // the browser types, the repeated-spawn match, the status table, the snapshot — then
     // sees the same single string a worker actually receives, with no second field to keep
     // in step and no way for the two halves to be delivered apart.
-    return { label, task: briefFor(context, task) };
+    const workspaceScope = worker.workspaceScope === undefined ? undefined : parseWorkspaceScopeSelection(worker.workspaceScope);
+    return { label, task: briefFor(context, task), workspaceScope };
   });
 
   const conversationId = input.caller.conversationId ?? null;
@@ -1233,6 +1266,31 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     if (conversationId !== run.primeConversationId) throw new AgentsBusyError();
   }
 
+  const existingOwner = run ?? dormantRunForPrime(conversationId);
+  let plannedRunScope: WorkspaceScope | null = existingOwner?.scope ?? null;
+  if (existingOwner) {
+    if (requestedRunSelection !== undefined) {
+      if (!plannedRunScope) scopeEscalation();
+      const requested = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
+      if (!sameWorkspaceScope(plannedRunScope, requested)) scopeEscalation();
+    }
+  } else if (requestedRunSelection !== undefined) {
+    plannedRunScope = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
+  }
+  if (plannedRunScope) effectiveWorkspaceRoots(plannedRunScope, getConfig().roots);
+  const scopedPlanned = planned.map((worker) => ({
+    label: worker.label,
+    task: worker.task,
+    scope:
+      worker.workspaceScope === undefined
+        ? plannedRunScope
+          ? effectiveWorkerWorkspaceScope(plannedRunScope)
+          : null
+        : plannedRunScope
+          ? effectiveWorkerWorkspaceScope(plannedRunScope, worker.workspaceScope)
+          : scopeEscalation()
+  }));
+
   const becamePrime = run === null;
   let resumedDormant: DormantRun | null = null;
   let createdFreshRun = false;
@@ -1251,10 +1309,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
         // in run B. Truncating a UUID to eight hex characters made that safety boundary only
         // 32 bits wide; keep the full UUID and shorten it only where a UI chooses to render it.
         runId: randomUUID(),
-        scope:
-          options.workspaceScope === undefined
-            ? null
-            : bindRunWorkspaceScope(getConfig().roots, options.workspaceScope),
+        scope: plannedRunScope,
         primeConversationId: conversationId,
         startedAt: Date.now(),
         agents: new Map([[PRIME_ID, makePrime(conversationId)]]),
@@ -1277,7 +1332,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   // slot-holding/in flight. Once a worker has stopped and become part of durable history,
   // `spawn` means exactly what it says: create a fresh worker. Reusing an old sleeper is an
   // explicit `message` operation, never an implicit side effect of another spawn.
-  const repeat = matchExistingRequest(planned, live);
+  const repeat = matchExistingRequest(scopedPlanned, live);
   if (repeat) {
     const runId = activeRun.runId;
     if (!options.deferDelivery) requestWorkerBootstraps(repeat.map((agent) => agent.info.id));
@@ -1285,8 +1340,8 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
     return { created: repeat.map((agent) => ({ ...agent.info })), becamePrime, runId };
   }
 
-  if (live.length + planned.length > max) {
-    const total = live.length + planned.length;
+  if (live.length + scopedPlanned.length > max) {
+    const total = live.length + scopedPlanned.length;
     if (resumedDormant) parkRun('a new spawn was rejected before changing its dormant history');
     else if (createdFreshRun) run = null;
     throw new AgentError(`That would make ${total} live workers; the limit set in the app is ${max}.`);
@@ -1298,21 +1353,17 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   // even though maxWorkers is only a *concurrency* limit. The first free positive suffix is
   // bounded by history size + this request, so this loop remains finite without an artificial
   // lifetime ceiling.
-  for (let n = 1; ids.length < planned.length; n++) {
+  for (let n = 1; ids.length < scopedPlanned.length; n++) {
     const id = `worker-${n}`;
     if (!activeRun.agents.has(id)) ids.push(id);
   }
 
   const created: AgentInfo[] = [];
   const createdAgents: Agent[] = [];
-  for (const [index, worker] of planned.entries()) {
+  for (const [index, worker] of scopedPlanned.entries()) {
     const id = ids[index] as string;
-    const agent = makeWorker(id, worker.label || id, worker.task);
+    const agent = makeWorker(id, worker.label || id, worker.task, worker.scope);
     activeRun.agents.set(id, agent);
-    // A worker starts in the folder the prime was working in, so its first call can use the
-    // same shorthand. It is a copy: a worker sent into another project overwrites its own
-    // entry and never the prime's.
-    inheritWorkspace(id, activeRun.primeConversationId);
     createdAgents.push(agent);
     created.push({ ...agent.info });
   }
@@ -1337,6 +1388,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
       : `multi-agent: created ${created.length} worker(s) in run ${activeRun.runId}`
   );
   changed();
+  if (!options.stageTopology) initializeSpawnWorkspaces(activeRun, createdAgents);
   if (!options.deferDelivery) requestWorkerBootstraps(created.map((agent) => agent.id));
   return { created, becamePrime, runId: activeRun.runId };
 }
@@ -1349,7 +1401,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
  * worker still gets one; only an exact repetition of work already under way is folded back.
  */
 function matchExistingRequest(
-  requested: ReadonlyArray<{ label: string; task: string }>,
+  requested: ReadonlyArray<{ label: string; task: string; scope: WorkspaceScope | null }>,
   live: readonly Agent[]
 ): Agent[] | null {
   if (requested.length === 0 || live.length === 0) return null;
@@ -1368,6 +1420,8 @@ function matchExistingRequest(
     const found = live.find(
       (agent) =>
         !taken.has(agent) &&
+        ((agent.scope === null && worker.scope === null) ||
+          (agent.scope !== null && worker.scope !== null && sameWorkspaceScope(agent.scope, worker.scope))) &&
         (shape(agent.info.label, agent.info.task) === shape(worker.label || agent.info.id, worker.task) ||
           shape(agent.info.label, agent.info.task) === shape(worker.label, worker.task))
     );
@@ -2756,7 +2810,7 @@ export function workspaceScopeForCaller(caller: Caller, requestedWorkerScope?: u
       if (member.info.role === 'worker' && hasStopped(member.info.state)) {
         ownerScope = null;
       } else {
-        ownerScope = run.scope;
+        ownerScope = member.info.role === 'worker' ? member.scope : run.scope;
         worker = member.info.role === 'worker';
       }
     }
@@ -2765,7 +2819,11 @@ export function workspaceScopeForCaller(caller: Caller, requestedWorkerScope?: u
     const dormant = dormantRunForPrime(caller.conversationId);
     if (dormant) ownerScope = dormant.scope;
   }
-  const scope = effectiveWorkerWorkspaceScope(ownerScope, worker ? requestedWorkerScope : undefined);
+  if (worker && requestedWorkerScope !== undefined) {
+    const requested = effectiveWorkerWorkspaceScope(run?.scope ?? ownerScope, requestedWorkerScope);
+    if (!sameWorkspaceScope(ownerScope as WorkspaceScope, requested)) scopeEscalation();
+  }
+  const scope = effectiveWorkerWorkspaceScope(ownerScope);
   // A persisted scope is authority only while the exact approved root identities still exist.
   // Name reuse after roots:remove + roots:add must not silently rebind old authority to a new path.
   effectiveWorkspaceRoots(scope, getConfig().roots);
@@ -3616,6 +3674,8 @@ export function restoreRetiredWorkers(snapshot: RetiredWorkersSnapshot | null): 
 interface SerializedAgent {
   info: AgentInfo;
   queue: AgentMessage[];
+  /** Absent in Task-2 snapshots; worker absence inherits the restored run scope for compatibility. */
+  scope?: WorkspaceScope;
 }
 
 interface DormantRunSnapshot {
@@ -3733,7 +3793,7 @@ function serializeAgents(agents: Map<string, Agent>, includeUnpublished: boolean
       if (includeUnpublished && agent.info.id === PRIME_ID) {
         queue.push(...stagedFinishes.map((stage) => ({ ...stage.report })));
       }
-      return { info, queue };
+      return { info, queue, scope: agent.scope ?? undefined };
     });
 }
 
@@ -3784,7 +3844,8 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
         repaired = true;
         continue;
       }
-      const restored = deserializeAgents(saved.agents, snapshot.savedAt);
+      const ownerScope = restoreRunWorkspaceScope(saved.scope);
+      const restored = deserializeAgents(saved.agents, snapshot.savedAt, ownerScope);
       repaired ||= restored.repaired;
       // A dormant history can never contain a slot-holder. If disk says otherwise, choosing to
       // run it beside another owner or silently sleeping live work would both be guesses.
@@ -3800,7 +3861,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
       }
       dormantRuns.set(saved.primeConversationId, {
         primeConversationId: saved.primeConversationId,
-        scope: restoreRunWorkspaceScope(saved.scope),
+        scope: ownerScope,
         startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt : snapshot.savedAt || Date.now(),
         parkedAt: Number.isFinite(saved.parkedAt) ? saved.parkedAt : snapshot.savedAt || Date.now(),
         agents: restored.agents,
@@ -3821,7 +3882,8 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
   }
   if (hasActive) {
     const primeConversationId = snapshot.primeConversationId as string;
-    const restored = deserializeAgents(snapshot.agents, snapshot.savedAt);
+    const ownerScope = restoreRunWorkspaceScope(snapshot.scope);
+    const restored = deserializeAgents(snapshot.agents, snapshot.savedAt, ownerScope);
     repaired ||= restored.repaired;
     if (!acceptOwner(primeConversationId, restored.agents)) {
       logWarn(`multi-agent: discarded active run for ${primeConversationId} because its conversation ownership conflicted`);
@@ -3838,7 +3900,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
       }
       run = {
         runId: restoredRunId,
-        scope: restoreRunWorkspaceScope(snapshot.scope),
+        scope: ownerScope,
         primeConversationId,
         startedAt: Number.isFinite(snapshot.startedAt) ? (snapshot.startedAt as number) : snapshot.savedAt || Date.now(),
         agents: restored.agents,
@@ -3877,13 +3939,41 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
   );
 }
 
-function deserializeAgents(entries: readonly SerializedAgent[], savedAt: number): { agents: Map<string, Agent>; repaired: boolean } {
+function deserializeAgents(
+  entries: readonly SerializedAgent[],
+  savedAt: number,
+  ownerScope: WorkspaceScope | null
+): { agents: Map<string, Agent>; repaired: boolean } {
   const agents = new Map<string, Agent>();
   let repaired = false;
   for (const entry of entries) {
     if (!entry?.info?.id || agents.has(entry.info.id)) {
       repaired = true;
       continue;
+    }
+    let workerScope: WorkspaceScope | null = null;
+    if (entry.info.role === 'worker' && ownerScope) {
+      if (entry.scope === undefined) {
+        // Task-2 snapshots predate per-worker narrowing, so their workers inherited the Run scope.
+        workerScope = effectiveWorkerWorkspaceScope(ownerScope);
+      } else {
+        const persisted = restoreRunWorkspaceScope(entry.scope);
+        if (persisted) {
+          try {
+            workerScope = effectiveWorkerWorkspaceScope(ownerScope, {
+              primaryRoot: persisted.primaryRoot,
+              sharedRoots: persisted.sharedRoots
+            });
+          } catch {
+            repaired = true;
+          }
+        } else {
+          repaired = true;
+        }
+      }
+    } else if (entry.info.role === 'worker' && entry.scope !== undefined) {
+      // A worker can never restore authority that its owner Run does not have.
+      repaired = true;
     }
     const agent: Agent = {
       info: {
@@ -3903,7 +3993,8 @@ function deserializeAgents(entries: readonly SerializedAgent[], savedAt: number)
             : null,
         offeredOnFinish: message.offeredOnFinish ?? false,
         offeredViaRevival: message.offeredViaRevival === true
-      }))
+      })),
+      scope: workerScope
     };
     if (agent.info.role === 'worker') {
       if (agent.info.state === 'invited' && agent.info.conversationId) {

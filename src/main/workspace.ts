@@ -122,6 +122,25 @@ export function setWorkspaceFor(key: string, workspace: Omit<Workspace, 'at'>): 
   prune();
 }
 
+/**
+ * Keeps convenience cwd only when its virtual root is still inside an already-authorised scope.
+ *
+ * This is deliberately a deletion-only policy. Lifecycle scope binding may narrow authority,
+ * so a cwd outside the effective roots is stale convenience state, not a reason to pick another
+ * approved root. The caller supplies root names that were already validated by the broker.
+ */
+export function clampWorkspaceForScope(key: string, rootNames: readonly string[]): boolean {
+  prune();
+  const held = workspaces.get(key);
+  if (!held) return false;
+  const root = held.virtual.split('/').filter(Boolean)[0] ?? '';
+  if (!rootNames.includes(root)) {
+    workspaces.delete(key);
+    return false;
+  }
+  return true;
+}
+
 /** Sets the workspace for the call currently running, if it has an identity. */
 export function setCurrentWorkspace(workspace: Omit<Workspace, 'at'>): boolean {
   const key = workspaceKey();

@@ -24,6 +24,7 @@ import { SandboxError, resolvePath } from '../src/main/sandbox.js';
 import {
   activateAgentWorkspace,
   bindAgentWorkspace,
+  clampWorkspaceForScope,
   currentWorkspace,
   inheritWorkspace,
   moveChatWorkspace,
@@ -210,6 +211,19 @@ describe("one chat's folder is not another's", () => {
 });
 
 describe('a worker starting where the prime left off', () => {
+  it('keeps an inherited cwd only when it is inside the effective scope and otherwise clears it', () => {
+    setWorkspaceFor('chat:conv-prime', { virtual: '/workspace/project', real: path.join(approved, 'project') });
+    inheritWorkspace('worker-1', 'conv-prime');
+    expect(run('worker-1', currentWorkspace)?.virtual).toBe('/workspace/project');
+
+    expect(clampWorkspaceForScope('agent:worker-1', ['other'])).toBe(false);
+    expect(run('worker-1', currentWorkspace)).toBeNull();
+
+    setWorkspaceFor('agent:worker-1', { virtual: '/workspace/other', real: path.join(approved, 'other') });
+    expect(clampWorkspaceForScope('agent:worker-1', ['workspace'])).toBe(true);
+    expect(run('worker-1', currentWorkspace)?.virtual).toBe('/workspace/other');
+  });
+
   it('inherits the prime workspace learned under its conversation', () => {
     // The ordinary prime call carries no agent identity, so what it learns is filed under
     // the conversation. This is the first-spawn shape.

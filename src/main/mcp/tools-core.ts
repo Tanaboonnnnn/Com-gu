@@ -958,6 +958,10 @@ async function measureSleepingWorkers(caller: Caller): Promise<void> {
 }
 
 function registerAgentsTool(reg: SurfaceRegistrar): void {
+  const workspaceScopeSelection = z.object({
+    primaryRoot: z.string().min(1).describe('Primary approved root name.'),
+    sharedRoots: z.array(z.string().min(1)).max(32).describe('Additional approved root names.')
+  }).strict();
   reg.register(
     'agents',
     {
@@ -975,6 +979,9 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
           .describe(
             'spawn: shared instructions prepended to every task, e.g. repo, conventions, edit limits and validation.'
           ),
+        workspaceScope: workspaceScopeSelection
+          .optional()
+          .describe('spawn: immutable Run filesystem scope selected only by approved root names. Omit on a new run for no filesystem authority.'),
         workers: z
           .array(
             z.object({
@@ -985,7 +992,10 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
                 .max(4000)
                 .describe(
                   'This worker\'s job: objective, relevant files, constraints and expected handoff.'
-                )
+                ),
+              workspaceScope: workspaceScopeSelection
+                .optional()
+                .describe('Optional subset of the Prime/Run scope by root name. Omit to inherit the full Run scope.')
             }).strict()
           )
           .min(1)
@@ -1024,11 +1034,12 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
           )
       })
       .superRefine((input, ctx) => {
-        const reject = (field: 'context' | 'workers' | 'messages' | 'to' | 'text' | 'result', message: string): void => {
+        const reject = (field: 'context' | 'workspaceScope' | 'workers' | 'messages' | 'to' | 'text' | 'result', message: string): void => {
           if (input[field] !== undefined) ctx.addIssue({ code: 'custom', path: [field], message });
         };
         if (input.action !== 'spawn') {
           reject('context', 'context is only valid with action=spawn');
+          reject('workspaceScope', 'workspaceScope is only valid with action=spawn');
           reject('workers', 'workers is only valid with action=spawn');
         }
         if (input.action !== 'message') {
@@ -1064,6 +1075,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
           const staged = stageSpawn({
             workers: input.workers,
             context: input.context ?? null,
+            workspaceScope: input.workspaceScope,
             caller: await callerNow(startedAt, { exact: true })
           });
           let accepted = false;

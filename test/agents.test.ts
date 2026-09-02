@@ -96,7 +96,7 @@ const { findSessionByConversation, initSessionStore, readRecentEvents, resetSess
   '../src/main/session/store.js'
 );
 const { recordChatObservations, resetRecorderForTests } = await import('../src/main/session/recorder.js');
-const { resetWorkspaces, setWorkspaceFor, workspaceForChat } = await import('../src/main/workspace.js');
+const { resetWorkspaces, setWorkspaceFor, workspaceEntries, workspaceForChat } = await import('../src/main/workspace.js');
 const { DEFAULT_CAPABILITIES } = await import('../src/shared/types.js');
 const { makeTempDir, removeTempDir } = await import('./helpers.js');
 
@@ -172,14 +172,100 @@ function fillContext(conversationId: string): void {
 }
 
 describe('spawning a run', () => {
-  it('keeps workspace authority out of the model-facing SpawnInput', () => {
+  it('accepts only name-based workspace selections in the model-facing SpawnInput', () => {
     const input: SpawnInput = {
-      workers: [{ task: 'scoped work' }],
+      workers: [{ task: 'scoped work', workspaceScope: { primaryRoot: 'shared', sharedRoots: [] } }],
       caller: prime,
-      // @ts-expect-error workspace authority is app-internal state, never model-facing spawn input.
-      workspaceScope: { primaryRoot: 'project', sharedRoots: [] }
+      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] }
     };
     expect(input.workers).toHaveLength(1);
+    // Persisted authority carries host-path identities internally; model input never may.
+    const invalid: SpawnInput = {
+      workers: [{ task: 'no host paths' }],
+      caller: prime,
+      // @ts-expect-error host paths/root identities are not part of a model-facing selection.
+      workspaceScope: { primaryRoot: 'project', sharedRoots: [], rootIdentities: [{ name: 'project', path: 'C:\\work' }] }
+    };
+    expect(invalid.workers).toHaveLength(1);
+  });
+
+  it('binds each worker to its requested subset and omitted subsets to the full immutable run scope', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+
+    spawn({
+      caller: prime,
+      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] },
+      workers: [
+        { task: 'shared only', workspaceScope: { primaryRoot: 'shared', sharedRoots: [] } },
+        { task: 'full run scope' }
+      ]
+    });
+    const narrowed = startWorker('worker-1', 'c-narrowed');
+    const full = startWorker('worker-2', 'c-full');
+
+    expect(workspaceScopeForCaller(narrowed.caller)).toMatchObject({ primaryRoot: 'shared', sharedRoots: [] });
+    expect(workspaceScopeForCaller(full.caller)).toMatchObject({ primaryRoot: 'project', sharedRoots: ['shared'] });
+  });
+
+  it('clears Prime and worker cwd when lifecycle scope binding makes the learned folder out of scope', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/project/src', real: 'C:\\work\\project\\src' });
+
+    spawn({
+      caller: prime,
+      workspaceScope: { primaryRoot: 'shared', sharedRoots: [] },
+      workers: [{ task: 'shared only' }]
+    });
+
+    expect(workspaceForChat(PRIME_CHAT)).toBeNull();
+    expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
+  });
+
+  it('rejects run-scope mutation and a repeated worker-scope mutation with stable escalation before creating anything', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' },
+        { name: 'other', path: 'C:\\work\\other' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawn({
+      caller: prime,
+      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] },
+      workers: [{ task: 'same work', workspaceScope: { primaryRoot: 'shared', sharedRoots: [] } }]
+    });
+    const narrowed = startWorker('worker-1', 'c-scope-mutation-worker');
+
+    expect(() =>
+      spawn({
+        caller: prime,
+        workspaceScope: { primaryRoot: 'project', sharedRoots: ['other'] },
+        workers: [{ task: 'new work' }]
+      })
+    ).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
+    expect(() =>
+      workspaceScopeForCaller(narrowed.caller, { primaryRoot: 'project', sharedRoots: ['shared'] })
+    ).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
+    expect(swarmState().agents.filter((agent) => agent.role === 'worker')).toHaveLength(1);
   });
 
   it('refuses the feature while it is switched off', async () => {
@@ -225,7 +311,9 @@ describe('spawning a run', () => {
     expect(workspaceScopeForCaller(prime).primaryRoot).toBe('project');
     expect(workspaceScopeForCaller(prime).sharedRoots).toEqual(['shared']);
     expect(workspaceScopeForCaller(worker.caller).primaryRoot).toBe('project');
-    expect(workspaceScopeForCaller(worker.caller, { primaryRoot: 'shared', sharedRoots: [] }).primaryRoot).toBe('shared');
+    expect(() => workspaceScopeForCaller(worker.caller, { primaryRoot: 'shared', sharedRoots: [] })).toThrow(
+      /WORKSPACE_SCOPE_ESCALATION/
+    );
     expect(() =>
       workspaceScopeForCaller(worker.caller, { primaryRoot: 'project', sharedRoots: ['other'] })
     ).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
@@ -355,6 +443,36 @@ describe('spawning a run', () => {
     expect(workspaceScopeForCaller(betaPrime).primaryRoot).toBe('beta');
     expect(workspaceScopeForCaller(prime).primaryRoot).toBe('alpha');
     expect(() => workspaceScopeForCaller(alphaWorker.caller)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+  });
+
+  it('round-trips each worker effective subset with its exact history instead of recomputing from the run', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawn({
+      caller: prime,
+      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] },
+      workers: [{ task: 'shared only', workspaceScope: { primaryRoot: 'shared', sharedRoots: [] } }]
+    });
+    const worker = startWorker('worker-1', 'c-persisted-subset');
+    const saved = snapshotSwarm();
+
+    resetAgentsForTests();
+    restoreSwarm(saved);
+
+    expect(workspaceScopeForCaller(worker.caller)).toMatchObject({ primaryRoot: 'shared', sharedRoots: [] });
+    expect(workspaceScopeForCaller(prime)).toMatchObject({ primaryRoot: 'project', sharedRoots: ['shared'] });
+
+    finishAgent(worker.caller, 'park me');
+    expect(releaseQuiescentRun()).toBe(true);
+    sendMessage(prime, 'worker-1', 'resume exact history');
+    expect(workspaceScopeForCaller(worker.caller)).toMatchObject({ primaryRoot: 'shared', sharedRoots: [] });
   });
 
   it('moves scoped dormant history through Compact & Resume without reviving worker authority', async () => {
@@ -2135,8 +2253,55 @@ describe('through the MCP endpoint', () => {
       (tool) => tool.name === 'agents'
     )!.inputSchema;
     expect(schema.properties.action.enum.slice().sort()).toEqual(['finish', 'message', 'spawn', 'status']);
+    expect(Object.keys(schema.properties.workspaceScope.properties).sort()).toEqual(['primaryRoot', 'sharedRoots']);
+    expect(Object.keys(schema.properties.workers.items.properties.workspaceScope.properties).sort()).toEqual([
+      'primaryRoot',
+      'sharedRoots'
+    ]);
+    expect(JSON.stringify(schema.properties.workspaceScope)).not.toMatch(/path|rootIdentities/i);
     // Revive is gone from the wire as well as from the broker: no field survives for it.
     expect(Object.keys(schema.properties)).not.toContain('agent');
+  });
+
+  it('rejects host-path scope material at schema validation before any worker bootstrap side effect', async () => {
+    const bootstraps: unknown[] = [];
+    onSpawnRequest((workers) => bootstraps.push(...workers));
+    const text = await agents('spawn', {
+      workspaceScope: {
+        primaryRoot: 'project',
+        sharedRoots: [],
+        rootIdentities: [{ name: 'project', path: 'C:\\host\\project' }]
+      },
+      workers: [{ task: 'must never open' }]
+    });
+
+    expect(text).toMatch(/invalid|unrecognized|rootIdentities/i);
+    expect(bootstraps).toEqual([]);
+    expect(swarmRunning()).toBe(false);
+  });
+
+  it('rejects a schema-valid worker scope escalation in the broker before requesting any browser bootstrap', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'other', path: 'C:\\work\\other' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    const bootstraps: unknown[] = [];
+    onSpawnRequest((workers) => bootstraps.push(...workers));
+
+    const text = await asChat(PRIME_CHAT, 'spawn', {
+      workspaceScope: { primaryRoot: 'project', sharedRoots: [] },
+      workers: [{ task: 'must never open', workspaceScope: { primaryRoot: 'other', sharedRoots: [] } }]
+    });
+
+    expect(text).toContain('WORKSPACE_SCOPE_ESCALATION');
+    expect(bootstraps).toEqual([]);
+    expect(swarmRunning()).toBe(false);
+    await setEnabled(true);
   });
 
   it('is identified by exact request-id evidence that arrived before the call it names', async () => {
