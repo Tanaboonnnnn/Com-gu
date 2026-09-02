@@ -87,6 +87,8 @@ import type { AgentInfo, AgentMessage, AgentState, SwarmState } from '../shared/
 import { getConfig } from './config.js';
 import { logInfo, logWarn } from './logger.js';
 import { inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
+import { bindRunWorkspaceScope, effectiveWorkerWorkspaceScope, restoreRunWorkspaceScope } from './run/state.js';
+import type { WorkspaceScope } from './run/types.js';
 
 export const PRIME_ID = 'prime';
 
@@ -275,6 +277,8 @@ interface PrimeTransfer {
 
 interface Run {
   runId: string;
+  /** Name-based authority for this owner history; null only for legacy/scope-less history. */
+  scope: WorkspaceScope | null;
   primeConversationId: string;
   startedAt: number;
   agents: Map<string, Agent>;
@@ -321,6 +325,7 @@ let run: Run | null = null;
  */
 interface DormantRun {
   primeConversationId: string;
+  scope: WorkspaceScope | null;
   startedAt: number;
   parkedAt: number;
   agents: Map<string, Agent>;
@@ -677,6 +682,7 @@ function reactivateDormantRun(dormant: DormantRun): Run | null {
   prime.info.lastSeenAt = now;
   run = {
     runId: randomUUID(),
+    scope: dormant.scope,
     primeConversationId: dormant.primeConversationId,
     // The browser-command fence gets a new incarnation id, but this is still the same prime's
     // worker history. Keep the original history start instead of pretending the workers were
@@ -987,6 +993,7 @@ function parkRun(reason: string): boolean {
   releasePrimeWorkspace(current.primeConversationId);
   dormantRuns.set(current.primeConversationId, {
     primeConversationId: current.primeConversationId,
+    scope: current.scope,
     startedAt: current.startedAt,
     parkedAt: Date.now(),
     agents: current.agents,
@@ -1042,6 +1049,8 @@ export interface SpawnInput {
    */
   context?: string | null;
   caller: Caller;
+  /** Internal Task-2 seam. MCP does not expose this selection until a later task. */
+  workspaceScope?: unknown;
 }
 
 export interface SpawnResult {
@@ -1236,6 +1245,10 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
         // in run B. Truncating a UUID to eight hex characters made that safety boundary only
         // 32 bits wide; keep the full UUID and shorten it only where a UI chooses to render it.
         runId: randomUUID(),
+        scope:
+          input.workspaceScope === undefined
+            ? null
+            : bindRunWorkspaceScope(getConfig().roots, input.workspaceScope),
         primeConversationId: conversationId,
         startedAt: Date.now(),
         agents: new Map([[PRIME_ID, makePrime(conversationId)]]),
@@ -2722,6 +2735,37 @@ export function currentRunId(): string | null {
   return run?.runId ?? null;
 }
 
+/**
+ * Task-2 authority seam for later file/terminal wiring.
+ * Prime sees the run scope; workers inherit it unless a caller explicitly requests a subset.
+ * Learned workspace/cwd is intentionally not consulted here and therefore can never grant authority.
+ */
+export function workspaceScopeForCaller(caller: Caller, requestedWorkerScope?: unknown): WorkspaceScope {
+  if (!caller.conversationId) throw new IdentityLostError();
+  let ownerScope: WorkspaceScope | null = null;
+  let worker = false;
+  if (run) {
+    const member = agentForConversationId(caller.conversationId);
+    if (member) {
+      ownerScope = run.scope;
+      worker = member.info.role === 'worker';
+    }
+  }
+  if (!ownerScope) {
+    const dormant = dormantRunForPrime(caller.conversationId);
+    if (dormant) ownerScope = dormant.scope;
+    else {
+      const dormantWorker = dormantAgentForConversation(caller.conversationId);
+      if (dormantWorker) {
+        ownerScope = dormantWorker.owner.scope;
+        worker = true;
+      }
+    }
+  }
+  const scope = effectiveWorkerWorkspaceScope(ownerScope, worker ? requestedWorkerScope : undefined);
+  return scope;
+}
+
 /** Whether Compact & Resume currently owns the prime binding transition. */
 export function swarmTransferActive(): boolean {
   const transfer = run?.transfer ?? null;
@@ -3570,6 +3614,8 @@ interface SerializedAgent {
 
 interface DormantRunSnapshot {
   primeConversationId: string;
+  /** Absent in v3.0.1 snapshots; absence restores with no workspace authority. */
+  scope?: WorkspaceScope;
   startedAt: number;
   parkedAt: number;
   agents: SerializedAgent[];
@@ -3586,6 +3632,8 @@ export interface SwarmSnapshot {
   savedAt: number;
   /** Top-level fields are the active incarnation; all are null/empty while only history remains. */
   runId: string | null;
+  /** Absent in v3.0.1 snapshots; absence restores with no workspace authority. */
+  scope?: WorkspaceScope;
   primeConversationId: string | null;
   startedAt: number | null;
   agents: SerializedAgent[];
@@ -3617,11 +3665,13 @@ function buildSwarmSnapshot(includeUnpublished: boolean): SwarmSnapshot | null {
     version: 5,
     savedAt: Date.now(),
     runId: active?.runId ?? null,
+    scope: active?.scope ?? undefined,
     primeConversationId: active?.primeConversationId ?? null,
     startedAt: active?.startedAt ?? null,
     agents: active ? serializeAgents(active.agents, includeUnpublished) : [],
     dormantRuns: dormant.map((history) => ({
       primeConversationId: history.primeConversationId,
+      scope: history.scope ?? undefined,
       startedAt: history.startedAt,
       parkedAt: history.parkedAt,
       // Critical acceptance can race with feature-toggle parking. Staged finishes/messages still
@@ -3744,6 +3794,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
       }
       dormantRuns.set(saved.primeConversationId, {
         primeConversationId: saved.primeConversationId,
+        scope: restoreRunWorkspaceScope(saved.scope),
         startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt : snapshot.savedAt || Date.now(),
         parkedAt: Number.isFinite(saved.parkedAt) ? saved.parkedAt : snapshot.savedAt || Date.now(),
         agents: restored.agents,
@@ -3781,6 +3832,7 @@ export function restoreSwarm(snapshot: SwarmSnapshot | null): void {
       }
       run = {
         runId: restoredRunId,
+        scope: restoreRunWorkspaceScope(snapshot.scope),
         primeConversationId,
         startedAt: Number.isFinite(snapshot.startedAt) ? (snapshot.startedAt as number) : snapshot.savedAt || Date.now(),
         agents: restored.agents,

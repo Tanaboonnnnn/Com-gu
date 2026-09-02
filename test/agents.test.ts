@@ -30,13 +30,16 @@ const {
   acknowledgeOffers,
   acknowledgeOffersForConversation,
   bindConversation,
+  beginPrimeTransfer,
   clearAgent,
   claimWorkerRevival,
+  commitPrimeTransfer,
   currentRunId,
   dormantWorkerNotice,
   failAgent,
   finishAgent,
   finishWorkerConversation,
+  freezePrimeTransfer,
   identify,
   offerMessages,
   offerMessagesForConversation,
@@ -82,7 +85,8 @@ const {
   swarmStateForCaller,
   statusForCaller,
   workerConversationGone,
-  workerRevivalClaimed
+  workerRevivalClaimed,
+  workspaceScopeForCaller
 } = await import('../src/main/agents.js');
 const { startMcpServer } = await import('../src/main/mcp/server.js');
 const { runningToolCalls } = await import('../src/main/mcp/call-context.js');
@@ -187,6 +191,101 @@ describe('spawning a run', () => {
   it('uses a full UUID as the run incarnation key that fences stale worker commands', () => {
     startSwarm(1);
     expect(currentRunId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
+  it('binds one immutable workspace authority set to the existing broker run identity', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' },
+        { name: 'other', path: 'C:\\work\\other' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    const result = spawn({
+      workers: [{ task: 'scoped work' }],
+      caller: prime,
+      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] }
+    });
+    const worker = startWorker('worker-1');
+
+    expect(result.runId).toBe(currentRunId());
+    expect(workspaceScopeForCaller(prime)).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(workspaceScopeForCaller(worker.caller)).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(workspaceScopeForCaller(worker.caller, { primaryRoot: 'shared', sharedRoots: [] })).toEqual({
+      primaryRoot: 'shared',
+      sharedRoots: []
+    });
+    expect(() =>
+      workspaceScopeForCaller(worker.caller, { primaryRoot: 'project', sharedRoots: ['other'] })
+    ).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
+    await setEnabled(true);
+  });
+
+  it('preserves owner authority through parking/reactivation while same-named workers in another run stay isolated', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'alpha', path: 'C:\\work\\alpha' },
+        { name: 'beta', path: 'C:\\work\\beta' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawn({ workers: [{ task: 'alpha work' }], caller: prime, workspaceScope: { primaryRoot: 'alpha', sharedRoots: [] } });
+    const alphaWorker = startWorker('worker-1', 'c-alpha-worker');
+    finishAgent(alphaWorker.caller, 'alpha done');
+    expect(releaseQuiescentRun()).toBe(true);
+    expect(currentRunId()).toBeNull();
+
+    const betaPrime: Caller = { conversationId: 'c-beta-prime' };
+    spawn({ workers: [{ task: 'beta work' }], caller: betaPrime, workspaceScope: { primaryRoot: 'beta', sharedRoots: [] } });
+    const betaWorker = startWorker('worker-1', 'c-beta-worker');
+    expect(workspaceScopeForCaller(betaPrime)).toEqual({ primaryRoot: 'beta', sharedRoots: [] });
+    expect(workspaceScopeForCaller(betaWorker.caller)).toEqual({ primaryRoot: 'beta', sharedRoots: [] });
+    expect(workspaceScopeForCaller(prime)).toEqual({ primaryRoot: 'alpha', sharedRoots: [] });
+    await setEnabled(true);
+  });
+
+  it('moves the same run authority through Compact & Resume without changing its root set', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\work\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawn({ workers: [{ task: 'continue' }], caller: prime, workspaceScope: { primaryRoot: 'project', sharedRoots: [] } });
+    const before = workspaceScopeForCaller(prime);
+    expect(beginPrimeTransfer(PRIME_CHAT)).toBe(true);
+    expect(freezePrimeTransfer(PRIME_CHAT)).toBe('frozen');
+    expect(commitPrimeTransfer(PRIME_CHAT, 'c-prime-resumed')).toBe(true);
+
+    expect(workspaceScopeForCaller({ conversationId: 'c-prime-resumed' })).toEqual(before);
+    expect(() => workspaceScopeForCaller(prime)).toThrow();
+    await setEnabled(true);
+  });
+
+  it('restores legacy scope-less history with no authority even when cwd and Config.roots look usable', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\work\\project' }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawn({ workers: [{ task: 'legacy' }], caller: prime });
+    setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/project', real: 'C:\\work\\project' });
+    const legacy = snapshotSwarm();
+    expect(legacy).not.toBeNull();
+    delete legacy!.scope;
+
+    resetAgentsForTests();
+    restoreSwarm(legacy);
+    setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/project', real: 'C:\\work\\project' });
+    expect(() => workspaceScopeForCaller(prime)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+    expect(workspaceForChat(PRIME_CHAT)?.real).toBe('C:\\work\\project');
+    await setEnabled(true);
   });
 
   it('creates nothing at all when any worker in the request is invalid', () => {
