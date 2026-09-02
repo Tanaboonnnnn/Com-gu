@@ -959,6 +959,7 @@ async function showExtensionPath(): Promise<void> {
 function paintSwarm(state: SwarmState): void {
   swarm = state;
   paintStateLine();
+  paintRunWorkspace(state);
   const list = $('swarmList');
   if (state.agents.length === 0) {
     list.replaceChildren(
@@ -997,6 +998,9 @@ function paintSwarm(state: SwarmState): void {
         if (agent.conversationId) bits.push(tr('agents.chatBound'));
         sub.textContent = bits.join(' · ');
         row.append(top, sub);
+        if (agent.workspaceScope) {
+          row.append(el('p', 'agent-scope', `${tr('agents.effectiveScope')}: ${scopeLabel(agent.workspaceScope)}`));
+        }
         if (agent.task) row.append(el('p', 'hint', agent.task));
         // Why it failed, not just that it did. A worker only reaches this state when its
         // chat could not be opened, and the reason is the only actionable part.
@@ -1009,6 +1013,100 @@ function paintSwarm(state: SwarmState): void {
   // Gating on `running` left finished-but-present swarm state with no way out, which is
   // exactly the state a user wants to clear before starting the next run.
   $<HTMLButtonElement>('swarmReset').disabled = state.agents.length === 0 && state.retainedHistory !== true;
+}
+
+function scopeLabel(scope: { primaryRoot: string; sharedRoots: string[] }): string {
+  return [`/${scope.primaryRoot}`, ...scope.sharedRoots.map((name) => `/${name}`)].join(' · ');
+}
+
+function runSelectionFromControls(): { primaryRoot: string; sharedRoots: string[] } | null {
+  const primaryRoot = $<HTMLSelectElement>('runPrimaryRoot').value;
+  if (!primaryRoot) return null;
+  const sharedRoots = [...$('runSharedRoots').querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+    .map((input) => input.value)
+    .filter((name) => name !== primaryRoot);
+  return { primaryRoot, sharedRoots };
+}
+
+function paintRunWorkspace(state: SwarmState): void {
+  const roots = deps.state()?.config.roots ?? [];
+  // Any active Run is immutable from the renderer, including a restored legacy Run with no
+  // workspace authority. A null scope is a real fail-closed state, not an invitation to pick a
+  // replacement underneath a live incarnation.
+  const active = state.running && Boolean(state.runId);
+  const scope = active ? state.workspaceScope : state.selectedWorkspaceScope;
+  const chip = $('runIdChip');
+  chip.hidden = !active;
+  chip.textContent = active && state.runId ? tr('agents.runId', { id: state.runId.slice(0, 8) }) : '';
+  $('runWorkspaceSummary').textContent = active
+    ? scope
+      ? `${tr('agents.primaryFolder')}: /${scope.primaryRoot} · ${tr('agents.sharedFolders')}: ${scope.sharedRoots.length > 0 ? scope.sharedRoots.map((name) => `/${name}`).join(', ') : tr('agents.noneSelected')}`
+      : tr('agents.noWorkspaceScope')
+    : scope
+      ? tr('agents.nextRunScope', { scope: scopeLabel(scope) })
+      : tr('agents.chooseNextRunScope');
+
+  const picker = $('runWorkspacePicker');
+  picker.hidden = active;
+  const primary = $<HTMLSelectElement>('runPrimaryRoot');
+  const selectedPrimary = scope?.primaryRoot ?? '';
+  primary.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = tr('agents.choosePrimaryFolder');
+  primary.append(placeholder);
+  for (const root of roots) {
+    const option = document.createElement('option');
+    option.value = root.name;
+    option.textContent = `/${root.name}`;
+    primary.append(option);
+  }
+  primary.value = roots.some((root) => root.name === selectedPrimary) ? selectedPrimary : '';
+  primary.disabled = roots.length === 0;
+
+  const shared = $('runSharedRoots');
+  shared.replaceChildren(
+    ...roots
+      .filter((root) => root.name !== primary.value)
+      .map((root) => {
+        const label = el('label', 'run-shared-root');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = root.name;
+        input.checked = scope?.sharedRoots.includes(root.name) ?? false;
+        label.append(input, el('span', '', `/${root.name}`));
+        return label;
+      })
+  );
+}
+
+function paintCommandSandbox(state: AppState): void {
+  const status = state.commandSandbox;
+  const line = $('commandSandboxState');
+  const prepare = $<HTMLButtonElement>('commandSandboxPrepare');
+  if (!status) {
+    line.textContent = tr('agents.commandSandboxUnknown');
+    line.classList.add('is-warn');
+    prepare.hidden = true;
+    return;
+  }
+  if (status.available) {
+    line.textContent = tr('agents.commandSandboxReady', { backend: status.backend ?? 'OS' });
+    line.classList.remove('is-warn');
+  } else {
+    const reasonKey =
+      status.reason === 'windows_host_preparation_required'
+        ? 'agents.commandSandboxReasonHostPrep'
+        : status.reason === 'windows_backend_unavailable'
+          ? 'agents.commandSandboxReasonBackend'
+          : status.reason === 'unsupported_platform'
+            ? 'agents.commandSandboxReasonPlatform'
+            : 'agents.commandSandboxReasonUnknown';
+    line.textContent = tr('agents.commandSandboxUnavailable', { reason: tr(reasonKey) });
+    line.classList.add('is-warn');
+  }
+  prepare.hidden = !status.hostPreparation.required;
+  prepare.disabled = false;
 }
 
 /**
@@ -1353,6 +1451,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyChatValue($<HTMLInputElement>('maWorkers'), String(config.multiAgent.maxWorkers), previous?.multiAgent.maxWorkers);
 
   applyGoal(state, previous);
+  paintCommandSandbox(state);
 
   // Extension bridge. Connecting is automatic, so this reports rather than asks.
   const browserRequired = browserExtensionRequired(config);
@@ -1472,6 +1571,37 @@ export function initChat(next: Deps): void {
     if (state) {
       paintSwarm(state);
       toast(tr('chat.swarmCleared'));
+    }
+  });
+
+  $('runPrimaryRoot').addEventListener('change', async () => {
+    const state = swarm;
+    if (!state || state.running) return;
+    const selected = runSelectionFromControls();
+    paintRunWorkspace({ ...state, selectedWorkspaceScope: selected });
+    const selection = runSelectionFromControls();
+    if (!selection) return;
+    const next = await run(api.setRunWorkspaceScope(selection));
+    if (next) paintSwarm(next);
+  });
+
+  $('runSharedRoots').addEventListener('change', async () => {
+    const state = swarm;
+    if (!state || state.running) return;
+    const selection = runSelectionFromControls();
+    if (!selection) return;
+    const next = await run(api.setRunWorkspaceScope(selection));
+    if (next) paintSwarm(next);
+  });
+
+  $('commandSandboxPrepare').addEventListener('click', async () => {
+    const button = $<HTMLButtonElement>('commandSandboxPrepare');
+    button.disabled = true;
+    try {
+      const next = await run(api.prepareCommandSandbox());
+      if (next) paintCommandSandbox(next);
+    } finally {
+      button.disabled = false;
     }
   });
 

@@ -9,6 +9,44 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
+## [3.1.0] — 2026-09-02
+
+3.1.0 makes an active multi-agent Run a real workspace authority boundary instead of only a
+coordination concept. File tools and Run-scoped commands now consume the same immutable
+Primary/Shared scope, Windows command descendants are OS-confined with MXC ProcessContainer, and
+unproven confinement fails closed rather than falling back to an unrestricted shell.
+
+### Added
+- Explicit Run `WorkspaceScope`: one Primary approved root plus optional Shared roots. Prime gets
+  the Run scope; Workers inherit it or narrow to a subset and can never widen it.
+- Run scope UI showing the active short RunId, Prime/Worker effective roots, next-Run approved-root
+  selection, and command-sandbox readiness.
+- Explicit Windows host-preparation action for MXC AppContainer fallback hosts. Build, test, startup
+  and ordinary command spawning never elevate or perform that preparation implicitly.
+- Canonical System Health v1 for Desktop, MCP Core, Tunnel, Browser bridge, Extension, Prime and
+  Workers using `healthy | starting | degraded | disconnected | recovering | failed`.
+- Bounded Recovery Manager v1 for reversible bridge/tunnel/browser/Prime recovery, fenced by the
+  active RunId and effective-scope fingerprint before and after every action.
+- Windows adversarial and packaged-runtime release gates that prove an outside-scope canary cannot
+  be read or written by a Run command or its descendants.
+
+### Security
+- All active-Run file operations use the caller's effective WorkspaceScope as their only root
+  authority; learned cwd is convenience state and cannot widen access.
+- Active-Run Windows terminal sessions and descendants are created through MXC ProcessContainer.
+  If the backend or required host preparation cannot be proven, `exec_command`/`write_stdin` fail
+  closed with no unrestricted fallback.
+- Long-running terminal sessions are bound to conversation, RunId and scope fingerprint. A stale
+  session is terminated when the Run disappears or its authority changes, including a terminal
+  opened before the Run existed.
+- The Node/npm compatibility mirror is read-only inside the command sandbox and is integrity-checked
+  before reuse rather than trusting a predictable marker alone.
+
+### Known release caveat
+- macOS and Linux do not currently have a proven Run command-confinement backend, so Run-scoped
+  commands fail closed there. File WorkspaceScope enforcement remains available.
+- macOS DMG/ZIP artifacts are publisher-unsigned and unnotarized. Gatekeeper may warn on first open.
+
 ## [3.0.1] — 2026-09-02
 
 3.0.1 repairs Windows upgrade continuity and credential migration after the 3.0.0 identity rename.

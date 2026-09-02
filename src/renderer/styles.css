@@ -875,6 +875,74 @@ main {
   font-size: 10.5px;
 }
 
+.run-workspace,
+.command-sandbox {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunk);
+}
+
+.command-sandbox,
+.run-workspace-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.run-workspace-head {
+  display: grid;
+  gap: 10px;
+}
+
+.run-workspace-picker {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1.3fr);
+  gap: 12px;
+}
+
+.run-workspace-picker .field {
+  margin: 0;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--soft);
+}
+
+.run-shared-roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.run-shared-root {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--card);
+  font-size: 11.5px;
+  color: var(--soft);
+}
+
+.run-shared-root input {
+  margin: 0;
+}
+
+.agent-scope {
+  margin-top: 4px;
+  font: 11px/1.45 var(--mono);
+  color: var(--soft);
+  overflow-wrap: anywhere;
+}
+
 /* ----------------------------------------------------------------- folders */
 
 .root {

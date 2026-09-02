@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { RIPGREP, TUNNEL_CLIENT } from './packaging-versions.mjs';
@@ -214,5 +215,32 @@ if (result.status !== 0) process.exit(result.status ?? 1);
 const runtime = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));
 if (runtime.version !== expectedVersion || runtime.electron !== expectedElectronVersion || !runtime.sharp || !runtime.vips || runtime.png <= 0 || !runtime.pty || runtime.tree !== 'program') {
   throw new Error(`Packaged native runtime probe failed: ${JSON.stringify(runtime)}`);
+}
+
+if (targetPlatform === 'win32') {
+  const allowed = mkdtempSync(path.join(tmpdir(), 'comgu-packaged-scope-'));
+  const outside = mkdtempSync(path.join(tmpdir(), 'comgu-packaged-outside-'));
+  try {
+    const outsideSecret = path.join(outside, 'outside-secret.txt');
+    const outsideWrite = path.join(outside, 'escaped.txt');
+    writeFileSync(outsideSecret, 'outside-secret', 'utf8');
+    const probeEntry = path.join(resourcesDir, 'app.asar', 'out', 'main', 'command-sandbox-probe.js');
+    const sandboxResult = spawnSync(appExecutable, [probeEntry, allowed, outsideSecret, outsideWrite], {
+      cwd: packageRoot,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      encoding: 'utf8',
+      timeout: 30_000
+    });
+    if (sandboxResult.error) throw sandboxResult.error;
+    const sandboxOutput = `${sandboxResult.stdout ?? ''}${sandboxResult.stderr ?? ''}`;
+    if (sandboxResult.status !== 0 || !sandboxOutput.includes('packaged-command-sandbox-denied')) {
+      throw new Error(`Packaged command sandbox denial probe failed (${sandboxResult.status}): ${sandboxOutput}`);
+    }
+    if (existsSync(outsideWrite)) throw new Error('Packaged command sandbox smoke wrote its outside-scope canary.');
+    if (readFileSync(outsideSecret, 'utf8') !== 'outside-secret') throw new Error('Packaged command sandbox smoke changed its outside canary.');
+  } finally {
+    rmSync(allowed, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 }
 process.stdout.write(`Packaged ${targetPlatform}-${targetArch} resources and native runtimes verified for ${expectedVersion}.\n`);

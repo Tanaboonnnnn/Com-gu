@@ -441,6 +441,30 @@ describe('cross-platform packaging targets', () => {
     expect(packagedRuntime).toContain("@microsoft/mxc-sdk/bin/${targetArch}/wxc-host-prep.exe");
   });
 
+  it('prepares MXC only on explicit Windows CI runners before adversarial verification', () => {
+    const prep = readFileSync(path.join(root, 'scripts', 'prepare-windows-command-sandbox-ci.mjs'), 'utf8');
+    const ci = readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const release = readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+
+    expect(prep).toContain("process.env.GITHUB_ACTIONS !== 'true'");
+    expect(prep).toContain("wxc-host-prep.exe");
+    expect(prep).toContain('prepare-system-drive');
+    expect(prep).toContain('prepare-null-device');
+    expect(ci).toContain('node scripts/prepare-windows-command-sandbox-ci.mjs');
+    expect(release).toContain('node scripts/prepare-windows-command-sandbox-ci.mjs');
+  });
+
+  it('ships and executes a packaged Windows outside-scope denial probe from the production sandbox code', () => {
+    const vite = readFileSync(path.join(root, 'electron.vite.config.ts'), 'utf8');
+    const smoke = readFileSync(path.join(root, 'scripts', 'smoke-packaged-runtime.mjs'), 'utf8');
+
+    expect(vite).toContain("'command-sandbox-probe'");
+    expect(vite).toContain("src/main/command-sandbox-probe.ts");
+    expect(smoke).toContain("'out', 'main', 'command-sandbox-probe.js'");
+    expect(smoke).toContain('packaged-command-sandbox-denied');
+    expect(smoke).toContain('outside-secret');
+  });
+
   it('hides Electron helper parentheses from otool-classic without changing the inspected file', () => {
     const file = '/Applications/ComGu.app/Contents/Frameworks/ComGu Helper (GPU).app/Contents/MacOS/ComGu Helper (GPU)';
     const calls: Array<{ kind: string; args: unknown[] }> = [];

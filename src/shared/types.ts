@@ -387,6 +387,29 @@ export interface BridgeStatus {
   lastSeenAt: number | null;
 }
 
+export type CanonicalHealthState =
+  | 'healthy'
+  | 'starting'
+  | 'degraded'
+  | 'disconnected'
+  | 'recovering'
+  | 'failed';
+
+export type SystemHealthComponentId =
+  | 'desktop'
+  | 'mcp-core'
+  | 'tunnel'
+  | 'browser-bridge'
+  | 'extension'
+  | 'prime'
+  | 'workers';
+
+export interface SystemHealthComponent {
+  id: SystemHealthComponentId;
+  state: CanonicalHealthState;
+  detail: string;
+}
+
 export type UpdateArch = 'x64' | 'arm64';
 export type UpdatePlatform = 'win32' | 'darwin' | 'linux';
 export type UpdateLinuxFormat = 'appimage' | 'deb';
@@ -444,6 +467,28 @@ export interface AppState {
   /** Version of the tunnel-client copy shipped inside the app, for diagnostics. */
   bundledTunnelVersion: string | null;
   bridge: BridgeStatus;
+  /** Canonical v1 component health projection; detailed transport state stays in status/bridge. */
+  systemHealth: SystemHealthComponent[];
+  /** Renderer-safe OS command-confinement readiness; never includes native helper/root paths. */
+  commandSandbox?: CommandSandboxRuntimeStatus;
+}
+
+export type CommandSandboxUnavailableReason =
+  | 'windows_backend_unavailable'
+  | 'windows_host_preparation_required'
+  | 'unsupported_platform';
+
+export type CommandSandboxHostPreparationStep = 'prepare-system-drive' | 'prepare-null-device';
+
+export interface CommandSandboxRuntimeStatus {
+  available: boolean;
+  filesystemConfinement: 'os-enforced' | 'unavailable';
+  backend: string | null;
+  reason: CommandSandboxUnavailableReason | null;
+  hostPreparation: {
+    required: boolean;
+    steps: CommandSandboxHostPreparationStep[];
+  };
 }
 
 export const DEFAULT_CAPABILITIES: Capabilities = {
@@ -495,7 +540,7 @@ export const CAPABILITY_DETAILS: Record<Capability, string> = {
   edit: 'Exact edits, applied atomically across files.',
   move: 'Move or rename, both ends inside approved folders.',
   deleteFile: 'Permanent — there is no Recycle Bin.',
-  command: 'Run anything as you. NOT limited to approved folders.',
+  command: 'Run commands as you, OS-confined to the active WorkspaceScope.',
   screen: 'Screenshots, open windows, and the controls on them.',
   control: 'Moves the pointer, clicks, types and presses keys, as you.',
   clipboardRead: 'Read the current clipboard text.',

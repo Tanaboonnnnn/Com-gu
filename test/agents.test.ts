@@ -73,6 +73,7 @@ const {
   resetSwarm,
   restoreSwarm,
   sendMessage,
+  setNextRunWorkspaceScope,
   stageQueuedWorkerRevivals,
   stageFinishAgent,
   stageWorkerConversationFinish,
@@ -213,6 +214,58 @@ describe('spawning a run', () => {
 
     expect(workspaceScopeForCaller(narrowed.caller)).toMatchObject({ primaryRoot: 'shared', sharedRoots: [] });
     expect(workspaceScopeForCaller(full.caller)).toMatchObject({ primaryRoot: 'project', sharedRoots: ['shared'] });
+  });
+
+  it('projects the active Run id and name-only effective scopes for renderer status', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+
+    spawn({
+      caller: prime,
+      workspaceScope: { primaryRoot: 'project', sharedRoots: ['shared'] },
+      workers: [{ task: 'shared only', workspaceScope: { primaryRoot: 'shared', sharedRoots: [] } }]
+    });
+
+    const state = swarmState();
+    expect(state.runId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(state.workspaceScope).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(state.agents.find((agent) => agent.id === PRIME_ID)?.workspaceScope).toEqual({
+      primaryRoot: 'project',
+      sharedRoots: ['shared']
+    });
+    expect(state.agents.find((agent) => agent.id === 'worker-1')?.workspaceScope).toEqual({
+      primaryRoot: 'shared',
+      sharedRoots: []
+    });
+    expect(JSON.stringify(state)).not.toContain('C:\\work');
+    expect(JSON.stringify(state)).not.toContain('rootIdentities');
+  });
+
+  it('lets the app preselect the next Run from approved root names and makes that selection authoritative', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project' },
+        { name: 'shared', path: 'C:\\work\\shared' }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+
+    const selected = setNextRunWorkspaceScope({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(selected).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(swarmState().selectedWorkspaceScope).toEqual(selected);
+
+    spawn({ caller: prime, workers: [{ task: 'inherits user-selected run scope' }] });
+    expect(workspaceScopeForCaller(prime)).toMatchObject(selected);
+    expect(JSON.stringify(swarmState())).not.toContain('C:\\work');
   });
 
   it('clears Prime and worker cwd when lifecycle scope binding makes the learned folder out of scope', async () => {

@@ -48,7 +48,7 @@ describe('i18n', () => {
   });
 
   it('keeps security-sensitive command wording explicit in Thai', () => {
-    expect(TH['permissions.command.detail']).toContain('ไม่ได้จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต');
+    expect(TH['permissions.command.detail']).toContain('WorkspaceScope');
   });
 
   it('keeps protocol and product literals intact in Thai UI copy', () => {
@@ -68,7 +68,7 @@ describe('i18n', () => {
     expect(TH['activity.title']).toBe('กิจกรรม');
     expect(TH['activity.turnStarted']).toBe('เริ่มเทิร์นแล้ว');
     expect(TH['permissions.cap.command.label']).toBe('รันคำสั่ง');
-    expect(TH['permissions.cap.command.detail']).toContain('ไม่จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต');
+    expect(TH['permissions.cap.command.detail']).toContain('WorkspaceScope');
     expect(TH['goal.modelsShown']).toContain('แสดง');
     expect(TH['agents.workerWorking']).toBe('{count} กำลังทำงาน');
     expect(TH['tray.open']).toBe('เปิด ComGu');

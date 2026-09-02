@@ -1,9 +1,15 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CommandSandboxUnavailableError,
   commandSandboxCapability,
   commandSandboxHostPreparation,
+  commandSandboxRuntimeStatus,
+  prepareCommandSandboxHost,
   requireCommandSandbox,
+  validateNodeRuntimeMirror,
   type WorkspaceScope
 } from '../src/main/run/command-sandbox.js';
 
@@ -64,6 +70,82 @@ describe('command sandbox confinement contract', () => {
     expect(preparation.required).toBe(true);
     expect(preparation.steps).toEqual(['prepare-system-drive', 'prepare-null-device']);
     expect(Object.isFrozen(preparation.steps)).toBe(true);
+  });
+
+  it('projects renderer-safe command readiness without native helper paths or workspace roots', () => {
+    const status = commandSandboxRuntimeStatus({
+      isSupported: true,
+      availableMethods: ['processcontainer'],
+      isolationTier: 'appcontainer-dacl',
+      isolationWarnings: ['Run wxc-host-prep prepare-system-drive (elevated).']
+    }, 'win32');
+
+    expect(status).toEqual({
+      available: false,
+      filesystemConfinement: 'unavailable',
+      backend: null,
+      reason: 'windows_host_preparation_required',
+      hostPreparation: { required: true, steps: ['prepare-system-drive'] }
+    });
+    expect(JSON.stringify(status)).not.toMatch(/[A-Z]:\\|rootIdentities|helper/i);
+  });
+
+  it('runs host preparation only through an explicit allow-listed elevated action and re-probes before success', async () => {
+    let prepared = false;
+    const calls: string[] = [];
+    const probe = () => ({
+      isSupported: true,
+      availableMethods: ['processcontainer'],
+      isolationTier: 'appcontainer-dacl',
+      isolationWarnings: prepared ? [] : ['Run wxc-host-prep prepare-system-drive (elevated).']
+    });
+
+    const status = await prepareCommandSandboxHost({
+      platform: 'win32',
+      helperPath: 'C:\\trusted\\wxc-host-prep.exe',
+      probe,
+      runElevated: async (_helper, step) => {
+        calls.push(step);
+        prepared = true;
+      }
+    });
+
+    expect(calls).toEqual(['prepare-system-drive']);
+    expect(status.available).toBe(true);
+    expect(status.hostPreparation.required).toBe(false);
+  });
+
+  it('rejects a runtime mirror with any unexpected PATH-shadowing root entry', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'comgu-runtime-integrity-'));
+    const source = path.join(root, 'source');
+    const mirror = path.join(root, 'mirror');
+    try {
+      await fs.mkdir(path.join(source, 'node_modules', 'npm'), { recursive: true });
+      await fs.mkdir(path.join(mirror, 'node_modules', 'npm'), { recursive: true });
+      for (const file of ['node.exe', 'npm.cmd', 'npx.cmd']) {
+        await fs.writeFile(path.join(source, file), file, 'utf8');
+        await fs.writeFile(path.join(mirror, file), file, 'utf8');
+      }
+      await fs.writeFile(path.join(source, 'node_modules', 'npm', 'cli.js'), 'npm cli', 'utf8');
+      await fs.writeFile(path.join(mirror, 'node_modules', 'npm', 'cli.js'), 'npm cli', 'utf8');
+      await fs.writeFile(path.join(mirror, '.ready'), 'ComGu sandbox runtime mirror\n', 'utf8');
+
+      await expect(validateNodeRuntimeMirror(source, mirror)).resolves.toBe(true);
+      await fs.writeFile(path.join(mirror, 'git.exe'), 'shadow PATH', 'utf8');
+      await expect(validateNodeRuntimeMirror(source, mirror)).resolves.toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never trusts the cached runtime mirror path without revalidating it for the next spawn', async () => {
+    const source = await fs.readFile(
+      path.join(process.cwd(), 'src', 'main', 'run', 'command-sandbox.ts'),
+      'utf8'
+    );
+
+    expect(source).not.toContain('if (runtimeMirror) return runtimeMirror;');
+    expect(source).toMatch(/runtimeMirror[\s\S]{0,900}validateNodeRuntimeMirror/);
   });
 
   it.skipIf(process.platform !== 'win32')('requires host preparation before returning a usable capability', () => {

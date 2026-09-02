@@ -142,7 +142,7 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   expect(readGroup.querySelector('.perm-main b')!.textContent).toBe('ดูไฟล์');
   expect(runGroup.querySelector('.perm-main b')!.textContent).toBe('รันโปรแกรม');
   expect(runGroup.textContent).toContain('รันคำสั่ง');
-  expect(runGroup.textContent).toContain('ไม่จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต');
+  expect(runGroup.textContent).toContain('จำกัดอยู่ภายใน WorkspaceScope ของ Run');
   expect(readGroup.querySelector('.group-count')!.textContent).toBe('เปิดอยู่ 4 สิทธิ์');
   expect(w.document.getElementById('connectLabel')!.textContent).toBe('เชื่อมต่อ');
   expect(w.document.getElementById('wizFolders')!.textContent).toContain('/repo');
@@ -177,6 +177,25 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   stateListener(withTools);
   expect(w.document.getElementById('facts')!.textContent).toContain('3 available');
   expect(w.document.getElementById('facts')!.textContent).not.toContain('of 9');
+
+  const withCanonicalHealth = structuredClone(withTools) as any;
+  withCanonicalHealth.systemHealth = [
+    { id: 'desktop', state: 'healthy', detail: 'Desktop runtime is running.' },
+    { id: 'mcp-core', state: 'healthy', detail: 'Core live.' },
+    { id: 'tunnel', state: 'degraded', detail: 'Offline.' },
+    { id: 'browser-bridge', state: 'healthy', detail: 'Bridge listening.' },
+    { id: 'extension', state: 'recovering', detail: 'Reconnecting.' },
+    { id: 'prime', state: 'disconnected', detail: 'No active Prime.' },
+    { id: 'workers', state: 'failed', detail: 'Worker failed.' }
+  ];
+  stateListener(withCanonicalHealth);
+  const healthFacts = w.document.getElementById('facts')!.textContent!;
+  expect(healthFacts).toContain('Desktop');
+  expect(healthFacts).toContain('healthy');
+  expect(healthFacts).toContain('Extension');
+  expect(healthFacts).toContain('recovering');
+  expect(healthFacts).toContain('Workers');
+  expect(healthFacts).toContain('failed');
 });
 
 it('serializes settings intent so rapid toggles and later UI changes cannot undo each other', async () => {
@@ -434,6 +453,136 @@ async function mountChat(
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+it('shows the active Run id and name-only effective scopes for prime and workers', async () => {
+  const activeSwarm = {
+    enabled: true,
+    running: true,
+    runId: '12345678-90ab-cdef-1234-567890abcdef',
+    workspaceScope: { primaryRoot: 'repo', sharedRoots: ['shared'] },
+    selectedWorkspaceScope: { primaryRoot: 'repo', sharedRoots: ['shared'] },
+    retainedHistory: false,
+    agents: [
+      {
+        id: 'prime', role: 'prime', label: 'Prime', task: 'Coordinates the workers', state: 'active',
+        createdAt: 1, activatedAt: 1, finishedAt: null, result: null, pending: 0, awaitingAck: 0,
+        delivered: 0, conversationId: 'prime-chat', detachedAt: null, lastSeenAt: 1, revivable: false,
+        sleptAt: null, contextTokens: 0,
+        workspaceScope: { primaryRoot: 'repo', sharedRoots: ['shared'] }
+      },
+      {
+        id: 'worker-1', role: 'worker', label: 'Worker one', task: 'Scoped work', state: 'active',
+        createdAt: 1, activatedAt: 1, finishedAt: null, result: null, pending: 0, awaitingAck: 0,
+        delivered: 0, conversationId: 'worker-chat', detachedAt: null, lastSeenAt: 1, revivable: false,
+        sleptAt: null, contextTokens: 0,
+        workspaceScope: { primaryRoot: 'shared', sharedRoots: [] }
+      }
+    ]
+  };
+  const mounted = await mountChat({}, [], {
+    getSwarm: () => Promise.resolve({ ok: true, data: activeSwarm })
+  });
+  const doc = mounted.window.document;
+
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle();
+  await settle();
+
+  expect(doc.getElementById('runWorkspace')!.textContent).toContain('12345678');
+  expect(doc.getElementById('runWorkspace')!.textContent).toContain('/repo');
+  expect(doc.getElementById('runWorkspace')!.textContent).toContain('/shared');
+  const rows = [...doc.querySelectorAll<HTMLElement>('#swarmList .agent')];
+  expect(rows.find((row) => row.textContent?.includes('Prime'))?.textContent).toContain('/repo');
+  expect(rows.find((row) => row.textContent?.includes('Worker one'))?.textContent).toContain('/shared');
+  expect(`${doc.getElementById('runWorkspace')!.textContent}${doc.getElementById('swarmList')!.textContent}`).not.toContain('C:\\repo');
+});
+
+it('keeps the scope picker closed for an active scope-less Run instead of offering authority mutation', async () => {
+  const mounted = await mountChat({}, [], {
+    getSwarm: () => Promise.resolve({
+      ok: true,
+      data: {
+        enabled: true,
+        running: true,
+        runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        workspaceScope: null,
+        selectedWorkspaceScope: null,
+        retainedHistory: false,
+        agents: []
+      }
+    })
+  });
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle();
+  await settle();
+
+  expect((doc.getElementById('runWorkspacePicker') as HTMLElement).hidden).toBe(true);
+  expect(doc.getElementById('runWorkspaceSummary')!.textContent).toMatch(/No workspace scope/i);
+});
+
+it('selects the next Run only from approved root names and exposes explicit sandbox preparation', async () => {
+  const scopes: any[] = [];
+  let prepares = 0;
+  const mounted = await mountChat(
+    {
+      commandSandbox: {
+        available: false,
+        filesystemConfinement: 'unavailable',
+        backend: null,
+        reason: 'windows_host_preparation_required',
+        hostPreparation: { required: true, steps: ['prepare-system-drive'] }
+      }
+    },
+    [],
+    {
+      getSwarm: () => Promise.resolve({
+        ok: true,
+        data: {
+          enabled: true,
+          running: false,
+          runId: null,
+          workspaceScope: null,
+          selectedWorkspaceScope: { primaryRoot: 'repo', sharedRoots: [] },
+          retainedHistory: false,
+          agents: []
+        }
+      }),
+      setRunWorkspaceScope: (scope: any) => {
+        scopes.push(structuredClone(scope));
+        return Promise.resolve({ ok: true, data: {
+          enabled: true, running: false, runId: null, workspaceScope: null,
+          selectedWorkspaceScope: scope, retainedHistory: false, agents: []
+        } });
+      },
+      prepareCommandSandbox: () => {
+        prepares += 1;
+        return Promise.resolve({ ok: true, data: mounted.state });
+      }
+    }
+  );
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle();
+  await settle();
+
+  const primary = doc.getElementById('runPrimaryRoot') as HTMLSelectElement;
+  expect([...primary.options].map((option) => option.value).filter(Boolean)).toEqual(['repo']);
+  expect(doc.querySelector<HTMLInputElement>('#runSharedRoots input[value="C:\\repo"]')).toBeNull();
+  expect(doc.getElementById('commandSandboxState')!.textContent).toMatch(/unavailable|not ready|fail closed/i);
+  expect(doc.getElementById('commandSandboxState')!.textContent).not.toContain('windows_host_preparation_required');
+  const prepare = doc.getElementById('commandSandboxPrepare') as HTMLButtonElement;
+  expect(prepare.hidden).toBe(false);
+
+  primary.value = 'repo';
+  primary.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
+  await settle();
+  expect(scopes.at(-1)).toEqual({ primaryRoot: 'repo', sharedRoots: [] });
+
+  prepare.click();
+  await settle();
+  expect(prepares).toBe(1);
+});
 
 it('preserves Windows-only Desktop permissions when saving unrelated settings on Linux', async () => {
   const mounted = await mountChat({

@@ -1,6 +1,6 @@
 {
   "name": "comgu",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "ComGu: a controlled local MCP bridge for ChatGPT with files, commands, durable sessions and optional Windows desktop control.",
   "license": "MIT",
   "author": "ComGu",
@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run verify:ci",
-    "verify:ci": "npm run rg && npm run verify:privacy && npm run typecheck && vitest run --exclude test/mcp-shutdown.test.ts && vitest run test/mcp-shutdown.test.ts",
+    "verify:ci": "npm run rg && npm run verify:privacy && npm run typecheck && vitest run --maxWorkers=4 --exclude test/mcp-shutdown.test.ts --exclude test/terminal-workspace-security.test.ts && vitest run test/terminal-workspace-security.test.ts && vitest run test/mcp-shutdown.test.ts",
     "verify:privacy": "node scripts/verify-public-history.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "icon": "node scripts/make-icon.mjs",

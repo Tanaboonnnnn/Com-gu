@@ -83,12 +83,17 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { AgentInfo, AgentMessage, AgentState, SwarmState } from '../shared/session.js';
+import type { AgentInfo, AgentMessage, AgentState, SwarmState, WorkspaceScopeView } from '../shared/session.js';
 import { getConfig } from './config.js';
 import { logInfo, logWarn } from './logger.js';
 import { clampPrimeWorkspaceForScope, clampWorkspaceForScope, inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
 import { bindRunWorkspaceScope, effectiveWorkerWorkspaceScope, restoreRunWorkspaceScope } from './run/state.js';
-import { effectiveWorkspaceRoots, parseWorkspaceScopeSelection, workspaceScopeNames } from './run/scope.js';
+import {
+  effectiveWorkspaceRoots,
+  parseWorkspaceScopeSelection,
+  workspaceRootsFingerprint,
+  workspaceScopeNames
+} from './run/scope.js';
 import type { WorkspaceScope, WorkspaceScopeSelection } from './run/types.js';
 
 export const PRIME_ID = 'prime';
@@ -310,6 +315,8 @@ interface Run {
 }
 
 let run: Run | null = null;
+/** App-owned, in-memory selection for the next fresh Run. Stores bound root identity, not names alone. */
+let nextRunWorkspaceScope: WorkspaceScope | null = null;
 
 /**
  * A prime-owned worker family while none of its workers is currently running.
@@ -721,11 +728,11 @@ export function swarmStateForCaller(caller: Caller): SwarmState {
 
   if (run) {
     const member = agentForConversationId(caller.conversationId);
-    if (member) return stateForAgents(run.agents, true);
+    if (member) return stateForAgents(run.agents, true, false, run.runId, run.scope);
   }
 
   const dormant = dormantRunForPrime(caller.conversationId);
-  if (dormant) return stateForAgents(dormant.agents, false);
+  if (dormant) return stateForAgents(dormant.agents, false, true, null, dormant.scope);
 
   if (run) throw new AgentsBusyError();
   throw new AgentError(
@@ -751,7 +758,7 @@ export function statusForCaller(caller: Caller): CallerSwarmStatus {
     if (member) {
       return {
         self: { ...member.info },
-        state: stateForAgents(run.agents, true),
+        state: stateForAgents(run.agents, true, false, run.runId, run.scope),
         runId: run.runId,
         freeWorkerSlots: freeWorkerSlots()
       };
@@ -762,7 +769,7 @@ export function statusForCaller(caller: Caller): CallerSwarmStatus {
   if (dormant && prime) {
     return {
       self: { ...prime.info },
-      state: stateForAgents(dormant.agents, false),
+      state: stateForAgents(dormant.agents, false, true, null, dormant.scope),
       runId: null,
       freeWorkerSlots: run ? 0 : getConfig().multiAgent.maxWorkers
     };
@@ -1066,6 +1073,22 @@ export interface SpawnResult {
 }
 
 /**
+ * Selects the next fresh Run's immutable scope from roots the user already approved globally.
+ * The renderer supplies names only; binding here captures current root identity so name reuse
+ * cannot silently retarget a selection made earlier.
+ */
+export function setNextRunWorkspaceScope(input: unknown): WorkspaceScopeView {
+  if (run) {
+    throw new AgentError('RUN_SCOPE_IMMUTABLE: the active Run scope cannot be changed. Clear/end the Run before selecting another scope.');
+  }
+  const scope = bindRunWorkspaceScope(getConfig().roots, input);
+  effectiveWorkspaceRoots(scope, getConfig().roots);
+  nextRunWorkspaceScope = scope;
+  changed('telemetry');
+  return workspaceScopeView(scope) as WorkspaceScopeView;
+}
+
+/**
  * A spawn planned in memory but not yet accepted publicly.
  *
  * The immediate persistence lane can see this topology; ordinary/debounced snapshots and
@@ -1264,12 +1287,20 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   }
 
   const existingOwner = run ?? dormantRunForPrime(conversationId);
-  let plannedRunScope: WorkspaceScope | null = existingOwner?.scope ?? null;
+  const userSelectedScope = existingOwner ? null : nextRunWorkspaceScope;
+  if (userSelectedScope) effectiveWorkspaceRoots(userSelectedScope, getConfig().roots);
+  let plannedRunScope: WorkspaceScope | null = existingOwner?.scope ?? userSelectedScope;
   if (existingOwner) {
     if (requestedRunSelection !== undefined) {
       if (!plannedRunScope) scopeEscalation();
       const requested = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
       if (!sameWorkspaceScope(plannedRunScope, requested)) scopeEscalation();
+    }
+  } else if (userSelectedScope) {
+    // A renderer selection is user authority. A model may repeat it, but cannot replace it.
+    if (requestedRunSelection !== undefined) {
+      const requested = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
+      if (!sameWorkspaceScope(userSelectedScope, requested)) scopeEscalation();
     }
   } else if (requestedRunSelection !== undefined) {
     plannedRunScope = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
@@ -1862,6 +1893,26 @@ export function acknowledgeOffersForConversation(
 
 export function pendingCount(id: string): number {
   return run?.agents.get(id)?.info.pending ?? 0;
+}
+
+/**
+ * Recovery-only edge: ask the existing bridge nudge to reopen/wake Prime when durable worker
+ * reports are waiting. This never reads or removes the reports and never creates authority; it
+ * only reuses the already-bound prime conversation and the normal prime-wake transport.
+ */
+export function requestPrimeWakeForPendingReports(): boolean {
+  if (!run) return false;
+  const prime = run.agents.get(PRIME_ID);
+  if (!prime || !prime.info.conversationId || !primeWakeRequest) return false;
+  const hasDurableWorkerReport = prime.queue.some(
+    (message) =>
+      message.ackedAt === null &&
+      !unpublishedMessages.has(message) &&
+      message.from !== PRIME_ID
+  );
+  if (!hasDurableWorkerReport) return false;
+  requestPrimeWake(prime);
+  return true;
 }
 
 /**
@@ -2792,6 +2843,14 @@ export function currentRunId(): string | null {
   return run?.runId ?? null;
 }
 
+/** Internal recovery fence for the active incarnation and its exact approved-root identity. */
+export function currentRunAuthorityGuard(): { runId: string | null; scopeFingerprint: string | null } {
+  if (!run) return { runId: null, scopeFingerprint: null };
+  if (!run.scope) return { runId: run.runId, scopeFingerprint: null };
+  const roots = effectiveWorkspaceRoots(run.scope, getConfig().roots);
+  return { runId: run.runId, scopeFingerprint: workspaceRootsFingerprint(roots) };
+}
+
 /**
  * Task-2 authority seam for later file/terminal wiring.
  * Prime sees the run scope; workers inherit it unless a caller explicitly requests a subset.
@@ -3352,14 +3411,31 @@ export function repairPrimeConversationAfterRecovery(
 
 // -------------------------------------------------------------------- state
 
-function stateForAgents(agents: Map<string, Agent>, running: boolean, retainedHistory = !running): SwarmState {
+function workspaceScopeView(scope: WorkspaceScope | null): WorkspaceScopeView | null {
+  if (!scope) return null;
+  return { primaryRoot: scope.primaryRoot, sharedRoots: [...scope.sharedRoots] };
+}
+
+function stateForAgents(
+  agents: Map<string, Agent>,
+  running: boolean,
+  retainedHistory = !running,
+  runId: string | null = null,
+  runScope: WorkspaceScope | null = null
+): SwarmState {
   const list = [...agents.values()]
     .filter((agent) => !unpublishedAgents.has(agent))
-    .map((agent) => ({ ...agent.info }));
+    .map((agent) => ({
+      ...agent.info,
+      workspaceScope: workspaceScopeView(agent.info.role === 'prime' ? runScope : agent.scope)
+    }));
   list.sort((a, b) => (a.role === b.role ? a.id.localeCompare(b.id) : a.role === 'prime' ? -1 : 1));
   return {
     enabled: getConfig().multiAgent.enabled,
     running,
+    runId,
+    workspaceScope: workspaceScopeView(runScope),
+    selectedWorkspaceScope: workspaceScopeView(runScope),
     retainedHistory,
     agents: list
   };
@@ -3372,10 +3448,13 @@ export function swarmState(): SwarmState {
   // acceptance barrier is about to fail and roll them back.
   const visibleRun = run && unpublishedRun !== run ? run : null;
   return visibleRun
-    ? stateForAgents(visibleRun.agents, true, dormantRuns.size > 0)
+    ? stateForAgents(visibleRun.agents, true, dormantRuns.size > 0, visibleRun.runId, visibleRun.scope)
     : {
         enabled: getConfig().multiAgent.enabled,
         running: false,
+        runId: null,
+        workspaceScope: null,
+        selectedWorkspaceScope: workspaceScopeView(nextRunWorkspaceScope),
         retainedHistory: dormantRuns.size > 0,
         agents: []
       };
@@ -3513,6 +3592,7 @@ function bindWorkerConversation(agent: Agent, conversationId: string): boolean {
 export function resetSwarm(): void {
   const reason = 'the run was cleared in the app';
   endRun(reason);
+  nextRunWorkspaceScope = null;
   const retiredAt = Date.now();
   let retiredDormant = false;
   for (const dormant of dormantRuns.values()) {
@@ -4028,6 +4108,7 @@ function deserializeAgents(
 /** Test seam: forgets everything without touching disk. */
 export function resetAgentsForTests(): void {
   run = null;
+  nextRunWorkspaceScope = null;
   dormantRuns.clear();
   unpublishedRun = null;
   activeSpawnStage = null;

@@ -464,6 +464,12 @@ export type AgentState =
   | 'finished'
   | 'failed';
 
+/** Renderer/model-safe workspace authority view: approved virtual root names only. */
+export interface WorkspaceScopeView {
+  primaryRoot: string;
+  sharedRoots: string[];
+}
+
 export interface AgentInfo {
   id: string;
   role: AgentRole;
@@ -544,6 +550,8 @@ export interface AgentInfo {
    * decides whether a worker is still worth reviving — see {@link revivable}.
    */
   contextTokens: number;
+  /** Effective Run authority shown to people; never contains native paths/root identities. */
+  workspaceScope?: WorkspaceScopeView | null;
 }
 
 /**
@@ -604,6 +612,12 @@ export interface SwarmState {
   enabled: boolean;
   /** True while at least one worker is invited or active. */
   running: boolean;
+  /** Full incarnation UUID while active; renderer shortens it only for display. */
+  runId: string | null;
+  /** Active Run scope, by approved root name only. */
+  workspaceScope: WorkspaceScopeView | null;
+  /** App-owned selection to use for the next Run; while running this mirrors workspaceScope. */
+  selectedWorkspaceScope: WorkspaceScopeView | null;
   /**
    * Local-app presentation hint: worker histories exist but are parked outside the active run.
    * Caller/model status remains scoped separately and never uses this to reveal another owner.

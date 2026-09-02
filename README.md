@@ -21,12 +21,12 @@ ComGu คือ desktop bridge ที่เราใช้ให้ ChatGPT เ�
 
 ## Download
 
-Release ปัจจุบันคือ **ComGu v2.0.2** โดย GitHub release workflow จะสร้าง native packages บน runner ของแต่ละ OS/CPU ก่อนเผยแพร่
+Release ปัจจุบันคือ **ComGu v3.1.0** โดย GitHub release workflow จะสร้าง native packages บน runner ของแต่ละ OS/CPU ก่อนเผยแพร่
 
 | Platform | x64 | ARM64 |
 | --- | --- | --- |
 | **Windows** | [EXE](../../releases/latest/download/ComGu-Setup-x64.exe) | [EXE](../../releases/latest/download/ComGu-Setup-arm64.exe) |
-| **macOS** | [DMG](../../releases/latest/download/ComGu-macOS-x64.dmg) · [ZIP](../../releases/latest/download/ComGu-macOS-x64.zip) | [DMG](../../releases/latest/download/ComGu-macOS-arm64.dmg) · [ZIP](../../releases/latest/download/ComGu-macOS-arm64.zip) |
+| **macOS** | — | [DMG](../../releases/latest/download/ComGu-macOS-arm64.dmg) · [ZIP](../../releases/latest/download/ComGu-macOS-arm64.zip) |
 | **Linux** | [AppImage](../../releases/latest/download/ComGu-Linux-x64.AppImage) · [DEB](../../releases/latest/download/ComGu-Linux-x64.deb) | [AppImage](../../releases/latest/download/ComGu-Linux-arm64.AppImage) · [DEB](../../releases/latest/download/ComGu-Linux-arm64.deb) |
 
 ทุก release มี `SHA256SUMS.txt` สำหรับตรวจ hash และมี `ComGu-Extension.zip` สำหรับโหลด companion extension แยกต่างหาก
@@ -47,6 +47,9 @@ Linux AppImage ใช้ static launcher ของ electron-builder; ถ้า�
 - **Safe auto-compaction** ถึง threshold แล้วจะ arm ไว้ก่อน ไม่กด Stop ตัด ChatGPT กลาง turn; รอ turn และ local tools จบก่อนค่อย compact
 - **Goal loop** ให้โมเดลช่วยส่งข้อความต่อจนถึงเป้าหมายที่กำหนด
 - **Multi-agent** ให้ prime chat เปิด worker chats และส่งงานหากันได้
+- **Safe Workspace Runtime** ให้แต่ละ Run เลือก Primary/Shared folders จาก approved roots เดิม Worker รับสิทธิ์เท่ากันหรือน้อยกว่า Prime เท่านั้น และหน้า Chat แสดง scope ที่มีผลจริง
+- **Windows Run command sandbox** ใช้ MXC ProcessContainer จำกัด process tree ให้อยู่ใน WorkspaceScope; ถ้ายืนยัน confinement ไม่ได้ ระบบจะปิด Run-scoped commands แบบ fail closed แทนการรัน unrestricted
+- **System Health v1** แยกสถานะ Desktop, MCP Core, Tunnel, Browser bridge, Extension, Prime และ Workers ออกจากกัน
 - **Desktop automation บน Windows** สำหรับ screen, windows, mouse/keyboard และ clipboard เมื่อเปิด permission
 
 ## Quick start
@@ -84,20 +87,25 @@ Goal loop เป็นฟีเจอร์ optional ที่ใช้โมเ
 
 Prime chat สามารถ spawn worker chats, ส่งข้อความหา worker และรับผลกลับผ่าน local broker ได้ Worker แต่ละตัวมี conversation identity ของตัวเองและไม่สามารถคุยกันเองโดยตรง
 
+ตอนเริ่ม Run สามารถเลือก **Primary folder** และ **Shared folders** ได้จากชื่อ root ที่อนุมัติไว้แล้วเท่านั้น Prime จะใช้ scope นี้ทั้งชุด ส่วน Worker แต่ละตัวรับ scope เดิมหรือ subset ที่แคบกว่าได้ แต่เพิ่ม root เองไม่ได้
+
 ระบบนี้ยัง experimental และอาจเปิดหลาย ChatGPT tabs พร้อมกัน ควรใช้กับ repo/workspace ที่ recover ได้และหลีกเลี่ยงการให้ workers แก้ไฟล์ชุดเดียวกันโดยไม่มีการแบ่ง ownership
 
 ## Security model
 
-ComGu ไม่ใช่ VM หรือ kernel sandbox สิทธิ์หลักยังเป็นสิทธิ์ของ user account ที่รันโปรแกรม
+ComGu ไม่ใช่ VM เต็มรูปแบบ สิทธิ์พื้นฐานยังเป็นสิทธิ์ของ user account ที่รันโปรแกรม แต่ใน active Run ระบบใช้ WorkspaceScope เป็น authority ของ file tools และใช้ OS process sandbox สำหรับ Run-scoped commands บน Windows
 
 - File operations ถูกจำกัดด้วย approved roots และ canonical path checks
-- Terminal commands เมื่อเปิด permission สามารถรันโปรแกรมด้วยสิทธิ์ user ปัจจุบันได้ จึงมีอำนาจมากกว่า file sandbox
+- ใน active Run บน Windows, terminal process และ descendants ถูกจำกัดด้วย MXC ProcessContainer ให้อยู่ใน effective WorkspaceScope ถ้า backend/host preparation ยังยืนยันไม่ได้ Run-scoped command จะ fail closed
+- คำสั่งที่รันนอก active Run ยังเป็นสิทธิ์ของ user account ปัจจุบันและไม่ได้รับ WorkspaceScope confinement ของ Run
 - Windows desktop control ไม่ได้ถูกจำกัดด้วย project folder
 - MCP server และ browser bridge bind บน loopback และแยก threat boundary ออกจากกัน
 - Secrets ใช้ Electron `safeStorage` / OS credential backend
 - Read-only mode เป็น kill switch สำหรับ mutation หลัก เช่น file write, command execution และ desktop input
 
 อย่า approve ทั้ง drive หรือ home/profile ทั้งก้อนถ้าไม่จำเป็น และควรใช้กับงานที่มี backup หรือ version control
+
+Windows บางเครื่องที่ MXC ใช้ AppContainer+DACL fallback ต้องทำ one-time **Prepare Windows host** ผ่านปุ่มใน ComGu และ UAC ก่อนเปิด Run-scoped commands ขั้นตอนนี้เป็น explicit user action; build, test และ startup จะไม่ยกระดับสิทธิ์หรือเตรียม host ให้อัตโนมัติ
 
 รายละเอียดเพิ่มอยู่ใน [`SECURITY.md`](SECURITY.md)
 

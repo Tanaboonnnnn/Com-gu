@@ -326,7 +326,12 @@ describe('Codex unified exec runtime parity', () => {
       truncationPolicy
     });
     expect(polled.rawOutput.toString('utf8')).toContain('first-poll-output');
-    expect(polled.wallTimeMs).toBeLessThan(2_500);
+    // This runs beside process-heavy Windows suites in CI. Under scheduler contention the
+    // child's own 600 ms timer can fire a couple of seconds late even though write_stdin wakes
+    // immediately on that first byte. The contract we need to distinguish is "first output"
+    // versus "wait the whole 5 s poll window", so keep a real margin below that deadline without
+    // treating host scheduling latency as a runtime regression.
+    expect(polled.wallTimeMs).toBeLessThan(4_500);
     expect(polled.processId).toBe(processId);
   });
 

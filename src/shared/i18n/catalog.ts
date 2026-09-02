@@ -70,6 +70,19 @@ export const EN = {
   'health.notRunning': 'not running',
   'health.neverDeveloperMode': 'never — check Developer mode',
   'health.availableFolders': '{tools} available · {folders} folders',
+  'health.component.desktop': 'Desktop',
+  'health.component.mcp-core': 'MCP Core',
+  'health.component.tunnel': 'Tunnel',
+  'health.component.browser-bridge': 'Browser bridge',
+  'health.component.extension': 'Extension',
+  'health.component.prime': 'Prime',
+  'health.component.workers': 'Workers',
+  'health.state.healthy': 'healthy',
+  'health.state.starting': 'starting',
+  'health.state.degraded': 'degraded',
+  'health.state.disconnected': 'disconnected',
+  'health.state.recovering': 'recovering',
+  'health.state.failed': 'failed',
   'diagnostics.route': 'Route to OpenAI',
   'diagnostics.localServer': 'Local server',
   'diagnostics.permissions': 'Permissions',
@@ -113,7 +126,7 @@ export const EN = {
   'permissions.desktop.title': 'See and use the desktop',
   'permissions.desktop.detail': 'Screenshots, the list of open windows, and the mouse and keyboard.',
   'permissions.command.title': 'Run programs',
-  'permissions.command.detail': 'Start commands as the logged-in user. Commands are not limited to approved folders.',
+  'permissions.command.detail': 'Run commands inside the active WorkspaceScope. If OS confinement is unavailable, commands fail closed.',
   'permissions.enabledCount': '{count} permissions enabled',
   'permissions.enabledOfCount': '{count} of {total} permissions enabled',
   'permissions.off': 'off',
@@ -148,7 +161,7 @@ export const EN = {
   'permissions.cap.deleteFile.label': 'Delete files',
   'permissions.cap.deleteFile.detail': 'Permanent — there is no Recycle Bin.',
   'permissions.cap.command.label': 'Run commands',
-  'permissions.cap.command.detail': 'Run anything as you. NOT limited to approved folders.',
+  'permissions.cap.command.detail': 'Run commands as you, confined to the active WorkspaceScope.',
   'permissions.cap.screen.label': 'See the screen',
   'permissions.cap.screen.detail': 'Screenshots, open windows, and the controls on them.',
   'permissions.cap.control.label': 'Control mouse and keyboard',
@@ -419,6 +432,25 @@ export const EN = {
   ,'agents.stateWaking': 'waking'
   ,'agents.stateFinished': 'finished'
   ,'agents.stateFailed': 'failed'
+  ,'agents.workspaceTitle': 'Run workspace'
+  ,'agents.primaryFolder': 'Primary folder'
+  ,'agents.sharedFolders': 'Shared folders'
+  ,'agents.runId': 'Run {id}'
+  ,'agents.effectiveScope': 'Effective scope'
+  ,'agents.noneSelected': 'none'
+  ,'agents.noWorkspaceScope': 'No workspace scope is bound to this Run.'
+  ,'agents.nextRunScope': 'Next Run: {scope}'
+  ,'agents.chooseNextRunScope': 'Choose approved folders for the next Run.'
+  ,'agents.choosePrimaryFolder': 'Choose primary folder'
+  ,'agents.commandSandboxTitle': 'Command sandbox'
+  ,'agents.commandSandboxUnknown': 'Command confinement status is unknown; commands remain unavailable.'
+  ,'agents.commandSandboxReady': 'OS confinement ready ({backend}).'
+  ,'agents.commandSandboxUnavailable': 'Command unavailable — fail closed ({reason}).'
+  ,'agents.commandSandboxReasonHostPrep': 'Windows host preparation is required'
+  ,'agents.commandSandboxReasonBackend': 'this Windows host has no proven confinement backend'
+  ,'agents.commandSandboxReasonPlatform': 'scoped commands are not supported on this platform'
+  ,'agents.commandSandboxReasonUnknown': 'confinement could not be proven'
+  ,'agents.prepareWindowsSandbox': 'Prepare Windows host'
 } as const;
 
 export type MessageKey = keyof typeof EN;
@@ -493,6 +525,19 @@ export const TH: Record<MessageKey, string> = {
   'health.notRunning': 'ยังไม่ทำงาน',
   'health.neverDeveloperMode': 'ยังไม่เคย — ตรวจ Developer mode',
   'health.availableFolders': 'ใช้ได้ {tools} tool · {folders} โฟลเดอร์',
+  'health.component.desktop': 'ตัวแอป Desktop',
+  'health.component.mcp-core': 'MCP Core',
+  'health.component.tunnel': 'Tunnel',
+  'health.component.browser-bridge': 'Browser bridge',
+  'health.component.extension': 'Extension',
+  'health.component.prime': 'Prime',
+  'health.component.workers': 'Workers',
+  'health.state.healthy': 'ปกติ',
+  'health.state.starting': 'กำลังเริ่ม',
+  'health.state.degraded': 'ทำงานได้ไม่เต็มที่',
+  'health.state.disconnected': 'ไม่ได้เชื่อมต่อ',
+  'health.state.recovering': 'กำลังกู้การเชื่อมต่อ',
+  'health.state.failed': 'ล้มเหลว',
   'diagnostics.route': 'เส้นทางไป OpenAI',
   'diagnostics.localServer': 'เซิร์ฟเวอร์ในเครื่อง',
   'diagnostics.permissions': 'สิทธิ์การเข้าถึง',
@@ -536,7 +581,7 @@ export const TH: Record<MessageKey, string> = {
   'permissions.desktop.title': 'ดูและควบคุมเดสก์ท็อป',
   'permissions.desktop.detail': 'ใช้ภาพหน้าจอ รายชื่อหน้าต่างที่เปิดอยู่ เมาส์ และคีย์บอร์ด',
   'permissions.command.title': 'รันโปรแกรม',
-  'permissions.command.detail': 'รันคำสั่งในสิทธิ์ของผู้ใช้ที่ล็อกอินอยู่ และคำสั่งไม่ได้จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต',
+  'permissions.command.detail': 'รันคำสั่งในสิทธิ์ของผู้ใช้ที่ล็อกอินอยู่ ภายใน WorkspaceScope ของ Run เท่านั้น ถ้า OS ยืนยันขอบเขตไม่ได้ ระบบจะไม่รันคำสั่ง',
   'permissions.enabledCount': 'เปิดอยู่ {count} สิทธิ์',
   'permissions.enabledOfCount': 'เปิด {count} จาก {total} สิทธิ์',
   'permissions.off': 'ปิด',
@@ -571,7 +616,7 @@ export const TH: Record<MessageKey, string> = {
   'permissions.cap.deleteFile.label': 'ลบไฟล์',
   'permissions.cap.deleteFile.detail': 'ลบถาวร ไม่ผ่าน Recycle Bin',
   'permissions.cap.command.label': 'รันคำสั่ง',
-  'permissions.cap.command.detail': 'รันคำสั่งด้วยสิทธิ์ของผู้ใช้ที่ล็อกอินอยู่ และไม่จำกัดอยู่แค่โฟลเดอร์ที่อนุญาต',
+  'permissions.cap.command.detail': 'รันคำสั่งด้วยสิทธิ์ของผู้ใช้ที่ล็อกอินอยู่ โดยจำกัดอยู่ภายใน WorkspaceScope ของ Run',
   'permissions.cap.screen.label': 'ดูหน้าจอ',
   'permissions.cap.screen.detail': 'ดูภาพหน้าจอ หน้าต่างที่เปิดอยู่ และ control บนหน้าต่างเหล่านั้น',
   'permissions.cap.control.label': 'ควบคุมเมาส์และคีย์บอร์ด',
@@ -841,7 +886,26 @@ export const TH: Record<MessageKey, string> = {
   'agents.stateSleeping': 'พักอยู่',
   'agents.stateWaking': 'กำลังปลุก',
   'agents.stateFinished': 'เสร็จแล้ว',
-  'agents.stateFailed': 'ล้มเหลว'
+  'agents.stateFailed': 'ล้มเหลว',
+  'agents.workspaceTitle': 'ขอบเขตโฟลเดอร์ของ Run',
+  'agents.primaryFolder': 'โฟลเดอร์หลัก',
+  'agents.sharedFolders': 'โฟลเดอร์ร่วม',
+  'agents.runId': 'Run {id}',
+  'agents.effectiveScope': 'ขอบเขตที่ใช้จริง',
+  'agents.noneSelected': 'ไม่มี',
+  'agents.noWorkspaceScope': 'Run นี้ยังไม่มี WorkspaceScope ที่ผูกไว้',
+  'agents.nextRunScope': 'Run ถัดไป: {scope}',
+  'agents.chooseNextRunScope': 'เลือกได้เฉพาะโฟลเดอร์ที่อนุญาตไว้แล้วสำหรับ Run ถัดไป',
+  'agents.choosePrimaryFolder': 'เลือกโฟลเดอร์หลัก',
+  'agents.commandSandboxTitle': 'Command sandbox',
+  'agents.commandSandboxUnknown': 'ยังไม่ทราบสถานะการจำกัดคำสั่ง จึงยังไม่อนุญาตให้รันคำสั่ง',
+  'agents.commandSandboxReady': 'OS confinement พร้อมใช้งาน ({backend})',
+  'agents.commandSandboxUnavailable': 'ยังรันคำสั่งไม่ได้ เพราะ {reason}',
+  'agents.commandSandboxReasonHostPrep': 'Windows เครื่องนี้ยังต้องเตรียมระบบก่อน',
+  'agents.commandSandboxReasonBackend': 'Windows เครื่องนี้ยังไม่มีระบบจำกัดคำสั่งที่ยืนยันความปลอดภัยได้',
+  'agents.commandSandboxReasonPlatform': 'ระบบนี้ยังไม่รองรับคำสั่งแบบจำกัดขอบเขต',
+  'agents.commandSandboxReasonUnknown': 'ยังยืนยันขอบเขตความปลอดภัยของคำสั่งไม่ได้',
+  'agents.prepareWindowsSandbox': 'เตรียม Windows host'
 };
 
 const CATALOGS: Record<Locale, Record<MessageKey, string>> = { en: EN, th: TH };

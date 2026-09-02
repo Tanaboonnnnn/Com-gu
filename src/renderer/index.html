@@ -616,6 +616,34 @@
                     <span class="unit" data-i18n="chat.max">max</span>
                   </div>
 
+                  <section class="run-workspace" id="runWorkspace">
+                    <div class="run-workspace-head">
+                      <span class="setting-text">
+                        <b data-i18n="agents.workspaceTitle">Run workspace</b>
+                        <em id="runWorkspaceSummary"></em>
+                      </span>
+                      <span class="chip" id="runIdChip" hidden></span>
+                    </div>
+                    <div class="run-workspace-picker" id="runWorkspacePicker">
+                      <div class="field">
+                        <label for="runPrimaryRoot" data-i18n="agents.primaryFolder">Primary folder</label>
+                        <select id="runPrimaryRoot"></select>
+                      </div>
+                      <div class="field">
+                        <span class="field-label" data-i18n="agents.sharedFolders">Shared folders</span>
+                        <div class="run-shared-roots" id="runSharedRoots"></div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="command-sandbox">
+                    <span class="setting-text">
+                      <b data-i18n="agents.commandSandboxTitle">Command sandbox</b>
+                      <em id="commandSandboxState"></em>
+                    </span>
+                    <button class="btn btn-solid" id="commandSandboxPrepare" type="button" hidden data-i18n="agents.prepareWindowsSandbox">Prepare Windows host</button>
+                  </section>
+
                   <div id="swarmList"></div>
                   <div class="step-actions">
                     <button class="btn" id="swarmReset" type="button" data-i18n="chat.clearSwarm">Clear swarm</button>

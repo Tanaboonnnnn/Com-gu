@@ -143,6 +143,20 @@ describe('the session-row delete affordance', () => {
  * the invariant that was actually violated, and it is checkable.
  */
 describe('the chat panel cards', () => {
+  it('contains the bounded Run workspace and command-sandbox controls', () => {
+    for (const id of [
+      'runWorkspace',
+      'runPrimaryRoot',
+      'runSharedRoots',
+      'commandSandboxState',
+      'commandSandboxPrepare'
+    ]) {
+      expect(document.getElementById(id), `missing #${id}`).not.toBeNull();
+    }
+    expect(document.getElementById('runPrimaryRoot')!.closest('.view[data-view="settings"]')).not.toBeNull();
+    expect(document.getElementById('commandSandboxPrepare')!.closest('.view[data-view="settings"]')).not.toBeNull();
+  });
+
   /** The track list a card's own rule declares, as an array. */
   function tracks(selector: string): string[] {
     const declarations = rule(selector);
@@ -325,6 +339,10 @@ describe('the settings sheet', () => {
     }
     // Selects and textareas save through the same change listener.
     for (const field of pane.querySelectorAll('select, textarea')) {
+      if (field.id === 'runPrimaryRoot') {
+        expect(chatSource).toContain("$('runPrimaryRoot').addEventListener('change'");
+        continue;
+      }
       expect(listened![1], `#${field.id} never saves`).toContain(`'${field.id}'`);
     }
   });

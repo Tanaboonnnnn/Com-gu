@@ -150,6 +150,15 @@ function rememberBrowserFamily(conversationId: string, value: unknown): void {
   if (family) browserFamilyByConversation.set(conversationId, family);
 }
 
+/**
+ * Recovery may reopen only a browser family observed first-hand for the active Prime chat.
+ * Returning null is intentional: preference or installation order is not proof of affinity.
+ */
+export function provenPrimeBrowserFamily(): BrowserFamily | null {
+  const primeConversationId = swarmState().agents.find((entry) => entry.role === 'prime')?.conversationId ?? null;
+  return primeConversationId ? (browserFamilyByConversation.get(primeConversationId) ?? null) : null;
+}
+
 /** Requests allowed per rolling minute, across all routes. */
 const RATE_LIMIT = 900;
 

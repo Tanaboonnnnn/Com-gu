@@ -48,6 +48,7 @@ import {
   pauseSwarmForDisable,
   persistAgentAuthorityNow,
   resetSwarm,
+  setNextRunWorkspaceScope,
   swarmState
 } from './agents.js';
 import { tokenPressure } from '../shared/session.js';
@@ -57,6 +58,9 @@ import { checkForUpdate, downloadUpdate, installDownloadedUpdate, resolveUpdateT
 import { launchAtLoginState, setLaunchAtLogin } from './startup.js';
 import { installedBrowserFamilies } from './browser.js';
 import type { UpdateCheckResult } from '../shared/types.js';
+import { commandSandboxRuntimeStatus, prepareCommandSandboxHost } from './run/command-sandbox.js';
+import { projectSystemHealth } from './health.js';
+import { recoverSystem } from './recovery.js';
 
 type UpdateUiState =
   | { status: 'idle' | 'checking' | 'unsupported'; currentVersion: string }
@@ -256,6 +260,15 @@ const renameRoot = z.object({
     .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Lowercase letters, digits, dot, dash and underscore only')
 });
 
+const workspaceScopeSelection = z
+  .object({
+    primaryRoot: z.string().min(1).max(32),
+    sharedRoots: z.array(z.string().min(1).max(32)).max(32)
+  })
+  .strict();
+
+const recoveryOperation = z.enum(['reconnect-bridge', 'restart-tunnel', 'reopen-browser', 'wake-prime']);
+
 function resolvedBinary(config: Config): string | null {
   if (config.tunnel.kind === 'cloudflared') return locateBinary('cloudflared', config.tunnel.binaryPath);
   if (config.tunnel.kind === 'openai') return locateBinary('tunnel-client', config.tunnel.binaryPath);
@@ -264,16 +277,20 @@ function resolvedBinary(config: Config): string | null {
 
 async function buildState(): Promise<AppState> {
   const config = getConfig();
+  const status = getStatus();
+  const bridge = await bridgeStatus();
   return {
     config,
-    status: getStatus(),
+    status,
     platform: hostPlatformInfo(),
     secureStorage: await secureStorageStatus(),
     hasApiKey: await hasSecret('openaiApiKey'),
     hasGoalKey: await hasSecret('openRouterApiKey'),
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
-    bridge: await bridgeStatus()
+    bridge,
+    systemHealth: projectSystemHealth({ connection: status, bridge, swarm: swarmState() }),
+    commandSandbox: commandSandboxRuntimeStatus()
   };
 }
 
@@ -582,6 +599,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   });
 
   handle('diagnostics:run', async () => runDiagnostics());
+  handle('recovery:run', async (payload) => recoverSystem(recoveryOperation.parse(payload)));
 
   handle('log:get', async () => getLog());
   handle('log:text', async () => formatLogForClipboard());
@@ -720,6 +738,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   // ----------------------------------------------------------------- swarm
 
   handle('swarm:get', async () => swarmState());
+  handle('swarm:setWorkspaceScope', async (payload) => {
+    const selection = workspaceScopeSelection.parse(payload);
+    setNextRunWorkspaceScope(selection);
+    return swarmState();
+  });
   handle('swarm:reset', async () => {
     resetSwarm();
     if (!(await persistAgentAuthorityNow())) {
@@ -748,6 +771,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // The prime's report stays in the main process: the renderer needs the outcome, not
     // the message queued for the prime agent.
     return { cleared: outcome.cleared, reason: outcome.reason, swarm: swarmState() };
+  });
+
+  // Explicit maintenance only: this is the sole renderer path that may request UAC for MXC
+  // host preparation. No argument can select a helper, command or path.
+  handle('commandSandbox:prepare', async () => {
+    await prepareCommandSandboxHost();
+    return buildState();
   });
 
 

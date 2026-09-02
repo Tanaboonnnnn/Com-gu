@@ -35,6 +35,7 @@ vi.mock('../src/main/extension-path.js', () => ({ extensionDir: () => process.cw
 const updaterCheck = vi.fn();
 const updaterDownload = vi.fn();
 const updaterInstall = vi.fn();
+const recoveryRun = vi.fn();
 vi.mock('../src/main/updater.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/updater.js')>();
   return {
@@ -44,6 +45,10 @@ vi.mock('../src/main/updater.js', async (importOriginal) => {
     installDownloadedUpdate: updaterInstall
   };
 });
+
+vi.mock('../src/main/recovery.js', () => ({
+  recoverSystem: recoveryRun
+}));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
 const { initSecretsPath, resetSecretsCacheForTests } = await import('../src/main/secrets.js');
@@ -90,6 +95,7 @@ const renameRoot = (payload: unknown): Promise<any> => handlers.get('roots:renam
 const removeRoot = (payload: unknown): Promise<any> => handlers.get('roots:remove')!(null, payload) as Promise<any>;
 const sessionEvents = (payload: unknown): Promise<any> => handlers.get('sessions:events')!(null, payload) as Promise<any>;
 const sessionList = (): Promise<any> => handlers.get('sessions:list')!(null, undefined) as Promise<any>;
+const setRunScope = (payload: unknown): Promise<any> => handlers.get('swarm:setWorkspaceScope')!(null, payload) as Promise<any>;
 
 /** The whole settings object the renderer sends, with the parts a test cares about set. */
 function settings(over: { record: boolean; multiAgent: boolean }) {
@@ -229,6 +235,15 @@ describe('startup state without secure storage', () => {
     expect(reply.data.hasApiKey).toBe(false);
     expect(reply.data.hasGoalKey).toBe(false);
     expect(reply.data.bridge.paired).toBe(false);
+    expect(reply.data.systemHealth.map((component: { id: string }) => component.id)).toEqual([
+      'desktop',
+      'mcp-core',
+      'tunnel',
+      'browser-bridge',
+      'extension',
+      'prime',
+      'workers'
+    ]);
   });
 });
 
@@ -511,6 +526,56 @@ describe('root namespace invariants', () => {
     const removed = await removeRoot({ name: 'gone' });
     expect(removed.ok).toBe(false);
     expect(removed.error).toMatch(/not an approved folder/i);
+  });
+});
+
+describe('bounded recovery IPC', () => {
+  it('makes only the four allow-listed recovery operations reachable from the production renderer boundary', async () => {
+    recoveryRun.mockReset().mockResolvedValue({
+      operation: 'restart-tunnel',
+      outcome: 'recovered',
+      attempts: 1,
+      reason: null
+    });
+    const recover = handlers.get('recovery:run');
+    expect(recover).toBeTypeOf('function');
+
+    const ok = await recover!(null, 'restart-tunnel') as any;
+    expect(ok).toMatchObject({ ok: true, data: { operation: 'restart-tunnel', outcome: 'recovered' } });
+    expect(recoveryRun).toHaveBeenCalledWith('restart-tunnel');
+
+    const rejected = await recover!(null, 'run-arbitrary-command') as any;
+    expect(rejected.ok).toBe(false);
+    expect(recoveryRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Run workspace scope IPC', () => {
+  it('accepts only already-approved root names and rejects host-path authority material', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      multiAgent: { enabled: true, maxWorkers: 3 },
+      roots: [
+        { name: 'project', path: 'C:\\Users\\example\\project' },
+        { name: 'shared', path: 'C:\\Users\\example\\shared' }
+      ]
+    });
+
+    const valid = await setRunScope({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(valid.ok, valid.error).toBe(true);
+    expect(valid.data.selectedWorkspaceScope).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(JSON.stringify(valid.data)).not.toContain('C:\\Users');
+
+    const injected = await setRunScope({
+      primaryRoot: 'project',
+      sharedRoots: [],
+      rootIdentities: [{ name: 'project', path: 'C:\\Users\\example\\project' }]
+    });
+    expect(injected.ok).toBe(false);
+
+    const unknown = await setRunScope({ primaryRoot: 'not-approved', sharedRoots: [] });
+    expect(unknown.ok).toBe(false);
   });
 });
 

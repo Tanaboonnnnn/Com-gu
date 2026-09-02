@@ -244,7 +244,11 @@ export interface SpawnParams {
 }
 
 const EARLY_EXIT_GRACE_PERIOD_MS = 150;
-const POST_EXIT_CLOSE_WAIT_CAP_MS = 50;
+// MXC's Windows pipe wrapper can deliver the final stdout/stderr `end` noticeably after the
+// child exit event when the machine is under heavy scheduler pressure. Fifty milliseconds was
+// enough for the direct Node spawn path but allowed a quick sandboxed command's final line to be
+// dropped during release verification. Keep this bounded, but give the pipes enough time to drain.
+const POST_EXIT_CLOSE_WAIT_CAP_MS = 1_000;
 
 /** Applies `UNIFIED_EXEC_ENV` over the caller's environment, as `apply_unified_exec_env`. */
 export function applyUnifiedExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -1098,7 +1102,12 @@ async function collectOutputUntilDeadline(
         const timedOut = await raceWithTimeout([waitForOutput, closed], closeWaitRemaining);
         waitForOutput?.dispose();
         closed.dispose();
-        if (timedOut) break;
+        if (timedOut) {
+          // One last synchronous drain closes the timer-vs-data race: output may already have
+          // reached the shared buffer in the same turn that the close-wait timer won.
+          collected.pushBuffer(process.takeBuffer());
+          break;
+        }
         continue;
       }
 

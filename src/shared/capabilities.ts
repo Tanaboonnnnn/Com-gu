@@ -5,8 +5,8 @@ import { CAPABILITIES, WRITE_CAPABILITIES, type Capability, type Config } from '
  * filesystem root. Keeping the exception list here makes a newly-added capability fail closed
  * until somebody deliberately classifies it as rootless.
  *
- * Command is intentionally absent. Commands are not confined to approved roots once running,
- * but their connector-owned starting cwd must still be one the user approved.
+ * Command is intentionally absent. Run-scoped commands require an approved WorkspaceScope and
+ * are OS-confined to its effective roots; without proven confinement they fail closed.
  */
 export const ROOTLESS_CAPABILITIES: readonly Capability[] = ['screen', 'control', 'clipboardRead', 'clipboardWrite'];
 

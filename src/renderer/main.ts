@@ -1073,6 +1073,17 @@ function facts(next: AppState): HTMLElement[] {
   const rows: [string, string, boolean?][] = [];
   const health = status.health;
 
+  // Canonical v1 component health sits above the transport-specific facts below. Keep the
+  // detailed tunnel diagnostics: the canonical rows answer "which layer is unhealthy?", while
+  // the existing rows answer "what exactly did that layer report?".
+  for (const component of next.systemHealth ?? []) {
+    rows.push([
+      tr(`health.component.${component.id}` as MessageKey),
+      tr(`health.state.${component.state}` as MessageKey),
+      component.state === 'degraded' || component.state === 'failed'
+    ]);
+  }
+
   if (isRunning(status.state)) {
     rows.push([tr('health.route'), health?.route ?? tr('health.starting')]);
     rows.push([

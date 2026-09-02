@@ -103,7 +103,11 @@ beforeAll(async () => {
   dir = await makeTempDir('clf-continuation-');
   initConfigPath(dir);
   initSessionStore(dir);
-  await saveConfig({ ...defaultConfig(), multiAgent: { enabled: true, maxWorkers: 3 } });
+  await saveConfig({
+    ...defaultConfig(),
+    roots: [{ name: 'workspace', path: dir }],
+    multiAgent: { enabled: true, maxWorkers: 3 }
+  });
 });
 
 afterAll(async () => {
@@ -1019,7 +1023,11 @@ describe('the window in which a replacement chat is expected', () => {
     const source = await createSession({ title: 'prime before broken resume', conversationId: from });
     setGoalObjective(from, 'finish the release from the replacement chat');
     setWorkspaceFor(`chat:${from}`, { virtual: '/workspace/project', real: dir });
-    spawn({ workers: [{ task: 'keep the reusable worker alive' }], caller: { conversationId: from } });
+    spawn({
+      workers: [{ task: 'keep the reusable worker alive' }],
+      caller: { conversationId: from },
+      workspaceScope: { primaryRoot: 'workspace', sharedRoots: [] }
+    });
     const opened = await openContinuationNow(source.id, from);
     const handoff = await attachSummary(opened.token, SAMPLE_BRIEF);
     expect(handoff).not.toBeNull();
@@ -1104,7 +1112,11 @@ describe('the window in which a replacement chat is expected', () => {
     const source = await createSession({ title: 'source before old shadow collision', conversationId: from });
     setGoalObjective(from, 'finish the release on the current resumed descendant');
     setWorkspaceFor(`chat:${from}`, { virtual: '/workspace/project', real: dir });
-    spawn({ workers: [{ task: 'survive long enough for the old WAL to age out' }], caller: { conversationId: from } });
+    spawn({
+      workers: [{ task: 'survive long enough for the old WAL to age out' }],
+      caller: { conversationId: from },
+      workspaceScope: { primaryRoot: 'workspace', sharedRoots: [] }
+    });
 
     const broken = await openContinuationNow(source.id, from);
     const handoff = await attachSummary(broken.token, SAMPLE_BRIEF);
@@ -1217,7 +1229,11 @@ describe('the window in which a replacement chat is expected', () => {
     const source = await createSession({ title: 'source with separately repaired ownership', conversationId: from });
     setGoalObjective(from, 'goal still stranded after ownership repaired first');
     setWorkspaceFor(`chat:${from}`, { virtual: '/workspace/same-run', real: dir });
-    spawn({ workers: [{ task: 'prove this is the same live run' }], caller: { conversationId: from } });
+    spawn({
+      workers: [{ task: 'prove this is the same live run' }],
+      caller: { conversationId: from },
+      workspaceScope: { primaryRoot: 'workspace', sharedRoots: [] }
+    });
 
     const broken = await openContinuationNow(source.id, from);
     const handoff = await attachSummary(broken.token, SAMPLE_BRIEF);
@@ -1254,7 +1270,11 @@ describe('the window in which a replacement chat is expected', () => {
     const source = await createSession({ title: 'old parked owner before shadow', conversationId: from });
     setGoalObjective(from, 'old parked goal must stay isolated');
     setWorkspaceFor(`chat:${from}`, { virtual: '/workspace/old-owner', real: dir });
-    spawn({ workers: [{ task: 'park this old owner before a fresh run starts' }], caller: { conversationId: from } });
+    spawn({
+      workers: [{ task: 'park this old owner before a fresh run starts' }],
+      caller: { conversationId: from },
+      workspaceScope: { primaryRoot: 'workspace', sharedRoots: [] }
+    });
 
     const broken = await openContinuationNow(source.id, from);
     const handoff = await attachSummary(broken.token, SAMPLE_BRIEF);

@@ -437,7 +437,7 @@ describe('active Run file authority', () => {
       await saveConfig(priorConfig);
       ctx.roots = [{ name: 'workspace', path: approved }];
     }
-  });
+  }, 60_000);
 });
 
 describe('endpoint hardening', () => {

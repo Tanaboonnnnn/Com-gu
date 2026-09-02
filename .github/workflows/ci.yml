@@ -40,5 +40,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare Windows command confinement runner
+        if: runner.os == 'Windows'
+        run: node scripts/prepare-windows-command-sandbox-ci.mjs
+
       - name: Verify
         run: npm run verify:ci

@@ -14,7 +14,8 @@ import type {
   SessionSummary,
   ClearAgentResult,
   SwarmState,
-  TokenPressure
+  TokenPressure,
+  WorkspaceScopeView
 } from '../shared/session.js';
 
 type Reply<T> = { ok: true; data: T } | { ok: false; error: string; errorCode?: string };
@@ -69,6 +70,14 @@ export type UpdateUiState =
   | { status: 'downloading' | 'launched'; currentVersion: string; latestVersion: string }
   | { status: 'error'; currentVersion: string; message: string };
 
+export type RecoveryOperation = 'reconnect-bridge' | 'restart-tunnel' | 'reopen-browser' | 'wake-prime';
+export interface RecoveryUiResult {
+  operation: RecoveryOperation;
+  outcome: 'recovered' | 'degraded' | 'failed' | 'requires-user';
+  attempts: number;
+  reason: 'authority-changed' | 'retry-budget-exhausted' | null;
+}
+
 const api = {
   getState: () => call<AppState>('state:get'),
   getLaunchAtLogin: () => call<LaunchAtLoginState>('startup:get'),
@@ -89,6 +98,7 @@ const api = {
   connect: () => call<AppState>('connection:connect'),
   disconnect: () => call<AppState>('connection:disconnect'),
   runDiagnostics: () => call<Diagnosis>('diagnostics:run'),
+  recoverSystem: (operation: RecoveryOperation) => call<RecoveryUiResult>('recovery:run', operation),
   getLog: () => call<LogEntry[]>('log:get'),
   getLogText: () => call<string>('log:text'),
   getLogJson: () => call<string>('log:json'),
@@ -113,10 +123,12 @@ const api = {
   openExtensionFolder: () => call<string>('bridge:openExtensionFolder'),
 
   getSwarm: () => call<SwarmState>('swarm:get'),
+  setRunWorkspaceScope: (scope: WorkspaceScopeView) => call<SwarmState>('swarm:setWorkspaceScope', scope),
   resetSwarm: () => call<SwarmState>('swarm:reset'),
   // Clearing the prime ends the run; clearing a worker frees that slot. Which of the two
   // happened comes back in the result — the renderer does not decide it.
   clearAgent: (id: string) => call<ClearAgentResult>('swarm:clearAgent', id),
+  prepareCommandSandbox: () => call<AppState>('commandSandbox:prepare'),
 
   onStateChanged: (listener: (state: AppState) => void): (() => void) => {
     const wrapped = (_event: unknown, state: AppState): void => listener(state);

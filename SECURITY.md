@@ -17,7 +17,9 @@ ComGu is a permission boundary between ChatGPT and the logged-in OS user running
 
 - Filesystem tools validate paths against folders you explicitly approve.
 - Read-only mode disables effective file writes, commands, desktop control and clipboard writes.
-- `exec_command` is intentionally **not** confined to approved folders. It starts in an approved working directory, then runs with the normal privileges of your account.
+- During an active Run, filesystem tools use only that caller's effective `WorkspaceScope` (Primary + Shared approved roots). Learned cwd/workspace state is convenience, never authority.
+- During an active Run on supported Windows hosts, `exec_command` and `write_stdin` are OS-confined with MXC ProcessContainer for the full descendant process tree. If confinement or required host preparation cannot be proven, Run-scoped commands fail closed with no unrestricted fallback.
+- Commands outside an active Run still execute with the normal privileges of the logged-in account and are not protected by Run WorkspaceScope confinement.
 - Screen, mouse/keyboard and clipboard permissions are Windows-only desktop-wide capabilities, not folder permissions.
 - MCP servers bind to loopback and use secret tokenized paths. Public reachability comes only from the tunnel you configure.
 - The companion-extension bridge is a separate loopback service and exposes no filesystem, command or settings-mutation route.
@@ -32,7 +34,9 @@ These are properties of the current design, not vulnerability reports by themsel
 - **The Linux AppImage has a sandbox-availability fallback.** Its electron-builder static launcher can add `--no-sandbox` when the host disables unprivileged user namespaces. On Debian/Ubuntu, prefer the DEB on such restrictive systems if you do not want the portable AppImage to take that fallback.
 - **Fresh installs start Core permissions enabled and read-only mode off.** Windows additionally enables Desktop permissions; Desktop is unavailable on macOS/Linux. Review permissions before connecting ChatGPT. Existing installs keep their explicit stored choices.
 - **Application path checks are not a kernel/VM sandbox.** They substantially constrain the app's filesystem tools, but same-user filesystem races can still exist. Do not treat approved roots as isolation from a hostile local process.
-- **Command and Windows Desktop capabilities are powerful by design.** If enabled, they can act wherever your logged-in user can act, subject to normal OS privilege boundaries.
+- **Command and Windows Desktop capabilities remain powerful.** Run-scoped Windows commands are constrained to their WorkspaceScope, but ordinary non-Run commands and Desktop control still act with the logged-in user's normal OS authority.
+- **Run command confinement is currently proven only for supported Windows hosts.** macOS/Linux Run-scoped commands fail closed until a trustworthy process-filesystem confinement backend is implemented and tested.
+- **Windows host preparation is explicit.** On AppContainer+DACL fallback hosts, ComGu may require the user to approve the bundled MXC host-preparation helper through UAC. Build, test, startup and normal command spawning do not elevate or perform this preparation implicitly.
 - **Session recording is intentionally detailed and is not encrypted by `safeStorage`.** Recorded conversations/tool activity stay local to this app, but anyone with access to your OS account may be able to read the session files.
 
 ## Scope

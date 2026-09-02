@@ -2,6 +2,7 @@ import path from 'node:path';
 import { existsSync, promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { getPlatformSupport } from '@microsoft/mxc-sdk';
+import type { CommandSandboxRuntimeStatus } from '../../shared/types.js';
 
 /**
  * OS-enforced filesystem confinement for command execution.
@@ -129,6 +130,117 @@ export function commandSandboxHostPreparation(
   return hostPreparationForSupport(support);
 }
 
+/** Renderer-safe readiness projection. Native helper paths and workspace roots stay in main. */
+export function commandSandboxRuntimeStatus(
+  support: PlatformSupportSnapshot = getPlatformSupport(),
+  platform: NodeJS.Platform = process.platform
+): CommandSandboxRuntimeStatus {
+  if (platform !== 'win32') {
+    return {
+      available: false,
+      filesystemConfinement: 'unavailable',
+      backend: null,
+      reason: 'unsupported_platform',
+      hostPreparation: { required: false, steps: [] }
+    };
+  }
+  const preparation = hostPreparationForSupport(support);
+  if (!support.isSupported || !support.availableMethods.includes('processcontainer')) {
+    return {
+      available: false,
+      filesystemConfinement: 'unavailable',
+      backend: null,
+      reason: 'windows_backend_unavailable',
+      hostPreparation: { required: false, steps: [] }
+    };
+  }
+  if (preparation.required) {
+    return {
+      available: false,
+      filesystemConfinement: 'unavailable',
+      backend: null,
+      reason: 'windows_host_preparation_required',
+      hostPreparation: { required: true, steps: [...preparation.steps] }
+    };
+  }
+  return {
+    available: true,
+    filesystemConfinement: 'os-enforced',
+    backend: 'mxc-processcontainer',
+    reason: null,
+    hostPreparation: { required: false, steps: [] }
+  };
+}
+
+interface PrepareCommandSandboxHostOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly helperPath?: string;
+  readonly probe?: () => PlatformSupportSnapshot;
+  readonly runElevated?: (helperPath: string, step: CommandSandboxHostPreparationStep) => Promise<void>;
+}
+
+function powershellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+async function runHostPreparationElevated(
+  helperPath: string,
+  step: CommandSandboxHostPreparationStep
+): Promise<void> {
+  const { spawn } = await import('node:child_process');
+  const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const script = [
+    `$p = Start-Process -FilePath ${powershellSingleQuoted(helperPath)} -ArgumentList ${powershellSingleQuoted(step)} -Verb RunAs -Wait -PassThru`,
+    'exit $p.ExitCode'
+  ].join('; ');
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  const child = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+    windowsHide: true,
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
+  let stderr = '';
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf8');
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+  if (exitCode !== 0) {
+    throw new Error(
+      `Windows declined or failed command-sandbox host preparation (${step}, exit ${exitCode ?? 'unknown'}).${stderr.trim() ? ` ${stderr.trim()}` : ''}`
+    );
+  }
+}
+
+/**
+ * Explicit maintenance action used only from the renderer's user-triggered button.
+ * It never runs during build, tests, startup, capability probing, or command spawning.
+ */
+export async function prepareCommandSandboxHost(
+  options: PrepareCommandSandboxHostOptions = {}
+): Promise<CommandSandboxRuntimeStatus> {
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'win32') throw new Error('Command sandbox host preparation is only available on Windows.');
+  const probe = options.probe ?? (() => getPlatformSupport());
+  const initial = probe();
+  const preparation = hostPreparationForSupport(initial);
+  if (!initial.isSupported || !initial.availableMethods.includes('processcontainer')) {
+    throw new Error('Windows command confinement is not supported on this host.');
+  }
+  if (!preparation.required) return commandSandboxRuntimeStatus(initial, platform);
+  const helperPath = options.helperPath ?? preparation.helper;
+  if (!helperPath) throw new Error('The MXC host-preparation helper is missing from this installation.');
+  const runElevated = options.runElevated ?? runHostPreparationElevated;
+  for (const step of preparation.steps) await runElevated(helperPath, step);
+  const after = probe();
+  const status = commandSandboxRuntimeStatus(after, platform);
+  if (!status.available) {
+    throw new Error('Windows command confinement is still unavailable after host preparation.');
+  }
+  return status;
+}
+
 /**
  * Reports only confinement that this runtime can actually instantiate.
  *
@@ -214,10 +326,82 @@ function findOnPath(env: NodeJS.ProcessEnv, fileName: string): string | null {
   return null;
 }
 
-let runtimeMirror: Promise<string | null> | null = null;
+interface RuntimeMirrorCache {
+  sourceDir: string;
+  target: string;
+}
+
+let runtimeMirror: Promise<RuntimeMirrorCache | null> | null = null;
+
+async function sameRuntimeFile(source: string, mirrored: string): Promise<boolean> {
+  if (!existsSync(source) || !existsSync(mirrored)) return existsSync(source) === existsSync(mirrored);
+  const [sourceBytes, mirroredBytes] = await Promise.all([fs.readFile(source), fs.readFile(mirrored)]);
+  return sourceBytes.equals(mirroredBytes);
+}
+
+async function sameRuntimeTree(source: string, mirrored: string): Promise<boolean> {
+  if (!existsSync(source) || !existsSync(mirrored)) return existsSync(source) === existsSync(mirrored);
+  const [sourceEntries, mirroredEntries] = await Promise.all([
+    fs.readdir(source, { withFileTypes: true }),
+    fs.readdir(mirrored, { withFileTypes: true })
+  ]);
+  if (sourceEntries.length !== mirroredEntries.length) return false;
+  const mirroredByName = new Map(mirroredEntries.map((entry) => [entry.name, entry]));
+  for (const entry of sourceEntries) {
+    const peer = mirroredByName.get(entry.name);
+    if (!peer || entry.isDirectory() !== peer.isDirectory() || entry.isFile() !== peer.isFile()) return false;
+    const sourcePath = path.join(source, entry.name);
+    const mirroredPath = path.join(mirrored, entry.name);
+    if (entry.isDirectory()) {
+      if (!(await sameRuntimeTree(sourcePath, mirroredPath))) return false;
+    } else if (entry.isFile()) {
+      if (!(await sameRuntimeFile(sourcePath, mirroredPath))) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Verifies the deterministic Node/npm mirror before it is allowed to lead PATH.
+ * Exact root membership matters as much as byte equality: an extra executable beside node.exe
+ * could otherwise shadow a later PATH lookup even when every expected runtime byte was genuine.
+ */
+export async function validateNodeRuntimeMirror(sourceDir: string, target: string): Promise<boolean> {
+  const node = path.join(sourceDir, 'node.exe');
+  const npm = path.join(sourceDir, 'npm.cmd');
+  const npx = path.join(sourceDir, 'npx.cmd');
+  const npmPackage = path.join(sourceDir, 'node_modules', 'npm');
+  const expectedEntries = new Set(['.ready', 'node.exe']);
+  if (existsSync(npm)) expectedEntries.add('npm.cmd');
+  if (existsSync(npx)) expectedEntries.add('npx.cmd');
+  if (existsSync(npmPackage)) expectedEntries.add('node_modules');
+  let rootEntries: import('node:fs').Dirent[];
+  try {
+    rootEntries = await fs.readdir(target, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  if (rootEntries.length !== expectedEntries.size) return false;
+  if (rootEntries.some((entry) => !expectedEntries.has(entry.name))) return false;
+  const marker = rootEntries.find((entry) => entry.name === '.ready');
+  const mirroredNode = rootEntries.find((entry) => entry.name === 'node.exe');
+  if (!marker?.isFile() || !mirroredNode?.isFile()) return false;
+  if (!(await sameRuntimeFile(node, path.join(target, 'node.exe')))) return false;
+  if (!(await sameRuntimeFile(npm, path.join(target, 'npm.cmd')))) return false;
+  if (!(await sameRuntimeFile(npx, path.join(target, 'npx.cmd')))) return false;
+  return sameRuntimeTree(npmPackage, path.join(target, 'node_modules', 'npm'));
+}
 
 async function prepareNodeRuntimeMirror(env: NodeJS.ProcessEnv): Promise<string | null> {
-  if (runtimeMirror) return runtimeMirror;
+  if (runtimeMirror) {
+    const cached = await runtimeMirror;
+    if (!cached) return null;
+    if (await validateNodeRuntimeMirror(cached.sourceDir, cached.target)) return cached.target;
+    runtimeMirror = null;
+    throw new Error(`Command sandbox runtime mirror failed integrity validation: ${cached.target}`);
+  }
   runtimeMirror = (async () => {
     const node = findOnPath(env, 'node.exe');
     if (!node) return null;
@@ -241,7 +425,15 @@ async function prepareNodeRuntimeMirror(env: NodeJS.ProcessEnv): Promise<string 
     // refuse to do. The mirror contains runtime bytes only, never user/project data.
     const target = `${systemDrive}\\ComGuRuntime-${key}`;
     const marker = path.join(target, '.ready');
-    if (existsSync(marker)) return target;
+    // The drive root is intentionally writable enough for a normal user to create a direct
+    // child. Never treat a predictable directory plus a marker as provenance: another local
+    // process could pre-create or alter it. Reuse only when every mirrored runtime byte still
+    // matches the source installation exactly; otherwise fail closed rather than putting a
+    // potentially attacker-controlled executable first on PATH.
+    if (existsSync(marker)) {
+      if (await validateNodeRuntimeMirror(sourceDir, target)) return { sourceDir, target };
+      throw new Error(`Command sandbox runtime mirror failed integrity validation: ${target}`);
+    }
 
     if (existsSync(target)) {
       throw new Error(`Command sandbox runtime mirror exists without its ownership marker: ${target}`);
@@ -255,16 +447,20 @@ async function prepareNodeRuntimeMirror(env: NodeJS.ProcessEnv): Promise<string 
         await fs.cp(npmPackage, path.join(target, 'node_modules', 'npm'), { recursive: true });
       }
       await fs.writeFile(marker, 'ComGu sandbox runtime mirror\n', 'utf8');
+      if (!(await validateNodeRuntimeMirror(sourceDir, target))) {
+        throw new Error(`Command sandbox runtime mirror failed integrity validation after creation: ${target}`);
+      }
     } catch (error) {
       await fs.rm(target, { recursive: true, force: true });
       throw error;
     }
-    return target;
+    return { sourceDir, target };
   })().catch((error) => {
     runtimeMirror = null;
     throw error;
   });
-  return runtimeMirror;
+  const prepared = await runtimeMirror;
+  return prepared?.target ?? null;
 }
 
 async function runtimePolicy(

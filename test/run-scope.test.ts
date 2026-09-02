@@ -63,7 +63,7 @@ describe('run workspace scope', () => {
     ];
 
     expect(() => effectiveWorkspaceRoots(scope, changedApproval)).toThrowError(
-      'WORKSPACE_SCOPE_ESCALATION: requested workspace scope exceeds the prime/run workspace scope.'
+      'WORKSPACE_ROOT_CHANGED: a root captured by this Run no longer matches the currently approved root identity.'
     );
   });
 
