@@ -99,6 +99,13 @@ describe('cross-platform packaging targets', () => {
     expect(script).toContain("import('@microsoft/mxc-sdk')");
   });
 
+  it('keeps the Windows packaged sandbox smoke roots off the user-profile temp tree', () => {
+    const smoke = readFileSync(path.join(root, 'scripts', 'smoke-packaged-runtime.mjs'), 'utf8');
+    const windowsProbe = smoke.slice(smoke.indexOf("if (targetPlatform === 'win32')"));
+    expect(windowsProbe).toContain("path.parse(process.env.SystemRoot ?? 'C:\\\\Windows').root");
+    expect(windowsProbe).not.toContain('tmpdir()');
+  });
+
   it('pins Electron 43.4.1 exactly and proves packaged runners use those runtime bytes', () => {
     const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));

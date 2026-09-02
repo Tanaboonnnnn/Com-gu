@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { RIPGREP, TUNNEL_CLIENT } from './packaging-versions.mjs';
@@ -218,8 +217,11 @@ if (runtime.version !== expectedVersion || runtime.electron !== expectedElectron
 }
 
 if (targetPlatform === 'win32') {
-  const allowed = mkdtempSync(path.join(tmpdir(), 'comgu-packaged-scope-'));
-  const outside = mkdtempSync(path.join(tmpdir(), 'comgu-packaged-outside-'));
+  // MXC's AppContainer+DACL tier intentionally prepares only system-drive root metadata.
+  // Keep smoke roots directly beneath that prepared root instead of requiring broad C:\Users ACL changes.
+  const systemDrive = path.parse(process.env.SystemRoot ?? 'C:\\Windows').root;
+  const allowed = mkdtempSync(path.join(systemDrive, 'ComGuSmokeScope-'));
+  const outside = mkdtempSync(path.join(systemDrive, 'ComGuSmokeOutside-'));
   try {
     const outsideSecret = path.join(outside, 'outside-secret.txt');
     const outsideWrite = path.join(outside, 'escaped.txt');
