@@ -128,6 +128,7 @@ import { findSessionByConversation } from '../session/store.js';
 import {
   adoptAgent,
   fail,
+  effectiveRootsForCall,
   formatFileInfo,
   friendlyError,
   guard,
@@ -271,6 +272,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               'TOOL_DISABLED: read is disabled by the current ComGu permissions. Ask the user to enable reading in the app.'
             );
           }
+          const roots = effectiveRootsForCall(ctx);
           const targets: string[] = [];
           const notes: string[] = [];
           for (const requested of paths) {
@@ -282,7 +284,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               targets.push(requested);
               continue;
             }
-            const expanded = await expandGlob(ctx.roots, requested);
+            const expanded = await expandGlob(roots, requested);
             if (expanded.matches.length === 0) {
               notes.push(
                 expanded.truncated === 'scan'
@@ -333,7 +335,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             }
             try {
               const section = await readOne(target, {
-                roots: ctx.roots,
+                roots,
                 canRead: caps.read,
                 canBrowse: caps.browse,
                 startLine: start_line,
@@ -399,7 +401,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               'TOOL_DISABLED: view_image is disabled by the current ComGu permissions. Ask the user to enable reading in the app.'
             );
           }
-          const resolved = await resolveIn(ctx.roots, path);
+          const resolved = await resolveIn(effectiveRootsForCall(ctx), path);
           try {
             const image = await viewImage(resolved.real, null, undefined, resolved.virtual);
             logInfo(`tool view_image ${resolved.virtual} (${formatBytes(image.bytes)})`);
@@ -469,11 +471,12 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       },
       async ({ query, path: p, mode, include, exclude, case_sensitive, regex, max_results }) =>
         reg.guarded('search', 'find', async () => {
+          const roots = effectiveRootsForCall(ctx);
           const limit = Math.min(500, Math.max(1, Math.floor(max_results ?? 50)));
           const deadline = Date.now() + 10_000;
           const scopes: Array<{ real: string; virtual: string }> = [];
           if (p) {
-            const resolved = await resolveIn(ctx.roots, p);
+            const resolved = await resolveIn(roots, p);
             const stat = await fs.stat(resolved.real);
             if (stat.isFile()) {
               const outcome = await searchOneFile(resolved.real, resolved.virtual, {
@@ -500,8 +503,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             if (!stat.isDirectory()) return fail(`${resolved.virtual} is not a regular file or folder`);
             scopes.push({ real: resolved.real, virtual: resolved.virtual });
           } else {
-            for (const root of ctx.roots) {
-              const resolved = await resolvePath(ctx.roots, `/${root.name}`);
+            for (const root of roots) {
+              const resolved = await resolvePath(roots, `/${root.name}`);
               scopes.push({ real: resolved.real, virtual: resolved.virtual });
             }
           }
@@ -580,18 +583,19 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           if (args.environmentId !== null) {
             return fail('apply_patch environment selection is unavailable for this turn');
           }
+          const roots = effectiveRootsForCall(ctx);
           const workspace = currentWorkspace();
           if (!workspace && swarmRunning()) {
             return fail(
               'WORKSPACE_REQUIRED: this multi-agent chat has no proven workspace. Use an absolute path in another tool first so the approved project can be learned.'
             );
           }
-          const baseVirtual = workspace?.virtual ?? (ctx.roots[0] ? `/${ctx.roots[0].name}` : null);
+          const baseVirtual = workspace?.virtual ?? (roots[0] ? `/${roots[0].name}` : null);
           if (baseVirtual === null) {
             return fail('No folder is approved, so there is nowhere to apply the patch.');
           }
-          const base = await resolveIn(ctx.roots, baseVirtual);
-          return (await runParsedPatch(args, ctx.roots, base, caps)).result;
+          const base = await resolveIn(roots, baseVirtual);
+          return (await runParsedPatch(args, roots, base, caps)).result;
         })
     );
   }
@@ -628,11 +632,12 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
       },
       async (input) =>
         reg.guarded('command', 'exec_command', async () => {
+          const roots = effectiveRootsForCall(ctx);
           const dir = await resolveCwd(ctx, input.workdir);
           const rawCommands = input.cmd === undefined ? input.cmds! : [input.cmd];
           const isBatch = input.cmd === undefined;
           for (const [index, rawCommand] of rawCommands.entries()) {
-            const virtualCommandPath = strayVirtualPath(rawCommand, ctx.roots);
+            const virtualCommandPath = strayVirtualPath(rawCommand, roots);
             if (virtualCommandPath) {
               return fail(
                 `INVALID_COMMAND_PATH${isBatch ? ` in command ${index + 1}` : ''}: ${virtualCommandPath} is an app virtual path, but shell commands do not understand virtual paths. ` +
@@ -716,7 +721,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               }
               if (interceptedPatch.kind === 'body') {
                 try {
-                  const patchRun = await runParsedPatch(interceptedPatch.args, ctx.roots, dir);
+                  const patchRun = await runParsedPatch(interceptedPatch.args, roots, dir);
                   if (patchRun.result.isError || patchRun.content === null) return patchRun.result;
 
                   // `exec_command.rs` converts a successful intercepted patch into an

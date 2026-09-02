@@ -31,6 +31,7 @@ import {
   isAbsoluteVirtualPath,
   isNativeWindowsPath,
   resolvePath,
+  resolveScopedPath,
   type Resolved
 } from '../sandbox.js';
 import { currentWorkspace, learnWorkspace } from '../workspace.js';
@@ -56,8 +57,10 @@ import {
   releaseQuiescentRun,
   retiredWorkerForConversation,
   stageQueuedWorkerRevivals,
-  swarmRunning
+  swarmRunning,
+  workspaceScopeForCaller
 } from '../agents.js';
+import { effectiveWorkspaceRoots } from '../run/scope.js';
 import type { SurfaceId } from './surfaces.js';
 import {
   currentCall,
@@ -514,7 +517,7 @@ async function dispatchTracked(
         : swarmRunning() && identitySensitive && !context.caller.conversationId
         ? Promise.resolve(
             fail(
-              'CALLER_IDENTITY_REQUIRED: this operation needs this chat’s exact workspace, but the connector could not prove which ChatGPT conversation made the call. Retry after the extension reconnects; no file or command was changed.'
+              'WORKSPACE_SCOPE_REQUIRED: this active Run operation needs the exact caller identity before its workspace scope can be resolved. Retry after the extension reconnects; no file or command was changed.'
             )
           )
         : run()
@@ -605,10 +608,14 @@ function needsWorkspaceIdentity(name: string, args: unknown): boolean {
   const input = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
   const relative = (value: unknown): boolean =>
     typeof value === 'string' && !isAbsoluteVirtualPath(value) && !isNativeWindowsPath(value);
+  // During an active Run every filesystem operation is caller-scoped, including an absolute
+  // path. Absolute spelling proves location, never identity/authority.
+  if (swarmRunning() && ['read', 'view_image', 'find', 'apply_patch', 'exec_command'].includes(name)) return true;
   if (name === 'read') {
     const paths = Array.isArray(input['paths']) ? input['paths'] : [];
     return paths.some(relative);
   }
+  if (name === 'view_image') return relative(input['path']);
   if (name === 'find') return relative(input['path']);
   if (name === 'apply_patch') {
     // Codex's apply_patch surface has no cwd argument. Relative patch paths therefore always
@@ -676,7 +683,14 @@ export async function resolveIn(
   // workspace: `posix.normalize('/root/a/../../elsewhere')` is a perfectly clean-looking
   // `/elsewhere`, and nothing downstream can tell it apart from a path that was always that.
   const base = options.base !== undefined ? options.base : (currentWorkspace()?.virtual ?? null);
-  const resolved = await resolvePath(roots, requested, {
+  const approvedRoots = getConfig().roots;
+  const scoped = swarmRunning();
+  const resolved = scoped
+    ? await resolveScopedPath(approvedRoots, roots, requested, {
+        ...(options.allowMissing === undefined ? {} : { allowMissing: options.allowMissing }),
+        base
+      })
+    : await resolvePath(roots, requested, {
     ...(options.allowMissing === undefined ? {} : { allowMissing: options.allowMissing }),
     base
   });
@@ -684,6 +698,18 @@ export async function resolveIn(
   // decide where the next loose resolution points. See workspace.ts.
   if (isAbsoluteVirtualPath(requested) || isNativeWindowsPath(requested)) await learnWorkspace(resolved);
   return resolved;
+}
+
+/** Effective filesystem authority for the call currently running. */
+export function effectiveRootsForCall(ctx: ToolContext): readonly Root[] {
+  if (!swarmRunning()) return ctx.roots;
+  const caller = currentCall()?.caller;
+  if (!caller?.conversationId) {
+    throw new SandboxError(
+      'WORKSPACE_SCOPE_REQUIRED: an active Run file operation requires the exact caller identity and workspace scope.'
+    );
+  }
+  return effectiveWorkspaceRoots(workspaceScopeForCaller(caller), getConfig().roots);
 }
 
 export interface ResolvedCwd {
@@ -706,6 +732,7 @@ export async function resolveCwd(ctx: ToolContext, virtualPath: string | undefin
   // chat has been working, which is the whole point of the workspace and is exactly the case
   // the note above describes going wrong.
   const workspace = currentWorkspace();
+  const roots = effectiveRootsForCall(ctx);
   // Codex treats an explicitly empty workdir exactly like an omitted one.
   const provided = virtualPath !== undefined && virtualPath !== '';
   if (!provided && !workspace && swarmRunning()) {
@@ -713,9 +740,9 @@ export async function resolveCwd(ctx: ToolContext, virtualPath: string | undefin
       'WORKSPACE_REQUIRED: this multi-agent chat has no proven workspace. Supply an explicit approved workdir before running a command.'
     );
   }
-  const target = provided ? virtualPath : (workspace?.virtual ?? (ctx.roots[0] ? `/${ctx.roots[0].name}` : ''));
+  const target = provided ? virtualPath : (workspace?.virtual ?? (roots[0] ? `/${roots[0].name}` : ''));
   if (!target) throw new SandboxError('No folder is approved, so there is nowhere to run');
-  const resolved = await resolveIn(ctx.roots, target);
+  const resolved = await resolveIn(roots, target);
   const stat = await fs.stat(resolved.real);
   if (!stat.isDirectory()) throw new SandboxError('workdir must be a folder');
   return { real: resolved.real, virtual: resolved.virtual, defaulted: !provided };

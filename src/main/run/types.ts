@@ -11,4 +11,7 @@ export interface WorkspaceScopeSelection {
   readonly sharedRoots: readonly string[];
 }
 
-export type WorkspaceScopeErrorCode = 'WORKSPACE_SCOPE_REQUIRED' | 'WORKSPACE_SCOPE_ESCALATION';
+export type WorkspaceScopeErrorCode =
+  | 'WORKSPACE_SCOPE_REQUIRED'
+  | 'WORKSPACE_SCOPE_ESCALATION'
+  | 'WORKSPACE_ROOT_CHANGED';

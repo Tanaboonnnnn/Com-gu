@@ -13,6 +13,7 @@ import {
   isContained,
   normaliseRootName,
   resolvePath,
+  resolveScopedPath,
   splitVirtualPath,
   strayVirtualPath,
   toVirtualPath,
@@ -181,6 +182,19 @@ describe.runIf(IS_WINDOWS)('resolvePath — Windows path tricks', () => {
 });
 
 describe('resolvePath — roots', () => {
+  it('distinguishes a globally approved root that is outside the caller scope without resolving it', async () => {
+    const all: Root[] = [
+      { name: 'project', path: approved },
+      { name: 'other', path: outside }
+    ];
+    await expect(resolveScopedPath(all, [all[0]!], '/other/secret.txt')).rejects.toMatchObject({
+      code: 'WORKSPACE_PATH_OUTSIDE_SCOPE'
+    });
+    await expect(resolveScopedPath(all, [all[0]!], '/project/file.txt')).resolves.toMatchObject({
+      virtual: '/project/file.txt'
+    });
+  });
+
   it('rejects a null byte on every platform', async () => {
     const err = await expectRefused('/project/file.txt\0.png');
     expect(err.message).toMatch(/null byte/);

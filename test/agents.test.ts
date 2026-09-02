@@ -448,7 +448,7 @@ describe('spawning a run', () => {
       roots: [{ name: 'project', path: 'D:\\replacement\\project' }],
       multiAgent: { enabled: true, maxWorkers: 3 }
     });
-    expect(() => workspaceScopeForCaller(prime)).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
+    expect(() => workspaceScopeForCaller(prime)).toThrow(/WORKSPACE_ROOT_CHANGED/);
   });
 
   it('round-trips scoped active and dormant owner histories without granting dormant workers authority', async () => {
@@ -2799,7 +2799,15 @@ describe('through the MCP endpoint', () => {
   });
 
   it('does not let an MCP call already in flight across a browser revival ACK consume or repeat the wake text', async () => {
-    startSwarm(1);
+    await saveConfig({
+      ...defaultConfig(),
+      roots: [{ name: 'probe', path: dir }],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+    spawnWithWorkspaceScope(
+      { workers: [{ task: 'task 1' }], caller: prime },
+      { primaryRoot: 'probe', sharedRoots: [] }
+    );
     bindConversation('worker-1', 'c-worker-1');
     finishAgent({ conversationId: 'c-worker-1' }, 'first piece done');
     stageMessages(prime, [{ to: 'worker-1', text: 'wake text belongs to the browser user turn' }]).commit();

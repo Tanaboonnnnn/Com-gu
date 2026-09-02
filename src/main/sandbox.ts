@@ -41,7 +41,22 @@ const RESERVED_NAMES = new Set([
  */
 export const RESERVED_ROOT_NAMES = new Set(['skills']);
 
-export class SandboxError extends Error {}
+export class SandboxError extends Error {
+  readonly code: string | null;
+
+  constructor(message: string, code: string | null = null) {
+    super(message);
+    this.name = 'SandboxError';
+    this.code = code;
+  }
+}
+
+function outsideScope(): never {
+  throw new SandboxError(
+    'WORKSPACE_PATH_OUTSIDE_SCOPE: this path is in an approved root that is outside the caller\'s effective Run workspace scope.',
+    'WORKSPACE_PATH_OUTSIDE_SCOPE'
+  );
+}
 
 export interface Resolved {
   /** Canonical absolute path on disk. */
@@ -372,6 +387,44 @@ export async function resolvePath(
     virtual: toVirtualPath(root, rootReal, finalReal),
     root
   };
+}
+
+/**
+ * Resolves through a caller's effective Run roots while retaining enough knowledge of the
+ * globally approved roots to distinguish "not approved" from "approved, but not yours".
+ * The distinction is made lexically before resolving the excluded root, so an out-of-scope
+ * request cannot use path canonicalisation as a read/probe of that root.
+ */
+export async function resolveScopedPath(
+  approvedRoots: readonly Root[],
+  effectiveRoots: readonly Root[],
+  requestedPath: string,
+  options: ResolveOptions = {}
+): Promise<Resolved> {
+  const effectiveNames = new Set(effectiveRoots.map((root) => root.name.toLowerCase()));
+  const nativeWindows: boolean = isNativeWindowsPath(requestedPath);
+  if (isAbsoluteVirtualPath(requestedPath) && !nativeWindows) {
+    const first = requestedPath.trim().split(/[/\\]+/).find(Boolean)?.toLowerCase();
+    if (first && approvedRoots.some((root) => root.name.toLowerCase() === first) && !effectiveNames.has(first)) {
+      outsideScope();
+    }
+  }
+  if (!isAbsoluteVirtualPath(requestedPath) && options.base) {
+    const baseRoot = options.base.split(/[/\\]+/).find(Boolean)?.toLowerCase();
+    if (baseRoot && approvedRoots.some((root) => root.name.toLowerCase() === baseRoot) && !effectiveNames.has(baseRoot)) {
+      outsideScope();
+    }
+  }
+
+  if (nativeWindows || (!IS_WINDOWS && path.isAbsolute(requestedPath))) {
+    const native = path.resolve(requestedPath.trim());
+    for (const root of approvedRoots) {
+      if (effectiveNames.has(root.name.toLowerCase())) continue;
+      if (isContained(root.path, native)) outsideScope();
+    }
+  }
+
+  return resolvePath(effectiveRoots, requestedPath, options);
 }
 
 /** Converts a real path back into the virtual path the model sees. */

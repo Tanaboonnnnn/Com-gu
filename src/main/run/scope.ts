@@ -4,6 +4,8 @@ import type { WorkspaceScope, WorkspaceScopeErrorCode, WorkspaceScopeSelection }
 const REQUIRED_TEXT = 'WORKSPACE_SCOPE_REQUIRED: a run workspace scope must select approved roots by name.';
 const ESCALATION_TEXT =
   'WORKSPACE_SCOPE_ESCALATION: requested workspace scope exceeds the prime/run workspace scope.';
+const ROOT_CHANGED_TEXT =
+  'WORKSPACE_ROOT_CHANGED: a root captured by this Run no longer matches the currently approved root identity.';
 
 export class WorkspaceScopeError extends Error {
   readonly code: WorkspaceScopeErrorCode;
@@ -21,6 +23,10 @@ function required(): never {
 
 function escalation(): never {
   throw new WorkspaceScopeError('WORKSPACE_SCOPE_ESCALATION', ESCALATION_TEXT);
+}
+
+function rootChanged(): never {
+  throw new WorkspaceScopeError('WORKSPACE_ROOT_CHANGED', ROOT_CHANGED_TEXT);
 }
 
 export function parseWorkspaceScopeSelection(input: unknown): WorkspaceScopeSelection {
@@ -91,7 +97,7 @@ export function effectiveWorkspaceRoots(scope: WorkspaceScope, approvedRoots: re
   const persisted = new Map(scope.rootIdentities.map((root) => [root.name, root.path]));
   const roots = workspaceScopeNames(scope).map((name) => {
     const root = byName.get(name);
-    if (!root || persisted.get(name) !== root.path) escalation();
+    if (!root || persisted.get(name) !== root.path) rootChanged();
     return Object.freeze({ name: root.name, path: root.path });
   });
   return Object.freeze(roots);

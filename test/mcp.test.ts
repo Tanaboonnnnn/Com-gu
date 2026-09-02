@@ -20,7 +20,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { effectiveCapabilities, defaultConfig } from '../src/main/config.js';
+import { effectiveCapabilities, defaultConfig, getConfig, initConfigPath, saveConfig } from '../src/main/config.js';
 import { lastRequestAt, selfTestHeaders, startMcpServer, tunnelProbeHeaders, type McpEndpoint } from '../src/main/mcp/server.js';
 import { lastToolCallAt, type ToolContext } from '../src/main/mcp/tools.js';
 import { friendlyError } from '../src/main/mcp/kernel.js';
@@ -39,6 +39,11 @@ import { observeRequestCorrelation } from '../src/main/session/correlation.js';
 import { execOwner, noteExecOwner, resetExecOwnershipForTests } from '../src/main/codex/ownership.js';
 import { unifiedExecManager } from '../src/main/codex/manager.js';
 import { locateRipgrep } from '../src/main/ripgrep.js';
+import {
+  bindConversation,
+  resetAgentsForTests,
+  spawnWithWorkspaceScope
+} from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
 
 // ---------------------------------------------------------------- transport
@@ -223,6 +228,7 @@ function allCaps(): Capabilities {
 
 beforeAll(async () => {
   base = await makeTempDir('clf-mcp-');
+  initConfigPath(base);
   // This suite calls real tools, and calling a tool records it. Recording is on by
   // default now, so without a directory of its own the recorder wrote session folders
   // into the process's working directory — which for a test run is the repository.
@@ -277,6 +283,153 @@ beforeEach(async () => {
 });
 
 // ------------------------------------------------------------------- tests
+
+describe('active Run file authority', () => {
+  it('uses the narrowed worker roots for every file primitive and never falls back to global roots', async () => {
+    const priorConfig = getConfig();
+    const rootA = approved;
+    const rootB = path.join(base, 'shared-run-root');
+    await writeTree(rootB, {
+      'secret-b.txt': 'worker must never read this marker',
+      'glob/b-only.ts': 'export const bOnly = true;\n'
+    });
+    await fs.writeFile(
+      path.join(rootB, 'pixel-b.png'),
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    );
+    const runRoots: Root[] = [
+      { name: 'a', path: rootA },
+      { name: 'b', path: rootB }
+    ];
+    const primeConversation = 'conv-task4-prime';
+    const workerConversation = 'conv-task4-worker';
+    let request = 0;
+    const asWorker = async (name: string, args: Record<string, unknown>) => {
+      const requestId = `wfr_task4_${++request}`;
+      expect(
+        observeRequestCorrelation({
+          requestId,
+          conversationId: workerConversation,
+          sessionId: 'session-task4',
+          messageId: `message-${requestId}`,
+          tool: name,
+          observedAt: Date.now()
+        })
+      ).toBe('stored');
+      return modern('tools/call', { name, arguments: args }, { 'x-request-id': `${requestId}/att1` });
+    };
+    const expectOutside = (reply: any) => {
+      expect(failed(reply), textOf(reply)).toBe(true);
+      expect(textOf(reply)).toContain('WORKSPACE_PATH_OUTSIDE_SCOPE');
+    };
+
+    try {
+      resetAgentsForTests();
+      await saveConfig({
+        ...defaultConfig(),
+        roots: runRoots,
+        multiAgent: { enabled: true, maxWorkers: 2 }
+      });
+      ctx.roots = runRoots;
+      ctx.readOnly = false;
+      ctx.caps = withCaps({
+        read: true,
+        browse: true,
+        metadata: true,
+        search: true,
+        create: true,
+        edit: true,
+        move: true,
+        deleteFile: true,
+        command: false
+      });
+      if (endpoint) await endpoint.stop();
+      endpoint = await startMcpServer(() => ctx);
+
+      spawnWithWorkspaceScope(
+        {
+          caller: { conversationId: primeConversation },
+          workers: [
+            {
+              task: 'A only',
+              workspaceScope: { primaryRoot: 'a', sharedRoots: [] }
+            }
+          ]
+        },
+        { primaryRoot: 'a', sharedRoots: ['b'] }
+      );
+      expect(bindConversation('worker-1', workerConversation)).toBe(true);
+      setWorkspaceFor(`chat:${workerConversation}`, { virtual: '/a', real: rootA });
+      setWorkspaceFor('agent:worker-1', { virtual: '/a', real: rootA });
+
+      const allowedRead = await asWorker('read', { paths: ['/a/notes.txt'] });
+      expect(failed(allowedRead), textOf(allowedRead)).toBe(false);
+      expect(textOf(allowedRead)).toContain('note line 1');
+
+      expectOutside(await asWorker('read', { paths: ['/b/secret-b.txt'] }));
+      expectOutside(await asWorker('read', { paths: ['/b/glob/*.ts'] }));
+      expectOutside(await asWorker('read', { paths: [path.join(rootB, 'secret-b.txt')] }));
+      expectOutside(await asWorker('view_image', { path: '/b/pixel-b.png' }));
+      expectOutside(await asWorker('find', { query: 'worker must never read', mode: 'content', path: '/b' }));
+
+      const omittedFind = await asWorker('find', { query: 'worker must never read', mode: 'content' });
+      expect(failed(omittedFind), textOf(omittedFind)).toBe(false);
+      expect(textOf(omittedFind)).toContain('No matches');
+      expect(textOf(omittedFind)).not.toContain('/b/secret-b.txt');
+
+      const directPatchTarget = path.join(rootB, 'blocked-direct.txt');
+      expectOutside(await asWorker('apply_patch', { patch: addPatch('/b/blocked-direct.txt', ['blocked']) }));
+      await expect(fs.stat(directPatchTarget)).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const allowedPatch = await asWorker('apply_patch', { patch: addPatch('/a/task4-allowed.txt', ['allowed']) });
+      expect(failed(allowedPatch), textOf(allowedPatch)).toBe(false);
+      await expect(fs.readFile(path.join(rootA, 'task4-allowed.txt'), 'utf8')).resolves.toContain('allowed');
+
+      // An out-of-scope absolute path must not move the worker's learned workspace. Relative
+      // follow-up resolution stays in A.
+      expectOutside(await asWorker('read', { paths: ['/b/secret-b.txt'] }));
+      const relative = await asWorker('read', { paths: ['notes.txt'] });
+      expect(failed(relative), textOf(relative)).toBe(false);
+      expect(textOf(relative)).toContain('/a/notes.txt');
+
+      // Shell execution itself is Task 5, but the Codex apply_patch interception is a file tool
+      // and must use the same narrowed roots before it touches disk.
+      ctx.caps = withCaps({ command: true, read: true, browse: true, metadata: true, create: true, edit: true });
+      if (endpoint) await endpoint.stop();
+      endpoint = await startMcpServer(() => ctx);
+      const shellPatchTarget = path.join(rootB, 'blocked-shell.txt');
+      const shellPatch = addPatch('/b/blocked-shell.txt', ['blocked']);
+      const intercepted = await asWorker('exec_command', {
+        cmd: `apply_patch <<'PATCH'\n${shellPatch}\nPATCH`,
+        workdir: '/a'
+      });
+      expectOutside(intercepted);
+      await expect(fs.stat(shellPatchTarget)).rejects.toMatchObject({ code: 'ENOENT' });
+
+      // Absolute file calls in an active Run cannot become anonymous/global authority.
+      const unidentified = await modern('tools/call', { name: 'read', arguments: { paths: ['/b/secret-b.txt'] } });
+      expect(failed(unidentified), textOf(unidentified)).toBe(true);
+      expect(textOf(unidentified)).toContain('WORKSPACE_SCOPE_REQUIRED');
+
+      // Persisted Run authority is an exact approved-root identity, not a reusable root name.
+      // Rebinding A to a different path invalidates the old Run before any path resolution.
+      await saveConfig({
+        ...getConfig(),
+        roots: [
+          { name: 'a', path: rootB },
+          { name: 'b', path: rootA }
+        ]
+      });
+      const changedRoot = await asWorker('read', { paths: ['/a/notes.txt'] });
+      expect(failed(changedRoot), textOf(changedRoot)).toBe(true);
+      expect(textOf(changedRoot)).toContain('WORKSPACE_ROOT_CHANGED');
+    } finally {
+      resetAgentsForTests();
+      await saveConfig(priorConfig);
+      ctx.roots = [{ name: 'workspace', path: approved }];
+    }
+  });
+});
 
 describe('endpoint hardening', () => {
   it('does not expose native paths from uncommon filesystem errors', () => {
