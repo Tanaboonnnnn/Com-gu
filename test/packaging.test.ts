@@ -92,6 +92,13 @@ describe('cross-platform packaging targets', () => {
     ]) expect(pkg.scripts[script]).toBeTypeOf('string');
   });
 
+  it('re-probes MXC host readiness in a fresh process after CI host preparation', () => {
+    const script = readFileSync(path.join(root, 'scripts', 'prepare-windows-command-sandbox-ci.mjs'), 'utf8');
+    expect(script).not.toContain("import { getPlatformSupport } from '@microsoft/mxc-sdk';");
+    expect(script).toContain("spawnSync(process.execPath");
+    expect(script).toContain("import('@microsoft/mxc-sdk')");
+  });
+
   it('pins Electron 43.4.1 exactly and proves packaged runners use those runtime bytes', () => {
     const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));

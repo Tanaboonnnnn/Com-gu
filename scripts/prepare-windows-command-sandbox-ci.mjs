@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
-import { getPlatformSupport } from '@microsoft/mxc-sdk';
 
 if (process.env.GITHUB_ACTIONS !== 'true') {
   throw new Error('Refusing MXC host preparation outside an explicit GitHub Actions runner.');
@@ -31,7 +30,20 @@ function requiredSteps(support) {
   return steps;
 }
 
-const before = getPlatformSupport();
+function probeSupport() {
+  const source = "import('@microsoft/mxc-sdk').then(({getPlatformSupport})=>process.stdout.write(JSON.stringify(getPlatformSupport())))";
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    encoding: 'utf8',
+    windowsHide: true
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`MXC Windows CI support probe exited ${result.status ?? 'unknown'}: ${String(result.stderr ?? '').trim()}`);
+  }
+  return JSON.parse(String(result.stdout ?? ''));
+}
+
+const before = probeSupport();
 if (!before.isSupported || !before.availableMethods?.includes('processcontainer')) {
   throw new Error(`Windows CI runner has no proven MXC ProcessContainer backend: ${JSON.stringify(before)}`);
 }
@@ -43,7 +55,7 @@ for (const step of requiredSteps(before)) {
   if (result.status !== 0) throw new Error(`wxc-host-prep ${step} exited ${result.status ?? 'unknown'}`);
 }
 
-const after = getPlatformSupport();
+const after = probeSupport();
 const remaining = requiredSteps(after);
 if (!after.isSupported || !after.availableMethods?.includes('processcontainer') || remaining.length > 0) {
   throw new Error(`MXC Windows CI host preparation did not become ready: ${JSON.stringify(after)}`);
