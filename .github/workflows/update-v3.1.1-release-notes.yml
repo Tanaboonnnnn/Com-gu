@@ -1,0 +1,22 @@
+name: Update v3.1.1 release notes
+
+on:
+  push:
+    branches:
+      - comgu-3.1-safe-workspace-runtime
+    paths:
+      - docs/release-notes/v3.1.1.md
+      - .github/workflows/update-v3.1.1-release-notes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Update release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit v3.1.1 --repo "$GITHUB_REPOSITORY" --notes-file docs/release-notes/v3.1.1.md
