@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { defaultConfig, initConfigPath, saveConfig } from '../src/main/config.js';
+import { resetChatWorkspaceScopesForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
 import { validateNewRoot } from '../src/main/sandbox.js';
 import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
 import {
@@ -53,6 +54,7 @@ afterEach(async () => {
   resetSessionStoreForTests();
   unsetSessionRootForTests();
   resetDurableForTests();
+  resetChatWorkspaceScopesForTests();
   if (dir) await fs.rm(dir, { recursive: true, force: true });
   dir = '';
 });
@@ -66,6 +68,7 @@ async function serve(): Promise<McpEndpoint> {
   const rootPath = await validateNewRoot(dir, []);
   const roots = [{ name: 'probe', path: rootPath }];
   await saveConfig({ ...cfg, roots, readOnly: false });
+  setManualWorkspaceScope(roots, { primaryRoot: 'probe', sharedRoots: [] });
   await fs.writeFile(path.join(dir, 'note.txt'), 'hello\n', 'utf8');
   return startMcpServer(() => ({
     roots,

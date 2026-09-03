@@ -17,9 +17,9 @@ ComGu is a permission boundary between ChatGPT and the logged-in OS user running
 
 - Filesystem tools validate paths against folders you explicitly approve.
 - Read-only mode disables effective file writes, commands, desktop control and clipboard writes.
-- During an active Run, filesystem tools use only that caller's effective `WorkspaceScope` (Primary + Shared approved roots). Learned cwd/workspace state is convenience, never authority.
+- Ordinary file/terminal authority is selected per exact ChatGPT conversation from already-approved roots. No selected chat scope means no authority. During an active Run, filesystem tools use only that caller's effective `WorkspaceScope` (Primary + Shared approved roots). Learned cwd/workspace state is convenience, never authority.
 - During an active Run on supported Windows hosts, `exec_command` and `write_stdin` are OS-confined with MXC ProcessContainer for the full descendant process tree. If confinement or required host preparation cannot be proven, Run-scoped commands fail closed with no unrestricted fallback.
-- Commands outside an active Run still execute with the normal privileges of the logged-in account and are not protected by Run WorkspaceScope confinement.
+- Commands outside an active Run require either exact per-chat workspace authority or an explicit non-durable unidentified Desktop fallback. The fallback cannot authorize Prime/Workers, and exact chat identity always overrides it.
 - Screen, mouse/keyboard and clipboard permissions are Windows-only desktop-wide capabilities, not folder permissions.
 - MCP servers bind to loopback and use secret tokenized paths. Public reachability comes only from the tunnel you configure.
 - The companion-extension bridge is a separate loopback service and exposes no filesystem, command or settings-mutation route.

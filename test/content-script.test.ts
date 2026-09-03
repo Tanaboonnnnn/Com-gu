@@ -207,6 +207,7 @@ async function harness(
   reply.set('closed', () => ({ ok: true }));
   reply.set('defer_revival', () => ({ ok: true, deferred: true }));
   reply.set('forget_revival', () => ({ ok: true }));
+  reply.set('workspace_get', () => ({ ok: true, data: { roots: [], selected: null } }));
   for (const [type, answer] of Object.entries(replies)) reply.set(type, answer);
   before(window.document, dom);
 
@@ -6675,6 +6676,96 @@ describe('the Compact & resume control', () => {
     const after = live.document.querySelector('[data-clf-row="autoCompact"]') as HTMLButtonElement;
     expect(after.getAttribute('aria-checked')).toBe('true');
     expect((after.querySelector('.clf-switch') as HTMLElement).dataset.clfOn).toBe('1');
+  });
+
+  it('shows this chat workspace as a compact root-name pill and never exposes native paths', async () => {
+    live = await harness(undefined, {
+      activity: () => ({
+        ok: true,
+        data: {
+          sessionId: null,
+          entries: [],
+          stream: [],
+          userAnchors: [],
+          nextSince: 0,
+          workspace: {
+            roots: ['comgu', 'lecture', 'shared'],
+            selected: { primaryRoot: 'comgu', sharedRoots: ['lecture', 'shared'] }
+          }
+        }
+      }),
+      workspace_get: () => ({
+        ok: true,
+        data: {
+          roots: ['comgu', 'lecture', 'shared'],
+          selected: { primaryRoot: 'comgu', sharedRoots: ['lecture', 'shared'] }
+        }
+      })
+    });
+    live.hook.injectControl();
+    await settle();
+
+    const button = live.document.querySelector('.clf-workspace-btn') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.textContent).toBe('comgu +2');
+    expect(live.document.body.textContent).not.toContain('C:\\');
+  });
+
+  it('lets the user multi-select approved root names and saves them to this exact chat', async () => {
+    const chat = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    live = await harness(`https://chatgpt.com/c/${chat}`, {
+      workspace_get: () => ({
+        ok: true,
+        data: {
+          roots: ['comgu', 'lecture', 'shared'],
+          selected: { primaryRoot: 'comgu', sharedRoots: [] }
+        }
+      }),
+      workspace_set: () => ({
+        ok: true,
+        data: {
+          roots: ['comgu', 'lecture', 'shared'],
+          selected: { primaryRoot: 'comgu', sharedRoots: ['lecture'] }
+        }
+      })
+    });
+    live.hook.injectControl();
+    await settle();
+
+    (live.document.querySelector('.clf-workspace-btn') as HTMLButtonElement).click();
+    await settle();
+    const panel = live.document.querySelector('[data-clf-workspace-menu]') as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect([...panel.querySelectorAll('[data-clf-workspace-root]')].map((node) => node.getAttribute('data-clf-workspace-root'))).toEqual([
+      'comgu',
+      'lecture',
+      'shared'
+    ]);
+
+    (panel.querySelector('[data-clf-workspace-root="lecture"]') as HTMLButtonElement).click();
+    (panel.querySelector('[data-clf-workspace-save]') as HTMLButtonElement).click();
+    await settle();
+
+    const writes = live.sent.filter((message) => message.type === 'workspace_set');
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ conversationId: chat, roots: ['comgu', 'lecture'] });
+    expect((live.document.querySelector('.clf-workspace-btn') as HTMLButtonElement).textContent).toBe('comgu +1');
+  });
+
+  it('does not let a New Chat mint persistent workspace authority before it has a conversation id', async () => {
+    live = await harness('https://chatgpt.com/', {
+      workspace_get: () => ({ ok: true, data: { roots: ['comgu'], selected: null } })
+    });
+    live.hook.injectControl();
+    await settle();
+
+    const button = live.document.querySelector('.clf-workspace-btn') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    button.click();
+    const panel = live.document.querySelector('[data-clf-workspace-menu]') as HTMLElement;
+    expect(panel.textContent).toContain('Send the first message');
+    expect(panel.querySelector('[data-clf-workspace-save]')).toBeNull();
+    expect(live.sent.some((message) => message.type === 'workspace_set')).toBe(false);
   });
 
   /** The missing credential is said where the switch is, in the words the app uses. */

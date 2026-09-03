@@ -739,6 +739,48 @@ describe('worker settings authority', () => {
     expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/settings')).toBe(false);
   });
 
+  it('forwards workspace names only from the exact conversation owned by this document', async () => {
+    const posted: Record<string, unknown>[] = [];
+    const fetch = vi.fn(async (input: string, init: Record<string, unknown> = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname === '/workspace' && init.method === 'POST') {
+        posted.push(JSON.parse(String(init.body || '{}')));
+        return response(200, {
+          roots: ['comgu', 'lecture'],
+          selected: { primaryRoot: 'comgu', sharedRoots: ['lecture'] }
+        });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    await worker.registerTab(44);
+    await worker.send({ type: 'bind', conversationId: CHAT }, 44);
+
+    const reply = await worker.send({ type: 'workspace_set', conversationId: CHAT, roots: ['comgu', 'lecture'] }, 44);
+    expect(reply).toMatchObject({ ok: true });
+    expect(posted).toEqual([{ conversationId: CHAT, primaryRoot: 'comgu', sharedRoots: ['lecture'] }]);
+    expect(JSON.stringify(posted)).not.toContain('C:\\');
+  });
+
+  it('refuses a workspace write for a different chat before it reaches the bridge', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      return response(200, {});
+    });
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    await worker.registerTab(45);
+    await worker.send({ type: 'bind', conversationId: CHAT }, 45);
+    const other = '11111111-2222-4333-8444-555555555555';
+
+    expect(await worker.send({ type: 'workspace_set', conversationId: other, roots: ['comgu'] }, 45)).toMatchObject({
+      ok: false,
+      error: 'stale_conversation'
+    });
+    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/workspace')).toBe(false);
+  });
+
   it('reads the desktop locale without requiring ChatGPT document ownership', async () => {
     const calls: Array<{ path: string; method: string }> = [];
     const fetch = vi.fn(async (input: string, init: Record<string, unknown> = {}) => {

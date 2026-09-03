@@ -95,6 +95,7 @@ import {
   workspaceScopeNames
 } from './run/scope.js';
 import type { WorkspaceScope, WorkspaceScopeSelection } from './run/types.js';
+import { chatWorkspaceScope } from './chat-workspace-scope.js';
 
 export const PRIME_ID = 'prime';
 
@@ -1287,7 +1288,7 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   }
 
   const existingOwner = run ?? dormantRunForPrime(conversationId);
-  const userSelectedScope = existingOwner ? null : nextRunWorkspaceScope;
+  const userSelectedScope = existingOwner ? null : chatWorkspaceScope(conversationId);
   if (userSelectedScope) effectiveWorkspaceRoots(userSelectedScope, getConfig().roots);
   let plannedRunScope: WorkspaceScope | null = existingOwner?.scope ?? userSelectedScope;
   if (existingOwner) {
@@ -1297,13 +1298,16 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
       if (!sameWorkspaceScope(plannedRunScope, requested)) scopeEscalation();
     }
   } else if (userSelectedScope) {
-    // A renderer selection is user authority. A model may repeat it, but cannot replace it.
+    // The conversation's explicit user-selected workspace is the new Run ceiling. A model may
+    // repeat that scope in its spawn arguments for clarity, but can never replace or widen it.
     if (requestedRunSelection !== undefined) {
       const requested = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
       if (!sameWorkspaceScope(userSelectedScope, requested)) scopeEscalation();
     }
-  } else if (requestedRunSelection !== undefined) {
-    plannedRunScope = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
+  } else {
+    throw new AgentError(
+      'WORKSPACE_SCOPE_REQUIRED: choose a workspace for this ChatGPT conversation before starting sub-agents.'
+    );
   }
   if (plannedRunScope) effectiveWorkspaceRoots(plannedRunScope, getConfig().roots);
   const scopedPlanned = planned.map((worker) => ({

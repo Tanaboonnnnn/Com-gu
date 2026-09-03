@@ -9,6 +9,35 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
+## [3.1.1] ? 2026-09-03
+
+3.1.1 moves workspace authority from a global next-Run choice to an explicit per-ChatGPT-conversation selection and makes the existing Sub-agent setting visible in the header.
+
+### Added
+- Per-chat workspace selection with one Primary approved root plus optional Shared roots, persisted by exact ChatGPT conversation id.
+- Companion-extension workspace pill beside the ChatGPT composer with approved-root names only and multi-select scope editing.
+- Explicit Desktop fallback selection for unidentified/no-extension file and terminal calls; this fallback is non-durable and cannot authorize Prime or workers.
+- Header Sub-agent on/off switch backed by the existing multi-agent authority setting.
+
+### Changed
+- Fresh Prime Runs inherit the exact chat workspace as their immutable Run ceiling; Workers may inherit or narrow that scope only.
+- Compact & Resume transfers exact per-chat workspace authority to the new conversation.
+- Renaming an approved root updates friendly display names while preserving path identity; removing a root retires old chat/manual authority so remove/re-add cannot resurrect it.
+
+### Fixed
+- Connection status and Connect/Disconnect copy now re-render from the latest live state after locale/state updates instead of being overwritten by static i18n repaint.
+- Thai connection/workspace fallback labels remain readable and update with the current locale.
+- Extension workspace state reuses the existing activity refresh path at startup, avoiding an extra request that disturbed navigation/reload lifecycle timing.
+
+### Security
+- No selected chat scope means no ordinary file/terminal authority. Exact chat identity always overrides the unidentified Desktop fallback.
+- The extension and renderer receive friendly approved-root names/ids only; native paths remain in the main process and arbitrary native path input is not accepted.
+- Model arguments cannot widen chat, Prime, or Worker authority. Existing v3.1.0 Windows MXC confinement and fail-closed behavior remain unchanged.
+
+### Known release caveat
+- macOS and Linux still do not have a proven Run command-confinement backend, so Run-scoped commands fail closed there. File workspace enforcement remains available.
+- macOS DMG/ZIP artifacts are publisher-unsigned and unnotarized. Gatekeeper may warn on first open.
+
 ## [3.1.0] — 2026-09-02
 
 3.1.0 makes an active multi-agent Run a real workspace authority boundary instead of only a

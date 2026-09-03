@@ -245,6 +245,13 @@
 
   let conversationId = null;
   let agent = null;
+  /**
+   * User-selected approved-root names for the exact ChatGPT conversation on screen.
+   * Native paths never cross into this document; the bridge returns names only.
+   */
+  let workspaceState = { roots: [], selected: null };
+  let workspaceLoadedFor = null;
+  let workspacePulling = false;
   // Exact command paired with `agent`. Friendly worker ids are reused by later swarms, so the
   // app will only accept lost-ACK recovery when this full random id still names the leased worker
   // command that opened this document. It comes only from the extension's redeemed command.
@@ -1136,6 +1143,13 @@
     pendingObjectiveSent = false;
     objectiveBusy = false;
     objectiveError = '';
+    workspaceState = { roots: [], selected: null };
+    workspaceLoadedFor = null;
+    workspacePulling = false;
+    workspaceError = '';
+    workspaceDraft = [];
+    workspaceDraftDirty = false;
+    closeWorkspaceMenu();
     removeStagePanel();
     generating = false;
     quietSince = 0;
@@ -4865,6 +4879,75 @@
     }
   }
 
+  function readWorkspace(raw) {
+    if (!raw || typeof raw !== 'object') return { roots: [], selected: null };
+    const roots = Array.isArray(raw.roots)
+      ? raw.roots.filter((value) => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,31}$/.test(value))
+      : [];
+    const uniqueRoots = [...new Set(roots)];
+    const selected = raw.selected && typeof raw.selected === 'object' ? raw.selected : null;
+    const primaryRoot = selected && typeof selected.primaryRoot === 'string' ? selected.primaryRoot : null;
+    const sharedRoots =
+      selected && Array.isArray(selected.sharedRoots)
+        ? selected.sharedRoots.filter((value) => typeof value === 'string' && value !== primaryRoot)
+        : [];
+    if (!primaryRoot || !uniqueRoots.includes(primaryRoot)) return { roots: uniqueRoots, selected: null };
+    const safeShared = [...new Set(sharedRoots)].filter((name) => uniqueRoots.includes(name));
+    return { roots: uniqueRoots, selected: { primaryRoot, sharedRoots: safeShared } };
+  }
+
+  function workspaceNames() {
+    if (!workspaceState.selected) return [];
+    return [workspaceState.selected.primaryRoot, ...workspaceState.selected.sharedRoots];
+  }
+
+  function workspaceSummary() {
+    const names = workspaceNames();
+    if (names.length === 0) return ui('composer.workspace');
+    return names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
+  }
+
+  /**
+   * Refreshes the approved names/selection for the exact route generation currently shown.
+   * A late A response can never repaint B, including A -> B -> A because epoch is checked too.
+   */
+  async function pullWorkspace(force = false) {
+    const routeId = CLF_DOM.conversationId();
+    // `/c/A -> / -> /c/B` router churn must not make the id-less middle look like a New Chat.
+    if (!routeId && conversationId) return;
+    const key = routeId || '__new__';
+    if (workspacePulling || (!force && workspaceLoadedFor === key)) return;
+    workspacePulling = true;
+    const forEpoch = epoch;
+    const forConversation = conversationId;
+    try {
+      const reply = await ask({ type: 'workspace_get', ...(routeId ? { conversationId: routeId } : {}) });
+      if (
+        !alive ||
+        epoch !== forEpoch ||
+        conversationId !== forConversation ||
+        CLF_DOM.conversationId() !== routeId ||
+        !reply ||
+        reply.ok !== true ||
+        !reply.data
+      ) {
+        return;
+      }
+      workspaceState = readWorkspace(reply.data);
+      workspaceLoadedFor = key;
+      workspaceError = '';
+      if (!workspaceDraftDirty) workspaceDraft = workspaceNames();
+      renderWorkspaceButton();
+      renderWorkspaceMenu();
+    } finally {
+      workspacePulling = false;
+      if (alive && epoch === forEpoch && conversationId === forConversation && CLF_DOM.conversationId() === routeId) {
+        renderWorkspaceButton();
+        if (workspaceMenuOpen) renderWorkspaceMenu();
+      }
+    }
+  }
+
   async function pullActivity() {
     if (!CLF_DOM.conversationId()) {
       // A New Chat has no feed: /activity is addressed by conversation, and this composer is
@@ -4897,6 +4980,17 @@
       if (!current()) return;
       const data = reply.data;
       uiLocale = data.context && data.context.locale === 'th' ? 'th' : 'en';
+      // Workspace state rides the activity request this conversation already needs. Do not add
+      // another startup request from composer injection: that request used to race the recorder's
+      // reload/adoption handshake and could make a quiet resumed turn cross its settle window.
+      if (data.workspace) {
+        workspaceState = readWorkspace(data.workspace);
+        workspaceLoadedFor = forId;
+        workspaceError = '';
+        if (!workspaceDraftDirty) workspaceDraft = workspaceNames();
+        renderWorkspaceButton();
+        if (workspaceMenuOpen) renderWorkspaceMenu();
+      }
       // Popup-only. `sessionId` is the app saying it has a session for this exact chat,
       // which is the difference between "delivered" and "the app is actually recording it".
       observed.session = typeof data.sessionId === 'string' ? data.sessionId : null;
@@ -5581,6 +5675,16 @@
     button.className = 'clf-compact-btn';
     button.innerHTML = ICON;
 
+    const workspaceButton = document.createElement('button');
+    workspaceButton.type = 'button';
+    workspaceButton.className = 'clf-workspace-btn';
+    workspaceButton.dataset.clfWorkspaceButton = '1';
+    workspaceButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleWorkspaceMenu();
+    });
+
     /**
      * The context meter: a bar around the button that fills as the conversation does.
      *
@@ -5610,8 +5714,8 @@
       void cancelCompact();
     });
 
-    root.append(pill, button);
-    return { root, pill, text, button, cancel, meter, meterFill };
+    root.append(pill, workspaceButton, button);
+    return { root, pill, text, workspaceButton, button, cancel, meter, meterFill };
   }
 
   function currentState() {
@@ -5674,6 +5778,12 @@
   let menuOpen = false;
   /** Set while a toggle is in flight, so a second click cannot race the first one's write. */
   let menuBusy = false;
+  let workspaceMenuNode = null;
+  let workspaceMenuOpen = false;
+  let workspaceBusy = false;
+  let workspaceError = '';
+  let workspaceDraft = [];
+  let workspaceDraftDirty = false;
 
   function buildMenu() {
     const root = document.createElement('div');
@@ -5694,6 +5804,7 @@
 
   function toggleMenu() {
     if (menuOpen) return void closeMenu();
+    closeWorkspaceMenu();
     menuOpen = true;
     hideTip();
     renderMenu();
@@ -5703,6 +5814,148 @@
     menuOpen = false;
     if (menuNode) menuNode.hidden = true;
     if (control) control.button.setAttribute('aria-expanded', 'false');
+  }
+
+  function workspaceMenuElement() {
+    if (workspaceMenuNode && workspaceMenuNode.isConnected) return workspaceMenuNode;
+    const root = document.createElement('div');
+    root.className = 'clf-menu clf-workspace-menu';
+    root.dataset.clfWorkspaceMenu = '1';
+    root.setAttribute('role', 'dialog');
+    root.hidden = true;
+    (document.body || document.documentElement).append(root);
+    workspaceMenuNode = root;
+    return root;
+  }
+
+  function toggleWorkspaceMenu() {
+    if (workspaceMenuOpen) return void closeWorkspaceMenu();
+    closeMenu();
+    workspaceMenuOpen = true;
+    workspaceError = '';
+    workspaceDraft = workspaceNames();
+    workspaceDraftDirty = false;
+    renderWorkspaceMenu();
+    void pullWorkspace(true);
+  }
+
+  function closeWorkspaceMenu() {
+    workspaceMenuOpen = false;
+    workspaceDraftDirty = false;
+    if (workspaceMenuNode) workspaceMenuNode.hidden = true;
+    if (control?.workspaceButton) control.workspaceButton.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderWorkspaceButton() {
+    if (!control || !control.root.isConnected) return;
+    control.workspaceButton.textContent = workspaceSummary();
+    control.workspaceButton.setAttribute('aria-label', ui('composer.workspaceTitle'));
+    control.workspaceButton.setAttribute('aria-haspopup', 'dialog');
+    control.workspaceButton.setAttribute('aria-expanded', workspaceMenuOpen ? 'true' : 'false');
+    control.workspaceButton.dataset.clfSelected = workspaceState.selected ? '1' : '0';
+  }
+
+  async function saveWorkspace() {
+    if (workspaceBusy || workspaceDraft.length === 0) return;
+    const routeId = CLF_DOM.conversationId();
+    if (!routeId) return;
+    const forEpoch = epoch;
+    workspaceBusy = true;
+    workspaceError = '';
+    renderWorkspaceMenu();
+    try {
+      const reply = await ask({ type: 'workspace_set', conversationId: routeId, roots: [...workspaceDraft] });
+      if (!alive || epoch !== forEpoch || CLF_DOM.conversationId() !== routeId) return;
+      if (!reply || reply.ok !== true || !reply.data) {
+        workspaceError = replyError(reply) || ui('composer.workspaceError');
+        return;
+      }
+      workspaceState = readWorkspace(reply.data);
+      workspaceLoadedFor = routeId;
+      workspaceDraft = workspaceNames();
+      workspaceDraftDirty = false;
+      closeWorkspaceMenu();
+      renderWorkspaceButton();
+    } finally {
+      workspaceBusy = false;
+      renderWorkspaceMenu();
+    }
+  }
+
+  function renderWorkspaceMenu() {
+    if (!workspaceMenuOpen) return void closeWorkspaceMenu();
+    if (!control || !control.root.isConnected) return void closeWorkspaceMenu();
+    const root = workspaceMenuElement();
+    root.textContent = '';
+    root.dataset.clfBusy = workspaceBusy || workspacePulling ? '1' : '0';
+
+    const title = document.createElement('div');
+    title.className = 'clf-workspace-title';
+    title.textContent = ui('composer.workspaceTitle');
+    root.append(title);
+
+    const routeId = CLF_DOM.conversationId();
+    if (!routeId) {
+      const note = document.createElement('div');
+      note.className = 'clf-workspace-note';
+      note.textContent = ui('composer.workspaceNoChat');
+      root.append(note);
+    } else if (workspaceState.roots.length === 0) {
+      const note = document.createElement('div');
+      note.className = 'clf-workspace-note';
+      note.textContent = ui('composer.workspaceNoneApproved');
+      root.append(note);
+    } else {
+      for (const name of workspaceState.roots) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'clf-workspace-root';
+        row.dataset.clfWorkspaceRoot = name;
+        row.setAttribute('role', 'checkbox');
+        const on = workspaceDraft.includes(name);
+        row.setAttribute('aria-checked', on ? 'true' : 'false');
+        row.disabled = workspaceBusy || workspacePulling;
+        const mark = document.createElement('span');
+        mark.className = 'clf-workspace-check';
+        mark.textContent = on ? '✓' : '';
+        const label = document.createElement('span');
+        label.textContent = name;
+        row.append(mark, label);
+        row.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (workspaceDraft.includes(name)) workspaceDraft = workspaceDraft.filter((entry) => entry !== name);
+          else workspaceDraft = [...workspaceDraft, name];
+          workspaceDraftDirty = true;
+          renderWorkspaceMenu();
+        });
+        root.append(row);
+      }
+
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'clf-workspace-save';
+      save.dataset.clfWorkspaceSave = '1';
+      save.textContent = workspaceBusy ? ui('composer.workspaceSaving') : ui('composer.workspaceSave');
+      save.disabled = workspaceBusy || workspacePulling || workspaceDraft.length === 0;
+      save.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void saveWorkspace();
+      });
+      root.append(save);
+    }
+
+    if (workspaceError) {
+      const failure = document.createElement('div');
+      failure.className = 'clf-workspace-note';
+      failure.dataset.clfWarn = '1';
+      failure.textContent = workspaceError;
+      root.append(failure);
+    }
+    root.hidden = false;
+    control.workspaceButton.setAttribute('aria-expanded', 'true');
+    placeMenu(root, control.workspaceButton);
   }
 
   /**
@@ -6144,11 +6397,21 @@
     const pointerdown = (event) => {
       if (!menuOpen) return;
       const at = event.target;
-      if (at && at.nodeType === 1 && at.closest && (at.closest('[data-clf-menu]') || at.closest('.clf-compact-btn'))) return;
+      if (
+        at &&
+        at.nodeType === 1 &&
+        at.closest &&
+        (at.closest('[data-clf-menu]') ||
+          at.closest('[data-clf-workspace-menu]') ||
+          at.closest('.clf-compact-btn') ||
+          at.closest('.clf-workspace-btn'))
+      ) return;
       closeMenu();
+      closeWorkspaceMenu();
     };
     const keydown = (event) => {
-      if (!menuOpen || event.key !== 'Escape') return;
+      if ((!menuOpen && !workspaceMenuOpen) || event.key !== 'Escape') return;
+      if (workspaceMenuOpen) return void closeWorkspaceMenu();
       // One Escape at a time: the goal box first, the sheet after. Losing a half-written
       // goal because the sheet went with it is the mistake worth not making.
       if (menuEditing) closeObjectiveEditor();
@@ -6158,10 +6421,19 @@
       // Scrolling a long goal back into view inside the sheet is not "I am doing something
       // else now" — it is using the sheet. Only the page moving underneath closes it.
       const at = event.target;
-      if (at && at.nodeType === 1 && at.closest && at.closest('[data-clf-menu]')) return;
+      if (
+        at &&
+        at.nodeType === 1 &&
+        at.closest &&
+        (at.closest('[data-clf-menu]') || at.closest('[data-clf-workspace-menu]'))
+      ) return;
       closeMenu();
+      closeWorkspaceMenu();
     };
-    const resize = () => closeMenu();
+    const resize = () => {
+      closeMenu();
+      closeWorkspaceMenu();
+    };
     listen(document, 'pointerdown', pointerdown, true);
     listen(document, 'keydown', keydown, true);
     listen(window, 'scroll', scroll, true);
@@ -6200,6 +6472,8 @@
           : state.label;
     control.button.setAttribute('data-clf-tip', meter ? `${tip}\n${meter.tip}` : tip);
     if (menuOpen) renderMenu();
+    renderWorkspaceButton();
+    if (workspaceMenuOpen) renderWorkspaceMenu();
     control.pill.hidden = state.mode === 'idle' && !state.hint;
     control.cancel.hidden = state.action !== 'cancel';
     // One word, always. The pill sits inside ChatGPT's composer and has a button's width

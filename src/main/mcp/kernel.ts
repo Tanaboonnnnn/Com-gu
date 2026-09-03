@@ -1,9 +1,9 @@
 /**
  * The machinery every model-facing tool sits on, independent of which surface it lives on.
  *
- * The tools themselves are split by connector — `tools-core.ts` and `tools-desktop.ts` —
+ * The tools themselves are split by connector โ€” `tools-core.ts` and `tools-desktop.ts` โ€”
  * because a connector is a discovery boundary and that split is the whole point of the
- * design (see `docs/tool-surface.md` §6.4). None of what is in this file is surface-shaped:
+ * design (see `docs/tool-surface.md` ยง6.4). None of what is in this file is surface-shaped:
  * error mapping, the call clock, the recording context, the agent key and the result
  * formatters behave identically wherever a tool is registered, and duplicating them per
  * surface is how two connectors would quietly start reporting the same thing differently.
@@ -61,6 +61,7 @@ import {
   workspaceScopeForCaller
 } from '../agents.js';
 import { effectiveWorkspaceRoots } from '../run/scope.js';
+import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
 import {
   currentCall,
@@ -114,7 +115,7 @@ export interface ToolContext {
    * `find` and the exec pair are mutually exclusive, and that choice cannot be derived
    * from `exposedCaps.command` on each request: `exposedCaps` only ever widens, so a user
    * switching command execution on mid-run would silently *delete* `find` from under a
-   * cached ChatGPT snapshot — the exact stale-snapshot failure the monotonic rule exists
+   * cached ChatGPT snapshot โ€” the exact stale-snapshot failure the monotonic rule exists
    * to prevent. So the decision is made once, from the live capabilities, and then only
    * ever added to. Defaults to the live answer when the caller does not track it.
    */
@@ -140,7 +141,7 @@ export function friendlyError(err: unknown): string {
   if (code === 'ENOTEMPTY') return 'Directory is not empty';
   if (code === 'EEXIST') return 'Already exists';
   // Node filesystem errors routinely embed the absolute host path in `err.message`.
-  // Unknown errno values (ELOOP, ENAMETOOLONG, EINVAL, ENOSPC, …) used to fall through
+  // Unknown errno values (ELOOP, ENAMETOOLONG, EINVAL, ENOSPC, โ€ฆ) used to fall through
   // verbatim and violate the model-facing virtual-path contract. Keep the errno useful
   // without echoing the path Windows supplied.
   if (typeof code === 'string' && code.length > 0) return `Filesystem error (${code})`;
@@ -151,13 +152,13 @@ export function friendlyError(err: unknown): string {
  * Epoch ms of the last tool ChatGPT actually ran, or null if it never has.
  *
  * Deliberately separate from "a request arrived". ChatGPT connects, initialises and
- * lists tools on every connect even when the model is then forbidden to use them —
+ * lists tools on every connect even when the model is then forbidden to use them โ€”
  * which is precisely what an account with Developer mode switched off looks like from
  * here. Only a tool that ran proves the whole chain, model included, works.
  *
  * Kept per surface as well as overall. "Has ChatGPT ever run a tool here" is the only
  * honest proof a connector was created and works, and with two connectors the answer for
- * one says nothing about the other — a user whose Core connector is fine and whose
+ * one says nothing about the other โ€” a user whose Core connector is fine and whose
  * Desktop connector was never added would otherwise see setup reported as finished.
  */
 let toolCallSeenAt: number | null = null;
@@ -237,7 +238,7 @@ function noteOutcomeSafely(outcome: 'ok' | 'rejected' | 'error'): void {
  *
  * The only identity any agent has, and the reason no tool here carries a key. It reads one
  * thing: ChatGPT's own message model naming *this* tool request, in exactly one conversation,
- * at or after the moment this call started. Not `provenConversation()` — that reports whichever
+ * at or after the moment this call started. Not `provenConversation()` โ€” that reports whichever
  * chat has drawn connector rows lately and keeps answering for a minute after that chat went
  * quiet, which on a machine with one busy chat says the same thing whoever is calling. Not the
  * active chat, not the last chat, not a guess.
@@ -248,7 +249,7 @@ function noteOutcomeSafely(outcome: 'ok' | 'rejected' | 'error'): void {
  * handler because the page reports on its own tick: a call that took a second has had a second
  * for its evidence to arrive, which is exactly the calls whose attribution matters most.
  *
- * A call that cannot be placed simply has no agent. It is not refused — most calls in most
+ * A call that cannot be placed simply has no agent. It is not refused โ€” most calls in most
  * installs are an ordinary chat with no swarm anywhere near it, and a phone talking to the same
  * connector is not a worker impersonation attempt. What it does not get is somebody else's
  * inbox, and control of the run: `agents` establishes identity for itself, and refuses without
@@ -270,8 +271,8 @@ type McpCallContext = Pick<ServerContext, 'sessionId'>;
  * `read#wfr_01a014bdd7cd7a15b6b533d3ce2b42f2`.
  *
  * This is what makes caller identity a lookup instead of an inference. Before it, two
- * workers of the same run calling `agents` seconds apart were indistinguishable — both
- * conversations had named an unclaimed `agents` request inside the same window — and both
+ * workers of the same run calling `agents` seconds apart were indistinguishable โ€” both
+ * conversations had named an unclaimed `agents` request inside the same window โ€” and both
  * were refused WORKER_IDENTITY_LOST. Nothing about timing needs to be assumed now.
  */
 function requestIdOf(mcpCtx: McpCallContext | undefined): string | null {
@@ -301,8 +302,8 @@ function noteTransportIdentity(transportKey: string | null): void {
   transportIdentity = { checked: true, present: transportKey !== null };
   logInfo(
     transportKey
-      ? 'MCP transport supplied a session id — agent identity could be bound to the transport'
-      : 'MCP transport supplied no session id (stateless connector) — agent identity comes from page evidence'
+      ? 'MCP transport supplied a session id โ€” agent identity could be bound to the transport'
+      : 'MCP transport supplied no session id (stateless connector) โ€” agent identity comes from page evidence'
   );
 }
 
@@ -311,7 +312,7 @@ function noteTransportIdentity(transportKey: string | null): void {
  *
  * This is the push-like delivery: an agent gets whatever has been said to it since its last
  * call, at the end of every result, with no polling loop. It works for a call this app could
- * place in a conversation, which is most of them and never all of them — so nothing is
+ * place in a conversation, which is most of them and never all of them โ€” so nothing is
  * retired here, and a message the page could not confirm is simply offered again next time.
  *
  * Messages are *offered* here, not retired. They are retired when this agent calls
@@ -335,7 +336,7 @@ function withInbox(
   const lines = messages
     .map(
       (message) =>
-        `• [${message.id}] from ${message.from}${message.offers > 1 ? ' (repeat — you may have seen this)' : ''}: ${message.text}`
+        `โ€ข [${message.id}] from ${message.from}${message.offers > 1 ? ' (repeat โ€” you may have seen this)' : ''}: ${message.text}`
     )
     .join('\n');
   return {
@@ -351,8 +352,8 @@ function withInbox(
  * Runs one tool call inside a recording context.
  *
  * Registration is wrapped rather than each handler, so the arguments and the result
- * recorded are exactly the ones that crossed the wire — the recorder never has to
- * reconstruct a call from a log line — and so identity is resolved in one place.
+ * recorded are exactly the ones that crossed the wire โ€” the recorder never has to
+ * reconstruct a call from a log line โ€” and so identity is resolved in one place.
  *
  * `finishing` replaces the old `name === 'finish_agent'` test: with the collapsed
  * `agents` tool the terminal call is an *action* rather than a tool name, and the
@@ -369,7 +370,7 @@ async function dispatch(
   // The context is built here, one layer out from where the work happens, because the
   // compaction barrier asks about the whole request and not just the handler. A call is
   // still unsettled while it waits for its request-id evidence, while its outcome is being
-  // recorded, and while its result is on the way back — and a handoff written in any of
+  // recorded, and while its result is on the way back โ€” and a handoff written in any of
   // those gaps describes a machine that has not finished changing. The counter therefore
   // opens with the request and closes with it.
   const context: CallContext = {
@@ -414,7 +415,7 @@ async function dispatchTracked(
   // mate while a swarm is active. Use the full exact-id window, not the shorter prime window:
   // the live worker failure that motivated IDENTITY_EVIDENCE_MS arrived ~8 seconds late.
   const identitySensitive = needsWorkspaceIdentity(name, args);
-  if (!context.caller.conversationId && identitySensitive && swarmRunning() && requestId) {
+  if (!context.caller.conversationId && identitySensitive && requestId) {
     context.caller.conversationId = await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId });
   }
   // A run that ended leaves an explicit short-lived lease tombstone for each open worker
@@ -437,13 +438,13 @@ async function dispatchTracked(
   // A detached worker that has also stopped calling is put to sleep here rather than on a
   // timer: nothing about a run changes while nothing is happening, and this is the moment
   // something is happening. Sleep rather than failure, so being early about a slow worker
-  // costs the run nothing — its own next call takes the slot straight back.
+  // costs the run nothing โ€” its own next call takes the slot straight back.
   const quietWorkers = sleepSilentDetachedWorkers();
   for (const quiet of quietWorkers) {
     if (quiet.report) await recordAgentMessage(quiet.report, 'sent');
   }
   // And this call is itself first-hand evidence that its own conversation is alive. That is
-  // what undoes a worker given up on because its tab went away — the turn never stopped, so
+  // what undoes a worker given up on because its tab went away โ€” the turn never stopped, so
   // the call arrives from a chat the app had written off, and the write-off was wrong.
   const alive = noteAgentAlive(context.caller.conversationId);
   if (alive?.report) await recordAgentMessage(alive.report, 'sent');
@@ -465,7 +466,7 @@ async function dispatchTracked(
     } catch (err) {
       deferredWake.rollback();
       logWarn(
-        `multi-agent: could not durably reserve queued work for a worker that just fell asleep — ${err instanceof Error ? err.message : String(err)}`
+        `multi-agent: could not durably reserve queued work for a worker that just fell asleep โ€” ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
@@ -514,15 +515,15 @@ async function dispatchTracked(
               'CALLER_IDENTITY_REQUIRED: a dormant worker chat still belongs to its prime history, and the connector could not prove this call belongs to a different conversation. No local tool was run. Restore the browser-extension identity path and retry.'
             )
           )
-        : swarmRunning() && identitySensitive && !context.caller.conversationId
+        : identitySensitive && !context.caller.conversationId && swarmRunning()
         ? Promise.resolve(
             fail(
-              'WORKSPACE_SCOPE_REQUIRED: this active Run operation needs the exact caller identity before its workspace scope can be resolved. Retry after the extension reconnects; no file or command was changed.'
+              'WORKSPACE_SCOPE_REQUIRED: an active Run requires the exact ChatGPT conversation before its workspace can be resolved. Restore extension identity and retry; no file or command was changed.'
             )
           )
         : run()
   );
-  // Identity, once, from this call's own evidence — see callerConversation. `agents` has
+  // Identity, once, from this call's own evidence โ€” see callerConversation. `agents` has
   // already established its own inside the call and adopted it, and re-reading here would
   // only be able to disagree with the stronger answer it waited for.
   if (!context.caller.conversationId) {
@@ -537,7 +538,7 @@ async function dispatchTracked(
     context.agent = isFinish ? agentForFinishCaller(context.caller) : agentForCaller(context.caller);
   }
   // This call is the best evidence there is that the previous result reached the agent's
-  // conversation, so anything offered then can be retired and written to its history —
+  // conversation, so anything offered then can be retired and written to its history โ€”
   // except what was offered on a finish result, which this call may itself be the model's
   // retry after a lost result. The SDK exposes the JSON-RPC id, but a model-issued retry is
   // a new MCP request with a new id, so that id cannot prove the previous finish result was
@@ -562,7 +563,7 @@ async function dispatchTracked(
   // duration is what made a 10s yield read like a command that had completed in 10s.
   const durationMs = Date.now() - startedAt;
   // Inbox messages are part of the MCP result ChatGPT actually receives. Build the delivered
-  // result before recording so session(action=read, tool_call=T…) is genuine wire forensics rather than a
+  // result before recording so session(action=read, tool_call=Tโ€ฆ) is genuine wire forensics rather than a
   // subtly earlier internal value that omits the worker report most likely to matter later.
   const delivered = withInbox(context.caller.conversationId, context.agent, result, isFinish);
   const recorderStartedAt = Date.now();
@@ -608,9 +609,9 @@ function needsWorkspaceIdentity(name: string, args: unknown): boolean {
   const input = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
   const relative = (value: unknown): boolean =>
     typeof value === 'string' && !isAbsoluteVirtualPath(value) && !isNativeWindowsPath(value);
-  // During an active Run every filesystem operation is caller-scoped, including an absolute
-  // path. Absolute spelling proves location, never identity/authority.
-  if (swarmRunning() && ['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)) return true;
+  // Every filesystem/terminal operation is chat-scoped, including absolute paths. Absolute
+  // spelling proves location, never identity/authority.
+  if (['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)) return true;
   if (name === 'read') {
     const paths = Array.isArray(input['paths']) ? input['paths'] : [];
     return paths.some(relative);
@@ -661,7 +662,7 @@ function isFinishCall(name: string, args: unknown): boolean {
  *
  * Every path argument in every tool goes through here rather than calling `resolvePath`
  * directly, for two reasons. Shorthand then means the same thing in `read` as in `exec` as in
- * `apply_patch` — a model that learns it once has learned it everywhere — and the workspace is
+ * `apply_patch` โ€” a model that learns it once has learned it everywhere โ€” and the workspace is
  * learned from every absolute path a call has *proved* it can reach, so no tool has to
  * remember to teach it.
  *
@@ -701,15 +702,19 @@ export async function resolveIn(
 }
 
 /** Effective filesystem authority for the call currently running. */
-export function effectiveRootsForCall(ctx: ToolContext): readonly Root[] {
-  if (!swarmRunning()) return ctx.roots;
+export function effectiveRootsForCall(_ctx: ToolContext): readonly Root[] {
   const caller = currentCall()?.caller;
   if (!caller?.conversationId) {
-    throw new SandboxError(
-      'WORKSPACE_SCOPE_REQUIRED: an active Run file operation requires the exact caller identity and workspace scope.'
-    );
+    if (swarmRunning()) {
+      throw new SandboxError(
+        'WORKSPACE_SCOPE_REQUIRED: an active Run file or command operation requires the exact ChatGPT conversation.'
+      );
+    }
+    return effectiveManualWorkspaceRoots(getConfig().roots);
   }
-  return effectiveWorkspaceRoots(workspaceScopeForCaller(caller), getConfig().roots);
+  return swarmRunning()
+    ? effectiveWorkspaceRoots(workspaceScopeForCaller(caller), getConfig().roots)
+    : effectiveChatWorkspaceRoots(caller.conversationId, getConfig().roots);
 }
 
 export interface ResolvedCwd {
@@ -724,7 +729,7 @@ export interface ResolvedCwd {
  *
  * The caller is told which folder this turned out to be, and whether it was a default,
  * because omitting `workdir` while working inside a nested project is a quiet way to run the
- * wrong build: a live run meant for `…/minecraft-web-demo` fell back to the first root and
+ * wrong build: a live run meant for `โ€ฆ/minecraft-web-demo` fell back to the first root and
  * rebuilt the parent Electron app instead, and nothing in the reply said so.
  */
 export async function resolveCwd(ctx: ToolContext, virtualPath: string | undefined): Promise<ResolvedCwd> {
@@ -873,8 +878,8 @@ export function createRegistrar(server: McpServer, ctx: ToolContext, surface: Su
 /**
  * Largest brief a handoff save will accept.
  *
- * Generous on purpose. A brief that hits this is a symptom — the compaction of a very
- * long session — and refusing it there would throw away the one artefact the whole flow
+ * Generous on purpose. A brief that hits this is a symptom โ€” the compaction of a very
+ * long session โ€” and refusing it there would throw away the one artefact the whole flow
  * exists to produce. The bound is only to keep a runaway generation from being written
  * to disk unbounded; at roughly four characters per token this is comfortably past any
  * single ChatGPT answer.
@@ -909,7 +914,7 @@ export const IDENTITY_EVIDENCE_MS = evidenceWindow(15_000);
  *
  * Everything else that waits for identity is asking about work it can decline and be asked
  * for again a moment later. `spawn` is not: a refused `spawn` ends the turn with
- * no run, and the model's own retry costs the user another full generation — on 2026-08-21 it
+ * no run, and the model's own retry costs the user another full generation โ€” on 2026-08-21 it
  * cost two, and the run still never started. The wait is event-driven and returns the instant
  * the page's request-id mate lands, so a longer ceiling is only ever spent by a call that was
  * going to be refused anyway; against that, the live evidence shows ids arriving twenty

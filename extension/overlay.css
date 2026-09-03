@@ -403,6 +403,35 @@
   min-width: 0;
 }
 
+/* Per-chat workspace authority. Names only: native paths never enter the page. */
+.clf-workspace-btn {
+  min-height: 30px;
+  max-width: 190px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.clf-workspace-btn:hover,
+.clf-workspace-btn[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  opacity: 1;
+}
+
+.clf-workspace-btn[data-clf-selected='1'] {
+  border-color: color-mix(in srgb, #10a37f 60%, currentColor 18%);
+}
+
 /*
  * The hover text, built to ChatGPT's own measurements.
  *
@@ -1008,6 +1037,82 @@
 .clf-menu[data-clf-busy='1'] {
   /* The write is in flight. Still legible, visibly not accepting a second one. */
   opacity: 0.72;
+}
+
+.clf-workspace-menu {
+  width: min(320px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 16px));
+  overflow: hidden auto;
+}
+
+.clf-workspace-title {
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid var(--clf-menu-line);
+  font-weight: 600;
+}
+
+.clf-workspace-note {
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.68;
+}
+
+.clf-workspace-note[data-clf-warn='1'] {
+  color: color-mix(in srgb, currentColor 45%, #dc2626);
+  opacity: 1;
+}
+
+.clf-workspace-root {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.clf-workspace-root:hover:not(:disabled) {
+  background: var(--clf-menu-hover);
+}
+
+.clf-workspace-check {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  place-items: center;
+  border: 1px solid var(--clf-menu-line);
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.clf-workspace-root[aria-checked='true'] .clf-workspace-check {
+  border-color: #10a37f;
+  background: #10a37f;
+  color: #fff;
+}
+
+.clf-workspace-save {
+  margin: 6px 4px 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: #10a37f;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.clf-workspace-save:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .clf-menu-row {

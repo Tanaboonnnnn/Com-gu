@@ -1,6 +1,6 @@
 {
   "name": "comgu",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "ComGu: a controlled local MCP bridge for ChatGPT with files, commands, durable sessions and optional Windows desktop control.",
   "license": "MIT",
   "author": "ComGu",

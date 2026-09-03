@@ -21,6 +21,12 @@ describe('i18n', () => {
     expect(TH['setup.secureStorageUnreadable']).toBe('ปลดล็อกข้อมูลรับรองที่บันทึกไว้ไม่ได้ ไฟล์ที่เข้ารหัสเดิมจึงถูกเก็บไว้โดยไม่แก้ไข');
   });
 
+  it('keeps the no-extension workspace fallback readable in Thai', () => {
+    expect(TH['workspaceFallback.title']).toBe('ต้องเลือก Workspace');
+    expect(TH['workspaceFallback.withoutExtension']).toBe('Chat ที่ไม่มี Extension');
+    expect(TH['workspaceFallback.detail']).not.toMatch(/\?{3,}|\\u0e/);
+  });
+
   it('interpolates named values without evaluating HTML', () => {
     expect(t('en', 'common.count', { count: 3 })).toBe('3 items');
     expect(t('th', 'common.count', { count: 3 })).toBe('3 รายการ');

@@ -43,7 +43,7 @@ const {
   sendMessage,
   snapshotSwarm,
   restoreSwarm,
-  spawn,
+  spawn: spawnAgent,
   swarmRunning,
   swarmStateForCaller,
   thawPrimeTransfer,
@@ -77,9 +77,20 @@ const {
   resetGoalStateForTests,
   setGoalObjective
 } = await import('../src/main/goal.js');
+
 const { makeTempDir, removeTempDir, SAMPLE_BRIEF } = await import('./helpers.js');
+const { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests } = await import('../src/main/chat-workspace-scope.js');
 
 let dir: string;
+
+/** Continuation tests exercise transfer semantics, so establish the user-selected chat root before spawning. */
+function spawn(input: Parameters<typeof spawnAgent>[0]): ReturnType<typeof spawnAgent> {
+  const conversationId = input.caller?.conversationId;
+  if (!conversationId) throw new Error('continuation spawn fixture needs a conversation');
+  const roots = [{ name: 'workspace', path: dir }];
+  setChatWorkspaceScopeForTests(conversationId, roots, { primaryRoot: 'workspace', sharedRoots: [] });
+  return spawnAgent(input);
+}
 
 /** The chat this session is attached to right now. */
 async function attachedChat(sessionId: string): Promise<string | null> {
@@ -119,6 +130,7 @@ beforeEach(async () => {
   resetAgentsForTests();
   resetRecorderForTests();
   resetWorkspaces();
+  resetChatWorkspaceScopesForTests();
   resetGoalStateForTests();
   await resetSessionStoreForTests();
 });

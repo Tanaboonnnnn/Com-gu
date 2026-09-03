@@ -2130,6 +2130,57 @@ const HANDLERS = {
     const result = await call('/settings', { method: 'POST', body: JSON.stringify(body) });
     return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
   },
+  /** Approved-root names for the workspace pill beside the ChatGPT composer. */
+  async workspace_get(message, _sender, source) {
+    await load();
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    const requestedConversation = cleanConversationId(message.conversationId);
+    const key = String(source.tab);
+    const registeredConversation = cleanConversationId(tabConversations[key]);
+    if (requestedConversation && registeredConversation && requestedConversation !== registeredConversation) {
+      return { ok: false, error: 'stale_conversation' };
+    }
+    if (requestedConversation && !registeredConversation) {
+      await noteTabConversation(source, requestedConversation);
+      if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    }
+    const conversationId = cleanConversationId(tabConversations[key]) ?? requestedConversation;
+    const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : '';
+    const result = await call(`/workspace${query}`, { method: 'GET' });
+    return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
+  },
+  /**
+   * Explicit user workspace choice. The service worker will only forward it from the current
+   * registered document and never accepts a page-provided native path.
+   */
+  async workspace_set(message, _sender, source) {
+    await load();
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    const requestedConversation = cleanConversationId(message.conversationId);
+    if (!requestedConversation) return { ok: false, error: 'bad_conversation_id' };
+    const key = String(source.tab);
+    const registeredConversation = cleanConversationId(tabConversations[key]);
+    if (registeredConversation && requestedConversation !== registeredConversation) {
+      return { ok: false, error: 'stale_conversation' };
+    }
+    if (!registeredConversation) {
+      await noteTabConversation(source, requestedConversation);
+      if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    }
+    const roots = Array.isArray(message.roots)
+      ? message.roots.filter((value) => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,31}$/.test(value))
+      : [];
+    if (roots.length === 0 || new Set(roots).size !== roots.length) return { ok: false, error: 'bad_workspace_roots' };
+    const result = await call('/workspace', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversationId: requestedConversation,
+        primaryRoot: roots[0],
+        sharedRoots: roots.slice(1)
+      })
+    });
+    return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
+  },
   /** The marked page asking for the one command it was opened for. */
   async redeem(message) {
     return redeemCommand(
@@ -2237,6 +2288,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'goal_open',
     'settings_set',
     'settings_get',
+    'workspace_get',
+    'workspace_set',
     'repair_fiber',
     'redeem',
     'defer_revival',

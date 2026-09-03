@@ -59,6 +59,11 @@ import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
 import { migrateLegacyUserData, resolveCompatibleUserDataPath } from './migration.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
+import {
+  CHAT_WORKSPACE_SCOPES_STATE,
+  restoreChatWorkspaceScopes,
+  type ChatWorkspaceScopesSnapshot
+} from './chat-workspace-scope.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -255,6 +260,9 @@ void app.whenReady().then(async () => {
   // user choice instead of Electron's default `system` theme. On macOS this controls the window
   // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.
   nativeTheme.themeSource = getConfig().ui.theme;
+  const savedChatWorkspaceScopes = await readDurable<ChatWorkspaceScopesSnapshot>(CHAT_WORKSPACE_SCOPES_STATE);
+  if (windowActivation.isDisabled()) return;
+  restoreChatWorkspaceScopes(savedChatWorkspaceScopes);
   const savedGoalObjectives = await readDurable<GoalObjectivesSnapshot>(GOAL_OBJECTIVES_STATE);
   if (windowActivation.isDisabled()) return;
   restoreGoalObjectives(savedGoalObjectives);

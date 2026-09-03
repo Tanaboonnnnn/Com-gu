@@ -64,6 +64,7 @@ import {
 } from '../agents.js';
 import { clearChatWorkspace, moveChatWorkspace, workspaceForChat } from '../workspace.js';
 import { clearGoalObjective, goalObjectiveFor, moveGoalObjective } from '../goal.js';
+import { moveChatWorkspaceScopeProjection } from '../chat-workspace-scope.js';
 import { writeDurableNow, writeDurableSoon } from '../durable.js';
 import { prepareHandoff, resumeBootstrapMatches } from './handoff.js';
 import { ensureHandoffRecorded, recordHandoff, rebindConversation } from './recorder.js';
@@ -706,6 +707,7 @@ function publishCommittedProjection(
 ): void {
   rebindConversation(entry.sessionId, entry.from, toConversationId);
   moveChatWorkspace(entry.from, toConversationId);
+  moveChatWorkspaceScopeProjection(entry.from, toConversationId);
   moveGoalObjective(entry.from, toConversationId);
   if (swarm === 'frozen') {
     if (!commitPrimeTransfer(entry.from, toConversationId)) {
@@ -1097,6 +1099,7 @@ export async function restoreContinuations(snapshot: ContinuationSnapshot | null
         }
         rebindConversation(entry.sessionId, entry.from, entry.to);
         moveChatWorkspace(entry.from, entry.to);
+        moveChatWorkspaceScopeProjection(entry.from, entry.to);
         moveGoalObjective(entry.from, entry.to);
         const repaired = recoveryHooks.repairPrimeTransfer?.(entry.from, entry.to) ?? false;
         if (!repaired) commitPrimeTransfer(entry.from, entry.to);

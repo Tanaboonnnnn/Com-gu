@@ -12,7 +12,7 @@
  * did.
  */
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   safeStorage: {
@@ -43,6 +43,8 @@ const {
   spawn,
   swarmState
 } = await import('../src/main/agents.js');
+const { getConfig } = await import('../src/main/config.js');
+const { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests } = await import('../src/main/chat-workspace-scope.js');
 const { makeTempDir, removeTempDir } = await import('./helpers.js');
 
 const PRIME_CHAT = 'chat-prime';
@@ -52,16 +54,23 @@ let dir: string;
 beforeAll(async () => {
   dir = await makeTempDir('clf-swarm-');
   initConfigPath(dir);
-  await saveConfig({ ...defaultConfig(), multiAgent: { enabled: true, maxWorkers: 3 } });
+  await saveConfig({ ...defaultConfig(), roots: [{ name: 'workspace', path: dir }], multiAgent: { enabled: true, maxWorkers: 3 } });
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetAgentsForTests();
+  resetChatWorkspaceScopesForTests();
+});
+
+afterAll(async () => {
   await removeTempDir(dir).catch(() => undefined);
 });
 
 beforeEach(() => {
   resetAgentsForTests();
+  resetChatWorkspaceScopesForTests();
+  const roots = getConfig().roots;
+  setChatWorkspaceScopeForTests(PRIME_CHAT, roots, { primaryRoot: 'workspace', sharedRoots: [] });
 });
 
 /** A run with two workers, neither bound to a chat yet. */
