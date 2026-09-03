@@ -59,4 +59,3 @@ Renaming an approved root changes display copy but does not silently rebind auth
 ## Tests
 
 Cover renderer/header state, IPC validation, conversation-scope persistence, MCP file/command enforcement, Run/worker inheritance and subset enforcement, Compact & Resume transfer, bridge routes, extension navigation/DOM lifecycle, and stale/removed-root identity cases.
-

@@ -345,4 +345,3 @@ export function setChatWorkspaceScopeForTests(
   scopes.set(conversationId, scope);
   return view(scope);
 }
-

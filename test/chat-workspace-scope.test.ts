@@ -190,5 +190,3 @@ describe('per-chat workspace authority', () => {
     expect(effectiveChatWorkspaceRoots('newer-chat', approved).map((root) => root.name)).toEqual(['shared']);
   });
 });
-
-

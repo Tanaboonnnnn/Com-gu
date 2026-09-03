@@ -85,4 +85,3 @@
 - [ ] Re-run renderer/i18n tests.
 - [ ] Run `npm run typecheck`, `npm run verify`, and `npm run build` because the extension and renderer packaging surface changed.
 - [ ] Run `git diff --check` and inspect the final diff for native-path leakage or authority widening.
-
