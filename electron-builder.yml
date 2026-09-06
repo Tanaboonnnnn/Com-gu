@@ -42,16 +42,17 @@ extraResources:
 npmRebuild: false
 
 asarUnpack:
-  # Only OS-loaded native/helper files need a real filesystem path. JS/JSON/package metadata
-  # remain inside ASAR and are resolved by Node normally.
-  - '**/node_modules/node-pty/prebuilds/**'
-  - '**/node_modules/@microsoft/mxc-sdk/bin/**'
-  - '**/node_modules/@img/**/*.node'
-  - '**/node_modules/@img/**/*.dll'
-  - '**/node_modules/@img/**/*.so*'
-  - '**/node_modules/@img/**/*.dylib'
-  - '**/node_modules/tree-sitter/prebuilds/**/*.node'
-  - '**/node_modules/tree-sitter-bash/prebuilds/**/*.node'
+  # Keep startup-sensitive native packages on the real filesystem. A measured attempt to
+  # move their JS/metadata back into compressed ASAR increased packaged startup median from
+  # 1,103 ms to 1,415 ms on the same host; restoring broad unpack measured 1,075 ms. Package
+  # footprint is reduced instead by the target-only staging/exclusion rules above, which keep
+  # foreign CPUs, PDBs and compile-time tree-sitter sources out without adding startup I/O.
+  - '**/node_modules/node-pty/**'
+  - '**/node_modules/@microsoft/mxc-sdk/**'
+  - '**/node_modules/sharp/**'
+  - '**/node_modules/@img/**'
+  - '**/node_modules/tree-sitter/**'
+  - '**/node_modules/tree-sitter-bash/**'
 compression: maximum
 
 # electron-builder 26 defaults to the legacy FUSE2 AppImage runtime. Ubuntu 24.04 renamed

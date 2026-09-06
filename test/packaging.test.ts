@@ -451,7 +451,7 @@ describe('cross-platform packaging targets', () => {
 
     expect(pkg.dependencies['@microsoft/mxc-sdk']).toBe('0.8.0');
     expect(builder.files).toContain('!node_modules/@microsoft/mxc-sdk/**/*');
-    expect(builder.asarUnpack).toContain('**/node_modules/@microsoft/mxc-sdk/bin/**');
+    expect(builder.asarUnpack).toContain('**/node_modules/@microsoft/mxc-sdk/**');
     expect(builder.win.files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
