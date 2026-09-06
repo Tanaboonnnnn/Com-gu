@@ -1,0 +1,22 @@
+[
+  {"id":"th-workspace-authority","language":"th","query":"ส่วนไหนเป็นตัวจำกัด worker ไม่ให้ออกนอก workspace ที่ prime อนุญาต","expectedFiles":["security/workspace-scope.ts","security/worker-authority.ts"]},
+  {"id":"th-symlink-escape","language":"th","query":"ระบบป้องกัน symlink หรือ junction พา path หลุดออกจากโฟลเดอร์ที่อนุญาตตรงไหน","expectedFiles":["security/path-sandbox.ts"]},
+  {"id":"th-request-chat","language":"th","query":"โค้ดไหนผูก request id ของ ChatGPT เข้ากับ conversation ก่อนให้สิทธิ์ไฟล์","expectedFiles":["auth/request-correlation.ts"]},
+  {"id":"th-terminal-sandbox","language":"th","query":"คำสั่ง terminal ใน Run ถูกบังคับให้อยู่ใน OS sandbox และ fail closed ตรงไหน","expectedFiles":["terminal/mxc-sandbox.ts"]},
+  {"id":"th-stdin-owner","language":"th","query":"ส่วนไหนกันไม่ให้แชตอื่นเขียนเข้า interactive terminal session ที่ไม่ได้เป็นเจ้าของ","expectedFiles":["terminal/process-ownership.ts"]},
+  {"id":"th-durable","language":"th","query":"สถานะสำคัญที่ต้องรอดหลังรีสตาร์ตถูกเขียนแบบ durable ทันทีตรงไหน","expectedFiles":["sessions/durable-store.ts"]},
+  {"id":"th-compact","language":"th","query":"ระบบสรุป handoff ตอน context ใกล้เต็มและตัดสินใจ compact อยู่ไฟล์ไหน","expectedFiles":["sessions/compaction.ts"]},
+  {"id":"th-shutdown","language":"th","query":"ตอนปิดโปรแกรมลำดับการ drain งาน ปิด process และ flush state อยู่ตรงไหน","expectedFiles":["lifecycle/shutdown.ts"]},
+  {"id":"th-extension-update","language":"th","query":"extension อัปเดทตามตัวโปรแกรมแล้วกัน reload loop ยังไง","expectedFiles":["bridge/extension-sync.ts"]},
+  {"id":"th-exact-vs-semantic","language":"th","query":"ถ้าต้องการค้นข้อความแบบตรงตัวหรือ regex ทำไมยังต้องเก็บ find กับ rg ไว้","expectedFiles":["search/exact-search.ts"]},
+  {"id":"en-worker-scope","language":"en","query":"Where is a worker prevented from widening its filesystem roots beyond the Prime run scope?","expectedFiles":["security/worker-authority.ts","security/workspace-scope.ts"]},
+  {"id":"en-native-path-hiding","language":"en","query":"Which code turns canonical host paths into virtual paths so drive letters are not exposed to the model?","expectedFiles":["security/path-sandbox.ts"]},
+  {"id":"en-request-correlation","language":"en","query":"Find the short-lived evidence that associates a ChatGPT request id with a conversation.","expectedFiles":["auth/request-correlation.ts"]},
+  {"id":"en-command-confinement","language":"en","query":"Where does command execution require MXC confinement and an authority scope fingerprint?","expectedFiles":["terminal/mxc-sandbox.ts"]},
+  {"id":"en-process-owner","language":"en","query":"How does write_stdin verify that the caller owns an interactive process session?","expectedFiles":["terminal/process-ownership.ts"]},
+  {"id":"en-durable-write","language":"en","query":"Locate the immediate durable persistence barrier used for critical state across restart.","expectedFiles":["sessions/durable-store.ts"]},
+  {"id":"en-compaction-handoff","language":"en","query":"Where is a session handoff produced when estimated context tokens cross the compaction threshold?","expectedFiles":["sessions/compaction.ts"]},
+  {"id":"en-shutdown-order","language":"en","query":"Which module defines bounded ordered shutdown including child process cleanup and durable flushing?","expectedFiles":["lifecycle/shutdown.ts"]},
+  {"id":"en-extension-sync","language":"en","query":"Find the logic that reloads the browser companion only after its disk manifest matches the desktop app version.","expectedFiles":["bridge/extension-sync.ts"]},
+  {"id":"en-exact-search","language":"en","query":"Which component preserves exhaustive literal and regex search using find or bundled ripgrep instead of semantic retrieval?","expectedFiles":["search/exact-search.ts"]}
+]
