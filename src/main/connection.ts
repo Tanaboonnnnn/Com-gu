@@ -20,6 +20,7 @@ import { SURFACE_LIST, surfaceIsUseful, type SurfaceId } from './mcp/surfaces.js
 import { getSecret } from './secrets.js';
 import { startTunnel, TunnelError, type TunnelHandle } from './tunnel/index.js';
 import { desktopAutomationSupported } from './platform.js';
+import { smartSearchProvider } from './zvec-search/index.js';
 
 let endpoint: McpEndpoint | null = null;
 /** The Core tunnel. Also the only tunnel on the cloudflared and manual paths. */
@@ -248,7 +249,8 @@ async function connectImpl(): Promise<void> {
         roots: live.roots,
         caps: effectiveCapabilities(live),
         readOnly: live.readOnly,
-        privacyScreenshots: live.ui.privacyScreenshots
+        privacyScreenshots: live.ui.privacyScreenshots,
+        smartSearch: smartSearchProvider()
       };
     });
     if (shutdownRequested || generation !== connectionGeneration) {
