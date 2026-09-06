@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { RawMcpClient } from './mcp-http-client.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REQUEST_ID = 'wfr_packaged_core_smoke';
@@ -211,15 +211,11 @@ async function createFixture(workspace) {
 }
 
 async function withClient(url, fn) {
-  const client = new Client({ name: 'comgu-packaged-core-smoke', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: { 'x-request-id': `${REQUEST_ID}/smoke` } }
-  });
+  const client = new RawMcpClient(url, { 'x-request-id': `${REQUEST_ID}/smoke` });
   try {
-    await client.connect(transport);
     return await fn(client);
   } finally {
-    await client.close().catch(() => {});
+    await client.close();
   }
 }
 
@@ -302,7 +298,9 @@ async function smokeCommandSurface(exe, root, timeoutMs) {
         }),
         'exec_command bundled rg'
       );
-      if (!textOf(rg).includes('COMGU_PACKAGED_CORE_NEEDLE')) throw new Error('exec_command did not execute bundled rg');
+      if (!textOf(rg).includes('COMGU_PACKAGED_CORE_NEEDLE')) {
+        throw new Error(`exec_command did not execute bundled rg: ${textOf(rg)}`);
+      }
 
       const interactiveCommand = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
       const live = assertToolOk(

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { RawMcpClient } from './mcp-http-client.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const queryManifest = path.join(repository, 'test', 'fixtures', 'perf-search', 'queries.json');
@@ -132,15 +132,11 @@ function textOf(result) {
 }
 
 async function withClient(url, fn) {
-  const client = new Client({ name: 'comgu-performance-benchmark', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(new URL(url), {
-    requestInit: { headers: { 'x-request-id': `${BENCHMARK_REQUEST_ID}/benchmark` } }
-  });
+  const client = new RawMcpClient(url, { 'x-request-id': `${BENCHMARK_REQUEST_ID}/benchmark` });
   try {
-    await client.connect(transport);
     return await fn(client);
   } finally {
-    await client.close().catch(() => {});
+    await client.close();
   }
 }
 
