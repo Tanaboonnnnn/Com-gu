@@ -47,7 +47,6 @@
     "@microsoft/mxc-sdk": "0.8.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "@zvec/zvec-grep": "0.2.1",
     "node-pty": "1.2.0-beta.15",
     "sharp": "0.35.3",
     "tree-sitter": "0.25.1",
