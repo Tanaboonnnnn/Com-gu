@@ -34,7 +34,7 @@ describe('smart-search root engine', () => {
         createService
       });
       expect(received).toHaveLength(1);
-      expect(received[0]).toMatchObject({ embedding: 'local/potion-code-16m-v2', home: storage.base });
+      expect(received[0]).toMatchObject({ embedding: 'local/potion-code-16m-v2' });
       expect(received[0]).not.toHaveProperty('apiKey');
       expect(received[0]).not.toHaveProperty('endpoint');
       await engine.close();
@@ -89,7 +89,7 @@ describe('smart-search root engine', () => {
     });
 
     expect(createOptions).toHaveLength(1);
-    expect(createOptions[0]).toMatchObject({ home: storage.base, modelCacheDir: storage.models, embedding: 'local/potion-code-16m-v2' });
+    expect(createOptions[0]).toMatchObject({ modelCacheDir: storage.models, embedding: 'local/potion-code-16m-v2' });
     expect(String(createOptions[0]!.root)).toContain(storage.indexes);
     expect(index).toHaveBeenCalledTimes(1);
     expect(index).toHaveBeenCalledWith(expect.objectContaining({ rootPaths: [canonicalRoot], follow: false }));

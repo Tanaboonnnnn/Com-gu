@@ -26,7 +26,6 @@ interface ZvecServiceLike {
 
 export type ZvecServiceFactory = (options: {
   root: string;
-  home: string;
   modelCacheDir: string;
   embedding: string;
 }) => Promise<ZvecServiceLike>;
@@ -83,7 +82,6 @@ export async function openRootSearchEngine(options: RootSearchEngineOptions): Pr
     });
   const service = await createService({
     root: indexPaths.syntheticRoot,
-    home: storage.base,
     modelCacheDir: storage.models,
     embedding
   });
