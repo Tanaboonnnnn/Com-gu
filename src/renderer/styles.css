@@ -203,6 +203,24 @@ header {
   gap: 14px;
 }
 
+.header-subagent {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 9px 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.header-subagent .sw {
+  margin-left: 0;
+}
+
 
 .locale-picker {
   display: inline-flex;
@@ -876,6 +894,7 @@ main {
 }
 
 .run-workspace,
+.chat-workspace-fallback,
 .command-sandbox {
   display: grid;
   gap: 10px;

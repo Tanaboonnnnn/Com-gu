@@ -1,0 +1,5 @@
+[
+  { "query": "COMGU_PERF_ALPHA_WORKSPACE", "expected": "/fixture/src/workspace.ts" },
+  { "query": "COMGU_PERF_BETA_SESSION", "expected": "/fixture/docs/session.txt" },
+  { "query": "COMGU_PERF_GAMMA_TERMINAL", "expected": "/fixture/lib/terminal.ts" }
+]

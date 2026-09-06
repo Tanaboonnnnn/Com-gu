@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { defaultConfig, initConfigPath, saveConfig } from '../src/main/config.js';
+import { resetChatWorkspaceScopesForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
 import { validateNewRoot } from '../src/main/sandbox.js';
 import { initDurableStore, resetDurableForTests } from '../src/main/durable.js';
 import { startMcpServer, type McpEndpoint } from '../src/main/mcp/server.js';
@@ -17,6 +18,7 @@ afterEach(async () => {
   resetSessionStoreForTests();
   unsetSessionRootForTests();
   resetDurableForTests();
+  resetChatWorkspaceScopesForTests();
   if (dir) await fs.rm(dir, { recursive: true, force: true });
   dir = '';
 });
@@ -37,6 +39,7 @@ it('drains an accepted MCP mutation before closing its response socket', async (
     readOnly: false,
     capabilities: { ...cfg.capabilities, command: true }
   });
+  setManualWorkspaceScope(roots, { primaryRoot: 'probe', sharedRoots: [] });
   endpoint = await startMcpServer(() => ({
     roots,
     caps: { ...cfg.capabilities, command: true },

@@ -129,34 +129,36 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
   locale.blur();
   const thaiState = structuredClone(state) as any;
   thaiState.config.ui.locale = 'th';
+  thaiState.status.state = 'connected';
   stateListener(thaiState);
   expect(locale.value).toBe('th');
   expect(w.document.documentElement.lang).toBe('th');
-  expect(w.document.getElementById('liveState')!.textContent).toBe('ยังไม่ได้เชื่อมต่อ');
-  expect(w.document.querySelector('[data-panel="home"] h2')!.textContent).toContain('สิทธิ์การเข้าถึง');
-  expect(w.document.querySelector('[data-step="folder"] h3')!.textContent).toBe('เลือกโฟลเดอร์ที่จะแชร์');
-  expect(w.document.querySelector('[data-panel="chat"] h2')!.textContent).toContain('เซสชัน');
-  expect(w.document.querySelector('[data-panel="activity"] h2')!.textContent).toContain('กิจกรรม');
+  expect(w.document.getElementById('liveState')!.textContent).toBe(t('th', 'status.connected'));
+  expect(w.document.querySelector('[data-panel="home"] h2')!.textContent).toContain(t('th', 'home.permissions'));
+  expect(w.document.querySelector('[data-step="folder"] h3')!.textContent).toBe(t('th', 'setup.pickFolder'));
+  expect(w.document.querySelector('[data-panel="chat"] h2')!.textContent).toContain(t('th', 'chat.sessions'));
+  expect(w.document.querySelector('[data-panel="activity"] h2')!.textContent).toContain(t('th', 'activity.title'));
   const readGroup = w.document.querySelector('[data-group="read"]')!;
   const runGroup = w.document.querySelector('[data-group="run"]')!;
-  expect(readGroup.querySelector('.perm-main b')!.textContent).toBe('ดูไฟล์');
-  expect(runGroup.querySelector('.perm-main b')!.textContent).toBe('รันโปรแกรม');
-  expect(runGroup.textContent).toContain('รันคำสั่ง');
-  expect(runGroup.textContent).toContain('จำกัดอยู่ภายใน WorkspaceScope ของ Run');
-  expect(readGroup.querySelector('.group-count')!.textContent).toBe('เปิดอยู่ 4 สิทธิ์');
-  expect(w.document.getElementById('connectLabel')!.textContent).toBe('เชื่อมต่อ');
+  expect(readGroup.querySelector('.perm-main b')!.textContent).toBe(t('th', 'permissions.lookFiles.title'));
+  expect(runGroup.querySelector('.perm-main b')!.textContent).toBe(t('th', 'permissions.command.title'));
+  expect(runGroup.textContent).toContain(t('th', 'permissions.cap.command.label'));
+  expect(runGroup.textContent).toContain(t('th', 'permissions.cap.command.detail'));
+  expect(readGroup.querySelector('.group-count')!.textContent).toBe(t('th', 'permissions.enabledCount', { count: 4 }));
+  expect(w.document.getElementById('connectLabel')!.textContent).toBe(t('th', 'common.disconnect'));
   expect(w.document.getElementById('wizFolders')!.textContent).toContain('/repo');
-  expect(w.document.getElementById('goalHint')!.textContent).toContain('ฟีเจอร์ Goal ต้องใช้ OpenRouter API key');
-  expect(w.document.getElementById('sessionsEmpty')!.textContent).toContain('ยังไม่มีประวัติ');
-  expect(w.document.querySelector('#chatBody [data-view="settings"] .setting b')!.textContent).toBe('เก็บประวัติ');
-  expect(w.document.getElementById('swarmReset')!.textContent).toBe('ล้าง swarm');
+  expect(w.document.getElementById('goalHint')!.textContent).toContain(t('th', 'goal.keyRequired'));
+  expect(w.document.getElementById('sessionsEmpty')!.textContent).toContain(t('th', 'chat.nothingRecorded'));
+  expect(w.document.querySelector('#chatBody [data-view="settings"] .setting b')!.textContent).toBe(t('th', 'chat.keepRecordings'));
+  expect(w.document.getElementById('swarmReset')!.textContent).toBe(t('th', 'chat.clearSwarm'));
 
   const englishState = structuredClone(state) as any;
   englishState.config.ui.locale = 'en';
+  englishState.status.state = 'connected';
   stateListener(englishState);
   expect(locale.value).toBe('en');
   expect(w.document.documentElement.lang).toBe('en');
-  expect(w.document.getElementById('liveState')!.textContent).toBe('Not connected');
+  expect(w.document.getElementById('liveState')!.textContent).toBe('Connected');
 
   // The health card reports the live surface projection rather than a hand-maintained
   // denominator. Tool consolidation/additions should never leave the UI saying "of 9"
@@ -454,6 +456,109 @@ async function mountChat(
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+it('assigns approved root names only to the exact pending Chat workspace and hides the fallback after save', async () => {
+  const writes: any[] = [];
+  let fallback = { roots: ['repo', 'shared'], pending: [{ conversationId: 'chat-needs-workspace' }], manual: { pending: false, scope: null as any } };
+  const mounted = await mountChat(
+    { config: {
+      roots: [{ name: 'repo', path: 'C:\\repo' }, { name: 'shared', path: 'D:\\shared' }],
+      readOnly: false,
+      capabilities: { browse: true, search: true, read: true, metadata: true, create: true, edit: true, move: true, deleteFile: true, command: true, screen: true, control: true, clipboardRead: true, clipboardWrite: true },
+      tunnel: { kind: 'openai', tunnelId: 'tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', desktopTunnelId: '', binaryPath: '' },
+      ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light', locale: 'en' },
+      sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
+      compaction: { auto: true, autoTokens: 300000 },
+      multiAgent: { enabled: false, maxWorkers: 2 },
+      goal: { enabled: false, model: 'deepseek/deepseek-v4-flash', reasoning: 'default', prompt: DEFAULT_GOAL_SYSTEM_PROMPT }
+    } },
+    [],
+    {
+      getPendingChatWorkspaces: () => Promise.resolve({ ok: true, data: structuredClone(fallback) }),
+      setPendingChatWorkspace: (conversationId: string, scope: any) => {
+        writes.push({ conversationId, scope: structuredClone(scope) });
+        fallback = { ...fallback, pending: [] };
+        return Promise.resolve({ ok: true, data: structuredClone(fallback) });
+      }
+    }
+  );
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle(); await settle();
+
+  const box = doc.getElementById('chatWorkspaceFallback') as HTMLElement;
+  expect(box.hidden).toBe(false);
+  expect(box.textContent).toContain('chat-needs-workspace');
+  expect(box.textContent).not.toContain('C:\\repo');
+  expect(box.textContent).not.toContain('D:\\shared');
+  const primary = doc.getElementById('pendingWorkspacePrimary') as HTMLSelectElement;
+  expect([...primary.options].map((option) => option.value).filter(Boolean)).toEqual(['repo', 'shared']);
+  primary.value = 'repo';
+  primary.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
+  const shared = doc.querySelector<HTMLInputElement>('#pendingWorkspaceShared input[value="shared"]')!;
+  shared.checked = true;
+  (doc.getElementById('pendingWorkspaceSave') as HTMLButtonElement).click();
+  await settle(); await settle();
+
+  expect(writes).toEqual([{ conversationId: 'chat-needs-workspace', scope: { primaryRoot: 'repo', sharedRoots: ['shared'] } }]);
+  expect(box.hidden).toBe(true);
+});
+
+it('shows a newly pending Chat workspace immediately while the Chat panel is already open', async () => {
+  let pendingListener: ((view: any) => void) | null = null;
+  const mounted = await mountChat({}, [], {
+    getPendingChatWorkspaces: () => Promise.resolve({ ok: true, data: { roots: ['repo'], pending: [], manual: { pending: false, scope: null } } }),
+    onPendingChatWorkspacesChanged: (listener: (view: any) => void) => {
+      pendingListener = listener;
+      return () => undefined;
+    }
+  });
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle(); await settle();
+  expect((doc.getElementById('chatWorkspaceFallback') as HTMLElement).hidden).toBe(true);
+
+  expect(pendingListener).not.toBeNull();
+  pendingListener!({ roots: ['repo'], pending: [{ conversationId: 'chat-live-pending' }], manual: { pending: false, scope: null } });
+  expect((doc.getElementById('chatWorkspaceFallback') as HTMLElement).hidden).toBe(false);
+  expect(doc.getElementById('pendingWorkspaceChat')!.textContent).toContain('chat-live-pending');
+});
+
+it('lets the user explicitly choose approved roots for an unidentified no-extension fallback', async () => {
+  const writes: any[] = [];
+  let fallback = {
+    roots: ['repo', 'shared'],
+    pending: [],
+    manual: { pending: true, scope: null as any }
+  };
+  const mounted = await mountChat({}, [], {
+    getPendingChatWorkspaces: () => Promise.resolve({ ok: true, data: structuredClone(fallback) }),
+    setManualChatWorkspace: (scope: any) => {
+      writes.push(structuredClone(scope));
+      fallback = { ...fallback, manual: { pending: false, scope: structuredClone(scope) } };
+      return Promise.resolve({ ok: true, data: structuredClone(fallback) });
+    }
+  });
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle(); await settle();
+
+  const box = doc.getElementById('chatWorkspaceFallback') as HTMLElement;
+  expect(box.hidden).toBe(false);
+  const chat = doc.getElementById('pendingWorkspaceChat') as HTMLSelectElement;
+  expect([...chat.options].map((option) => option.value)).toContain('__manual__');
+  expect(chat.textContent).toMatch(/without extension|ไม่มี Extension/i);
+
+  const primary = doc.getElementById('pendingWorkspacePrimary') as HTMLSelectElement;
+  primary.value = 'repo';
+  primary.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
+  const shared = doc.querySelector<HTMLInputElement>('#pendingWorkspaceShared input[value="shared"]')!;
+  shared.checked = true;
+  (doc.getElementById('pendingWorkspaceSave') as HTMLButtonElement).click();
+  await settle(); await settle();
+
+  expect(writes).toEqual([{ primaryRoot: 'repo', sharedRoots: ['shared'] }]);
+  expect(box.hidden).toBe(false);
+});
 it('shows the active Run id and name-only effective scopes for prime and workers', async () => {
   const activeSwarm = {
     enabled: true,
@@ -961,7 +1066,7 @@ it('loads the model catalogue only when the picker is opened, twenty at a time',
  * at twenty with four hundred still to come and no sign that there was a button below it.
  *
  * The repaint is the other half. The list is rebuilt whole on every page, and emptying an
- * element scrolls it back to the top — so even once it paged, the reader was thrown back to
+ * element scrolls it back to the top โ€” so even once it paged, the reader was thrown back to
  * the newest model, which is the one they had just scrolled away from.
  */
 it('pages the catalogue in as the list is scrolled, without losing the reader\'s place', async () => {
@@ -1014,7 +1119,7 @@ it('pages the catalogue in as the list is scrolled, without losing the reader\'s
 /**
  * A closed picker measures zero in every direction, which reads as "scrolled to the end".
  * Left unguarded, every repaint of the settings sheet would page the whole catalogue in
- * behind a panel nobody has open — hundreds of models, on somebody else's service.
+ * behind a panel nobody has open โ€” hundreds of models, on somebody else's service.
  */
 it('never pages the catalogue while the picker is closed', async () => {
   const mounted = await mountChat({ hasGoalKey: true }, catalogue(45));

@@ -8,6 +8,7 @@ import { getConfig, initConfigPath, loadConfig } from './config.js';
 import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
 import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
 import { logError, logInfo, logWarn } from './logger.js';
+import { writePerfReadyMarker } from './perf-marker.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
 import { setBrowserOpener, shutdownBridge, startBridge } from './bridge.js';
@@ -59,6 +60,12 @@ import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
 import { migrateLegacyUserData, resolveCompatibleUserDataPath } from './migration.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
+import {
+  CHAT_WORKSPACE_SCOPES_STATE,
+  restoreChatWorkspaceScopes,
+  type ChatWorkspaceScopesSnapshot
+} from './chat-workspace-scope.js';
+import { extensionDir } from './extension-path.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -251,10 +258,20 @@ void app.whenReady().then(async () => {
   initDurableStore(userData);
   await loadConfig();
   if (windowActivation.isDisabled()) return;
+  // Keep Chrome's stable unpacked folder synchronized with the installed ComGu release before
+  // the bridge can tell an older running service worker which app version it is talking to.
+  // The extension itself verifies the on-disk manifest before reloading, so a failed copy cannot
+  // turn an app/extension mismatch into a reload loop.
+  if (app.isPackaged && !extensionDir()) {
+    logWarn('packaged extension could not be refreshed; keeping any last-known-good copy');
+  }
   // The renderer has its own explicit light/dark palette, so native chrome must follow the same
   // user choice instead of Electron's default `system` theme. On macOS this controls the window
   // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.
   nativeTheme.themeSource = getConfig().ui.theme;
+  const savedChatWorkspaceScopes = await readDurable<ChatWorkspaceScopesSnapshot>(CHAT_WORKSPACE_SCOPES_STATE);
+  if (windowActivation.isDisabled()) return;
+  restoreChatWorkspaceScopes(savedChatWorkspaceScopes);
   const savedGoalObjectives = await readDurable<GoalObjectivesSnapshot>(GOAL_OBJECTIVES_STATE);
   if (windowActivation.isDisabled()) return;
   restoreGoalObjectives(savedGoalObjectives);
@@ -354,6 +371,9 @@ void app.whenReady().then(async () => {
   onStatusChange(refreshTray);
 
   logInfo('app started');
+  void writePerfReadyMarker(process.env).catch((error) =>
+    logError(`performance ready marker failed: ${error instanceof Error ? error.message : String(error)}`)
+  );
 
   // Policy B: learn whether an update exists once per launch, but never make startup wait
   // for GitHub and never download or launch an installer without a later explicit user action.

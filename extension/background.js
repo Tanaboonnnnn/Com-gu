@@ -123,6 +123,36 @@ let portCompatible = null;
 let appVersion = null;
 let appProtocol = null;
 const PORT_TRUST_MS = 30_000;
+let extensionReloadScheduled = false;
+
+async function syncExtensionToAppVersion(version) {
+  const wanted = typeof version === 'string' ? version.trim() : '';
+  if (!wanted || extensionReloadScheduled) return false;
+  let running = '';
+  try {
+    running = String(chrome.runtime.getManifest().version || '');
+  } catch {
+    return false;
+  }
+  if (!running || running === wanted) return false;
+
+  // The app refreshes the unpacked extension directory transactionally before the bridge starts.
+  // Confirm that Chrome's on-disk source already contains that exact release before restarting
+  // this worker; otherwise a damaged/failed materialization could produce a reload loop.
+  try {
+    const manifestUrl = chrome.runtime.getURL('manifest.json');
+    const response = await fetchBounded(manifestUrl, { cache: 'no-store' }, HELLO_TIMEOUT_MS);
+    if (!response.ok) return false;
+    const disk = await response.json();
+    if (!disk || String(disk.version || '') !== wanted) return false;
+  } catch {
+    return false;
+  }
+
+  extensionReloadScheduled = true;
+  setTimeout(() => chrome.runtime.reload(), 0);
+  return true;
+}
 
 /**
  * Observations accepted from content scripts but not yet accepted by the app.
@@ -862,6 +892,7 @@ async function discover(force = false) {
       portCompatible = body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
       appVersion = typeof body.version === 'string' ? body.version : null;
       appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
+      await syncExtensionToAppVersion(appVersion);
       return { port, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
     }
   }
@@ -874,6 +905,7 @@ async function discover(force = false) {
       portCompatible = body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
       appVersion = typeof body.version === 'string' ? body.version : null;
       appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
+      await syncExtensionToAppVersion(appVersion);
       await persist();
       return { port: candidate, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
     }
@@ -1653,6 +1685,10 @@ function serializeTab(tab, operation) {
 }
 
 const HANDLERS = {
+  async reload_extension() {
+    setTimeout(() => chrome.runtime.reload(), 0);
+    return { ok: true };
+  },
   async register_document(_message, sender) {
     const result = await registerDocument(sender, _message);
     if (result && result.ok === true) void recoverDeferredRevivals().catch(() => undefined);
@@ -2130,6 +2166,57 @@ const HANDLERS = {
     const result = await call('/settings', { method: 'POST', body: JSON.stringify(body) });
     return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
   },
+  /** Approved-root names for the workspace pill beside the ChatGPT composer. */
+  async workspace_get(message, _sender, source) {
+    await load();
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    const requestedConversation = cleanConversationId(message.conversationId);
+    const key = String(source.tab);
+    const registeredConversation = cleanConversationId(tabConversations[key]);
+    if (requestedConversation && registeredConversation && requestedConversation !== registeredConversation) {
+      return { ok: false, error: 'stale_conversation' };
+    }
+    if (requestedConversation && !registeredConversation) {
+      await noteTabConversation(source, requestedConversation);
+      if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    }
+    const conversationId = cleanConversationId(tabConversations[key]) ?? requestedConversation;
+    const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : '';
+    const result = await call(`/workspace${query}`, { method: 'GET' });
+    return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
+  },
+  /**
+   * Explicit user workspace choice. The service worker will only forward it from the current
+   * registered document and never accepts a page-provided native path.
+   */
+  async workspace_set(message, _sender, source) {
+    await load();
+    if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    const requestedConversation = cleanConversationId(message.conversationId);
+    if (!requestedConversation) return { ok: false, error: 'bad_conversation_id' };
+    const key = String(source.tab);
+    const registeredConversation = cleanConversationId(tabConversations[key]);
+    if (registeredConversation && requestedConversation !== registeredConversation) {
+      return { ok: false, error: 'stale_conversation' };
+    }
+    if (!registeredConversation) {
+      await noteTabConversation(source, requestedConversation);
+      if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    }
+    const roots = Array.isArray(message.roots)
+      ? message.roots.filter((value) => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,31}$/.test(value))
+      : [];
+    if (roots.length === 0 || new Set(roots).size !== roots.length) return { ok: false, error: 'bad_workspace_roots' };
+    const result = await call('/workspace', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversationId: requestedConversation,
+        primaryRoot: roots[0],
+        sharedRoots: roots.slice(1)
+      })
+    });
+    return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
+  },
   /** The marked page asking for the one command it was opened for. */
   async redeem(message) {
     return redeemCommand(
@@ -2237,6 +2324,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     'goal_open',
     'settings_set',
     'settings_get',
+    'workspace_get',
+    'workspace_set',
     'repair_fiber',
     'redeem',
     'defer_revival',

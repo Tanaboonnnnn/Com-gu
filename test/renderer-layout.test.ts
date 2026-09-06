@@ -157,6 +157,17 @@ describe('the chat panel cards', () => {
     expect(document.getElementById('commandSandboxPrepare')!.closest('.view[data-view="settings"]')).not.toBeNull();
   });
 
+  it('has a Desktop fallback for a pending Chat workspace without any arbitrary native-path input', () => {
+    const box = document.getElementById('chatWorkspaceFallback');
+    expect(box).not.toBeNull();
+    for (const id of ['pendingWorkspaceChat', 'pendingWorkspacePrimary', 'pendingWorkspaceShared', 'pendingWorkspaceSave']) {
+      expect(document.getElementById(id), `missing #${id}`).not.toBeNull();
+    }
+    expect(box!.querySelector('input[type="text"], input[type="file"], textarea')).toBeNull();
+    expect(document.getElementById('pendingWorkspaceChat')!.tagName).toBe('SELECT');
+    expect(document.getElementById('pendingWorkspacePrimary')!.tagName).toBe('SELECT');
+  });
+
   /** The track list a card's own rule declares, as an array. */
   function tracks(selector: string): string[] {
     const declarations = rule(selector);
@@ -343,6 +354,14 @@ describe('the settings sheet', () => {
         expect(chatSource).toContain("$('runPrimaryRoot').addEventListener('change'");
         continue;
       }
+      if (field.id === 'pendingWorkspacePrimary') {
+        expect(chatSource).toContain("$('pendingWorkspacePrimary').addEventListener('change'");
+        continue;
+      }
+      if (field.id === 'pendingWorkspaceChat') {
+        expect(chatSource).toContain("$<HTMLSelectElement>('pendingWorkspaceChat').value");
+        continue;
+      }
       expect(listened![1], `#${field.id} never saves`).toContain(`'${field.id}'`);
     }
   });
@@ -365,12 +384,26 @@ describe('the session timeline', () => {
 });
 
 describe('the window as a whole', () => {
-  it('puts the manual version control immediately left of the language selector', () => {
+  it('orders update, Sub-agent, language, theme, status and power in the header', () => {
     const version = document.getElementById('versionBtn');
+    const subAgent = document.getElementById('homeMaEnabled');
     const locale = document.querySelector('.locale-picker');
+    const theme = document.getElementById('themeBtn');
+    const live = document.getElementById('live');
+    const power = document.getElementById('connectBtn');
     expect(version).not.toBeNull();
+    expect(subAgent).not.toBeNull();
     expect(locale).not.toBeNull();
-    expect(version!.nextElementSibling).toBe(locale);
+    expect(theme).not.toBeNull();
+    expect(live).not.toBeNull();
+    expect(power).not.toBeNull();
+    const subAgentControl = subAgent!.closest('.header-subagent');
+    expect(subAgentControl).not.toBeNull();
+    expect(version!.nextElementSibling).toBe(subAgentControl);
+    expect(subAgentControl!.nextElementSibling).toBe(locale);
+    expect(locale!.nextElementSibling).toBe(theme);
+    expect(theme!.nextElementSibling).toBe(live);
+    expect(live!.nextElementSibling).toBe(power);
   });
 
   it('has an initially hidden update confirmation panel with an explicit install action', () => {

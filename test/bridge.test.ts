@@ -88,7 +88,7 @@ const {
   repairPrimeConversationAfterRecovery,
   requestWorkerBootstraps,
   requestWorkerRevivals,
-  spawn,
+  spawn: spawnAgent,
   stageMessages,
   pendingWorkerSpawns,
   onSwarmPersistNow,
@@ -107,10 +107,29 @@ const {
 const { makeTempDir, removeTempDir, SAMPLE_BRIEF } = await import('./helpers.js');
 const { resumeBootstrapText } = await import('../src/main/session/handoff.js');
 const { getLog } = await import('../src/main/logger.js');
+const {
+  chatWorkspaceScopeView,
+  resetChatWorkspaceScopesForTests,
+  setChatWorkspaceScopeForTests
+} = await import('../src/main/chat-workspace-scope.js');
 
 const EXTENSION_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 /** The chat that spawns the swarm in these tests: only a proven conversation can. */
 const PRIME_CHAT = 'c-prime-bridge';
+
+/**
+ * Bridge tests exercise browser delivery/lifecycle, not the workspace picker. Every production
+ * spawn now needs explicit user chat authority, so this fixture supplies the first approved root
+ * without bypassing production spawn validation. Scope-specific refusal tests call spawnAgent
+ * directly in the agents/run-scope suites instead.
+ */
+function spawn(input: Parameters<typeof spawnAgent>[0]): ReturnType<typeof spawnAgent> {
+  const conversationId = input.caller?.conversationId;
+  const root = getConfig().roots[0];
+  if (!conversationId || !root) throw new Error('bridge spawn fixture needs a conversation and one approved root');
+  setChatWorkspaceScopeForTests(conversationId, getConfig().roots, { primaryRoot: root.name, sharedRoots: [] });
+  return spawnAgent(input);
+}
 
 /**
  * A continuation that has already been given its brief, ready to be queued.
@@ -268,6 +287,7 @@ beforeAll(async () => {
   const baseConfig = defaultConfig();
   await saveConfig({
     ...baseConfig,
+    roots: [{ name: 'bridge-workspace', path: dir }],
     sessions: { ...baseConfig.sessions, record: true },
     multiAgent: { ...baseConfig.multiAgent, enabled: true }
   });
@@ -299,10 +319,73 @@ beforeEach(async () => {
     openedFamilies.push(family);
   });
   resetRecorderForTests();
+  resetChatWorkspaceScopesForTests();
   writeDurableSoon('bridge-commands', null);
   await flushDurable();
   await setSecret('bridgeToken', '');
   token = null;
+});
+
+describe('chat workspace bridge', () => {
+  it('exposes approved root names only and saves a multi-root selection for one conversation', async () => {
+    const original = getConfig();
+    const chat = 'cafe0009-0000-4000-8000-000000000009';
+    await saveConfig({
+      ...original,
+      roots: [
+        { name: 'comgu', path: `${dir}\\private-comgu` },
+        { name: 'lecture', path: `${dir}\\private-lecture` },
+        { name: 'shared', path: `${dir}\\private-shared` }
+      ]
+    });
+    try {
+      await pair();
+      const before = await request('GET', `/workspace?conversationId=${chat}`);
+      expect(before.status).toBe(200);
+      expect(before.body).toEqual({
+        roots: ['comgu', 'lecture', 'shared'],
+        selected: null
+      });
+      expect(JSON.stringify(before.body)).not.toContain(dir);
+
+      const saved = await request('POST', '/workspace', {
+        body: { conversationId: chat, primaryRoot: 'comgu', sharedRoots: ['lecture', 'shared'] }
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body).toEqual({
+        roots: ['comgu', 'lecture', 'shared'],
+        selected: { primaryRoot: 'comgu', sharedRoots: ['lecture', 'shared'] }
+      });
+      expect(chatWorkspaceScopeView(chat)).toEqual({ primaryRoot: 'comgu', sharedRoots: ['lecture', 'shared'] });
+      expect(JSON.stringify(saved.body)).not.toContain(dir);
+    } finally {
+      await saveConfig(original);
+    }
+  });
+
+  it('rejects unknown roots and unauthenticated workspace changes', async () => {
+    const original = getConfig();
+    const chat = 'cafe0010-0000-4000-8000-000000000010';
+    await saveConfig({ ...original, roots: [{ name: 'comgu', path: `${dir}\\private-comgu` }] });
+    try {
+      await pair();
+      const unknown = await request('POST', '/workspace', {
+        body: { conversationId: chat, primaryRoot: 'missing', sharedRoots: [] }
+      });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.error).toBe('workspace_scope_invalid');
+      expect(chatWorkspaceScopeView(chat)).toBeNull();
+
+      const unauthenticated = await request('POST', '/workspace', {
+        auth: null,
+        body: { conversationId: chat, primaryRoot: 'comgu', sharedRoots: [] }
+      });
+      expect(unauthenticated.status).toBe(401);
+      expect(chatWorkspaceScopeView(chat)).toBeNull();
+    } finally {
+      await saveConfig(original);
+    }
+  });
 });
 
 describe('browser family affinity', () => {
@@ -3735,6 +3818,7 @@ describe('the goal loop over the bridge', () => {
   beforeEach(async () => {
     await saveConfig({
       ...defaultConfig(),
+      roots: [{ name: 'bridge-workspace', path: dir }],
       sessions: { ...defaultConfig().sessions, record: true },
       goal: { ...defaultConfig().goal, enabled: true, model: 'deepseek/deepseek-v4-flash', reasoning: 'default' }
     });

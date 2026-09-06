@@ -77,6 +77,10 @@
         </span>
         <span class="state">
           <button class="btn version-btn" id="versionBtn" type="button">Version</button>
+          <label class="header-subagent" title="Sub-agent">
+            <span data-i18n="header.subAgent">Sub-agent</span>
+            <span class="sw"><input type="checkbox" id="homeMaEnabled" /><i></i></span>
+          </label>
           <label class="locale-picker" title="Language">
             <span class="sr-only" data-i18n="language.label">Language</span>
             <select id="localeSelect" aria-label="Language">
@@ -89,7 +93,7 @@
           </button>
           <span class="live" id="live">
             <span class="dot"></span>
-            <span id="liveState" data-i18n="status.notConnected">Not connected</span>
+            <span id="liveState"></span>
             <em id="liveNote"></em>
           </span>
           <button class="power off" id="connectBtn" type="button">
@@ -615,6 +619,30 @@
                     <input id="maWorkers" class="num" type="number" min="1" max="8" step="1" />
                     <span class="unit" data-i18n="chat.max">max</span>
                   </div>
+
+                  <section class="chat-workspace-fallback" id="chatWorkspaceFallback" hidden>
+                    <span class="setting-text">
+                      <b data-i18n="workspaceFallback.title">Workspace required</b>
+                      <em data-i18n="workspaceFallback.detail">A ChatGPT conversation tried to use files or commands without a workspace. Choose approved folders here, then retry the tool.</em>
+                    </span>
+                    <div class="run-workspace-picker">
+                      <div class="field">
+                        <label for="pendingWorkspaceChat" data-i18n="workspaceFallback.chat">ChatGPT conversation</label>
+                        <select id="pendingWorkspaceChat"></select>
+                      </div>
+                      <div class="field">
+                        <label for="pendingWorkspacePrimary" data-i18n="agents.primaryFolder">Primary folder</label>
+                        <select id="pendingWorkspacePrimary"></select>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <span class="field-label" data-i18n="agents.sharedFolders">Shared folders</span>
+                      <div class="run-shared-roots" id="pendingWorkspaceShared"></div>
+                    </div>
+                    <div class="step-actions">
+                      <button class="btn btn-solid" id="pendingWorkspaceSave" type="button" data-i18n="workspaceFallback.save">Allow for this chat</button>
+                    </div>
+                  </section>
 
                   <section class="run-workspace" id="runWorkspace">
                     <div class="run-workspace-head">

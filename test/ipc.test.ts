@@ -73,16 +73,29 @@ const {
   sendMessage,
   snapshotRetiredWorkers,
   snapshotSwarm,
-  spawn,
+  spawn: spawnAgent,
   swarmStateForCaller
 } = await import('../src/main/agents.js');
 const { registerIpc } = await import('../src/main/ipc.js');
 const { app, nativeTheme, safeStorage, shell } = await import('electron');
 const { extensionDownloadUrl } = await import('../src/main/version.js');
 const { resetWorkspaces, setWorkspaceFor, workspaceEntries } = await import('../src/main/workspace.js');
+const { chatWorkspaceScopeView, effectiveManualWorkspaceRoots, manualWorkspaceScopeView, noteChatWorkspaceRequired, resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests } = await import('../src/main/chat-workspace-scope.js');
 const { makeTempDir, removeTempDir } = await import('./helpers.js');
 
 let dir: string;
+
+function spawn(input: Parameters<typeof spawnAgent>[0]): ReturnType<typeof spawnAgent> {
+  const conversationId = input.caller?.conversationId;
+  if (!conversationId) throw new Error('IPC spawn fixture needs a conversation');
+  if (!chatWorkspaceScopeView(conversationId)) {
+    const roots = getConfig().roots;
+    const first = roots[0];
+    if (!first) throw new Error('IPC spawn fixture needs an approved root');
+    setChatWorkspaceScopeForTests(conversationId, roots, { primaryRoot: first.name, sharedRoots: [] });
+  }
+  return spawnAgent(input);
+}
 let currentWindow: {
   setBackgroundColor: ReturnType<typeof vi.fn>;
   isDestroyed: () => boolean;
@@ -96,6 +109,9 @@ const removeRoot = (payload: unknown): Promise<any> => handlers.get('roots:remov
 const sessionEvents = (payload: unknown): Promise<any> => handlers.get('sessions:events')!(null, payload) as Promise<any>;
 const sessionList = (): Promise<any> => handlers.get('sessions:list')!(null, undefined) as Promise<any>;
 const setRunScope = (payload: unknown): Promise<any> => handlers.get('swarm:setWorkspaceScope')!(null, payload) as Promise<any>;
+const pendingChatWorkspaces = (): Promise<any> => handlers.get('chatWorkspace:getPending')!(null, undefined) as Promise<any>;
+const setPendingChatWorkspace = (payload: unknown): Promise<any> => handlers.get('chatWorkspace:setPending')!(null, payload) as Promise<any>;
+const setManualChatWorkspace = (payload: unknown): Promise<any> => handlers.get('chatWorkspace:setManual')!(null, payload) as Promise<any>;
 
 /** The whole settings object the renderer sends, with the parts a test cares about set. */
 function settings(over: { record: boolean; multiAgent: boolean }) {
@@ -150,11 +166,13 @@ beforeEach(async () => {
   resetSwarm();
   resetBridgeForTests();
   resetWorkspaces();
+  resetChatWorkspaceScopesForTests();
   // The app opens the worker's chat itself; a command only exists while a page it opened
   // still has it to redeem.
   setBrowserOpener(async () => undefined);
   await saveConfig({
     ...defaultConfig(),
+    roots: [{ name: 'ipc-workspace', path: dir }],
     sessions: { ...defaultConfig().sessions, record: true },
     multiAgent: { enabled: true, maxWorkers: 3 }
   });
@@ -252,7 +270,7 @@ describe('turning multi-agent mode off', () => {
    * Pausing execution must withdraw queued browser work before the bridge goes away. The
    * durable worker history itself survives; only the pending transport is cancelled.
    */
-  it('cancels the run’s queued worker chats before the bridge goes away', async () => {
+  it('cancels the runโ€s queued worker chats before the bridge goes away', async () => {
     await startBridge();
     spawn({ workers: [{ task: 'work' }], caller: { conversationId: 'c-prime' } });
     // Opening is asynchronous, as it is in the app.
@@ -500,22 +518,26 @@ describe('root namespace invariants', () => {
 
   it('moves live workspace bindings with a root rename and drops them with root removal', async () => {
     const base = defaultConfig();
+    const projectPath = 'C:\\Users\\example\\project';
     await saveConfig({
       ...base,
-      roots: [{ name: 'project', path: 'C:\\Users\\example\\project' }]
+      roots: [{ name: 'project', path: projectPath }]
     });
     setWorkspaceFor('chat:conv-root-change', {
       virtual: '/project/src',
-      real: 'C:\\Users\\example\\project\\src'
+      real: `${projectPath}\\src`
     });
+    setChatWorkspaceScopeForTests('conv-root-change', getConfig().roots, { primaryRoot: 'project', sharedRoots: [] });
 
     const renamed = await renameRoot({ name: 'project', newName: 'repo' });
     expect(renamed.ok, renamed.error).toBe(true);
     expect(workspaceEntries()).toEqual([{ key: 'chat:conv-root-change', virtual: '/repo/src' }]);
+    expect(chatWorkspaceScopeView('conv-root-change')).toEqual({ primaryRoot: 'repo', sharedRoots: [] });
 
     const removed = await removeRoot({ name: 'repo' });
     expect(removed.ok, removed.error).toBe(true);
     expect(workspaceEntries()).toEqual([]);
+    expect(chatWorkspaceScopeView('conv-root-change')).toBeNull();
   });
 
   it('refuses stale root rename/remove requests instead of reporting a no-op as success', async () => {
@@ -550,6 +572,75 @@ describe('bounded recovery IPC', () => {
   });
 });
 
+describe('pending Chat workspace fallback IPC', () => {
+  it('exposes names only and can grant scope only to a conversation already pending user action', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\Users\\example\\project' },
+        { name: 'shared', path: 'D:\\secret\\shared' }
+      ]
+    });
+    noteChatWorkspaceRequired('chat-pending');
+
+    const before = await pendingChatWorkspaces();
+    expect(before.ok).toBe(true);
+    expect(before.data).toEqual({ roots: ['project', 'shared'], pending: [{ conversationId: 'chat-pending' }], manual: { pending: false, scope: null } });
+    expect(JSON.stringify(before.data)).not.toMatch(/C:\\\\|D:\\\\/);
+
+    const arbitrary = await setPendingChatWorkspace({
+      conversationId: 'chat-not-pending',
+      primaryRoot: 'project',
+      sharedRoots: []
+    });
+    expect(arbitrary.ok).toBe(false);
+    expect(chatWorkspaceScopeView('chat-not-pending')).toBeNull();
+
+    const saved = await setPendingChatWorkspace({
+      conversationId: 'chat-pending',
+      primaryRoot: 'project',
+      sharedRoots: ['shared']
+    });
+    expect(saved.ok, saved.error).toBe(true);
+    expect(saved.data).toEqual({ roots: ['project', 'shared'], pending: [], manual: { pending: false, scope: null } });
+    expect(chatWorkspaceScopeView('chat-pending')).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+  });
+
+  it('exposes and grants only an explicitly pending unidentified fallback without native paths', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\Users\\example\\project' },
+        { name: 'shared', path: 'D:\\secret\\shared' }
+      ]
+    });
+
+    const premature = await setManualChatWorkspace({ primaryRoot: 'project', sharedRoots: [] });
+    expect(premature.ok).toBe(false);
+    expect(manualWorkspaceScopeView()).toBeNull();
+
+    expect(() => effectiveManualWorkspaceRoots(getConfig().roots)).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+    const pending = await pendingChatWorkspaces();
+    expect(pending.ok).toBe(true);
+    expect(pending.data).toEqual({
+      roots: ['project', 'shared'],
+      pending: [],
+      manual: { pending: true, scope: null }
+    });
+    expect(JSON.stringify(pending.data)).not.toMatch(/C:\\\\|D:\\\\/);
+
+    const saved = await setManualChatWorkspace({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(saved.ok, saved.error).toBe(true);
+    expect(saved.data.manual).toEqual({
+      pending: false,
+      scope: { primaryRoot: 'project', sharedRoots: ['shared'] }
+    });
+    expect(manualWorkspaceScopeView()).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
+  });
+});
+
 describe('Run workspace scope IPC', () => {
   it('accepts only already-approved root names and rejects host-path authority material', async () => {
     const base = defaultConfig();
@@ -581,7 +672,7 @@ describe('Run workspace scope IPC', () => {
 
 /**
  * `link:open` is an allowlist, which means a button whose URL was never added to it does
- * not open a slightly wrong page — it throws, in a handler nobody is watching, and the
+ * not open a slightly wrong page โ€” it throws, in a handler nobody is watching, and the
  * button does nothing at all. That is how "Open OpenRouter keys" shipped dead beside the
  * key field it exists to go and fetch.
  *
@@ -599,7 +690,7 @@ describe('every link the window offers', () => {
     ]);
 
     const offered = [...html.matchAll(/data-link="([^"]+)"/g)].map((match) => match[1]!);
-    expect(offered.length, 'the markup offers no links at all — has data-link been renamed?').toBeGreaterThan(0);
+    expect(offered.length, 'the markup offers no links at all โ€” has data-link been renamed?').toBeGreaterThan(0);
 
     const block = /const ALLOWED_LINKS = new Set\(\[([\s\S]*?)\]\);/.exec(ipcSource);
     expect(block, 'ALLOWED_LINKS is gone or renamed').not.toBeNull();
@@ -630,8 +721,8 @@ describe('every link the window offers', () => {
 });
 
 /**
- * OpenRouter publishes twelve ids that begin with `~` — `~deepseek/deepseek-v4-flash-latest`
- * and its siblings — and they are aliases that always resolve to the newest model in a
+ * OpenRouter publishes twelve ids that begin with `~` โ€” `~deepseek/deepseek-v4-flash-latest`
+ * and its siblings โ€” and they are aliases that always resolve to the newest model in a
  * family. The picker lists them because the catalogue does, so a validator that refused the
  * `~` made the one kind of entry most worth choosing the one kind that could not be saved:
  * the click reported an error and the model in use silently stayed where it was.
@@ -735,7 +826,7 @@ describe('renderer pushes after the window is gone', () => {
     // Electron keeps the object after the window is destroyed, so the existing `?.` on
     // `getWindow()` never fires: the reference is truthy and reading `.webContents` throws.
     // The log push is the one that matters, because `onLog` listeners run synchronously on
-    // the writer's stack — during a quit that turned every teardown log line into a throw
+    // the writer's stack โ€” during a quit that turned every teardown log line into a throw
     // inside the teardown step that wrote it.
     const { logInfo } = await import('../src/main/logger.js');
     let touchedWebContents = false;

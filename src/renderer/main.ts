@@ -189,7 +189,7 @@ $('tabs').addEventListener('click', (event) => {
  * than pushing the cards below it, because the window cannot grow.
  */
 /** The head of a permission row: the expander, its title, and its switch. */
-function groupShell(id: string, title: string, iconId: string, box: HTMLInputElement): HTMLElement {
+function groupShell(id: string, title: string, iconId: string, box?: HTMLInputElement): HTMLElement {
   const root = el('div', 'perm');
   root.dataset.group = id;
 
@@ -205,11 +205,13 @@ function groupShell(id: string, title: string, iconId: string, box: HTMLInputEle
     if (openGroup === id) root.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   });
 
-  const sw = el('span', 'sw');
-  sw.append(box, el('i'));
-
   const head = el('div', 'perm-head');
-  head.append(main, sw);
+  head.append(main);
+  if (box) {
+    const sw = el('span', 'sw');
+    sw.append(box, el('i'));
+    head.append(sw);
+  }
   root.append(head);
   return root;
 }
@@ -286,14 +288,9 @@ function buildGroups(): void {
   recordTools.append(toolNames(['session']));
   recording.append(recordTools);
 
-  const enabled = document.createElement('input');
-  enabled.type = 'checkbox';
-  enabled.id = 'homeMaEnabled';
-  enabled.title = tr('permissions.agents.toggle');
-  // The only multi-agent exposure control there is. Chat settings used to carry a second
-  // checkbox for the same flag, which this one had to mirror by hand.
-  enabled.addEventListener('change', () => void save());
-  const agents = groupShell('agents', tr('permissions.agents.title'), 'i-bolt', enabled);
+  // The one multi-agent exposure switch lives in the header so it is visible from every tab.
+  // Keep the permission row as the explanation of the `agents` tool, not a second authority.
+  const agents = groupShell('agents', tr('permissions.agents.title'), 'i-bolt');
 
   const tools = el('div', 'tools');
   const agentTools: Array<[string, string]> = [
@@ -378,7 +375,9 @@ function paintGroups(): void {
   ] as Array<[string, MessageKey, MessageKey, MessageKey]>) {
     const root = document.querySelector<HTMLElement>(`[data-group="${id}"]`);
     if (!root) continue;
-    const box = root.querySelector<HTMLInputElement>('.sw input')!;
+    const box = id === 'agents'
+      ? $<HTMLInputElement>('homeMaEnabled')
+      : root.querySelector<HTMLInputElement>('.sw input')!;
     const translatedTitle = tr(titleKey);
     root.querySelector<HTMLElement>('.perm-main b')!.textContent = translatedTitle;
     box.title = tr(toggleKey);
@@ -739,6 +738,10 @@ function apply(next: AppState): void {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   const locale: Locale = config.ui.locale === 'th' ? 'th' : 'en';
   applyValue($<HTMLSelectElement>('localeSelect'), locale, previousState?.config.ui.locale ?? 'en');
+  // Paint static copy first. Dynamic status/action labels below must win over their HTML
+  // placeholders; doing this at the end used to turn Connected back into Not connected and
+  // Disconnect back into Connect on every state push.
+  applyStaticTranslations(document, locale);
   applyValue(
     $<HTMLSelectElement>('browserPreference'),
     config.browser?.preference ?? 'prime',
@@ -951,7 +954,6 @@ function apply(next: AppState): void {
     : tr('setup.activityPrivate');
 
   chatApply(next, previousState?.config);
-  applyStaticTranslations(document, locale);
 
   applying = false;
 }
@@ -1392,6 +1394,8 @@ $('localeSelect').addEventListener('change', () => {
   if (latestUpdateState) paintUpdate(latestUpdateState);
   void save({ locale });
 });
+
+$<HTMLInputElement>('homeMaEnabled').addEventListener('change', () => void save());
 
 $('versionBtn').addEventListener('click', async () => {
   updatePanelRequested = true;

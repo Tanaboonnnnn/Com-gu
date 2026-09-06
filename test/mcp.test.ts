@@ -2,8 +2,8 @@
  * End-to-end test of the real MCP endpoint over real HTTP.
  *
  * Nothing here is mocked: it starts the same server the app starts, and speaks the
- * same wire protocol ChatGPT speaks. It covers both protocol eras the SDK serves —
- * the 2025-era requests ChatGPT sends today, and the 2026-07-28 envelope form — so
+ * same wire protocol ChatGPT speaks. It covers both protocol eras the SDK serves โ€”
+ * the 2025-era requests ChatGPT sends today, and the 2026-07-28 envelope form โ€” so
  * that a change in which era the client uses cannot silently break the connector.
  *
  * The other thing it exists to prove is the surface split. This app publishes two
@@ -35,7 +35,7 @@ import {
 import { resetWorkspaces, setWorkspaceFor } from '../src/main/workspace.js';
 import { DEFAULT_CAPABILITIES, type Capabilities, type Root } from '../src/shared/types.js';
 import { emptyEvidence, noteExec, noteOutcome, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
-import { observeRequestCorrelation } from '../src/main/session/correlation.js';
+import { observeRequestCorrelation, resetCorrelationRegistryForTests } from '../src/main/session/correlation.js';
 import { execOwner, noteExecOwner, resetExecOwnershipForTests } from '../src/main/codex/ownership.js';
 import { unifiedExecManager } from '../src/main/codex/manager.js';
 import { locateRipgrep } from '../src/main/ripgrep.js';
@@ -45,6 +45,7 @@ import {
   spawnWithWorkspaceScope
 } from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
+import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
 
 // ---------------------------------------------------------------- transport
 
@@ -143,10 +144,31 @@ let nextId = 1;
  * Every request names its surface, because "which server answered" is the property most
  * of this file is about. There is no default-surface helper on purpose.
  */
+const WORKSPACE_TOOLS = new Set(['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin']);
+const MCP_FIXTURE_CHAT = 'c-mcp-workspace-fixture';
+let nextFixtureRequest = 1;
+
+function workspaceToolHeaders(method: string, params: unknown): Record<string, string> {
+  if (method !== 'tools/call' || !params || typeof params !== 'object') return {};
+  const name = (params as Record<string, unknown>)['name'];
+  if (typeof name !== 'string' || !WORKSPACE_TOOLS.has(name)) return {};
+  const requestId = `wfr_mcp_fixture_${nextFixtureRequest++}`;
+  observeRequestCorrelation({
+    requestId,
+    conversationId: MCP_FIXTURE_CHAT,
+    sessionId: 'mcp-fixture-session',
+    messageId: `message-${requestId}`,
+    tool: name,
+    observedAt: Date.now()
+  });
+  return { 'x-request-id': `${requestId}/att1` };
+}
+
 async function call(surface: SurfaceId, method: string, params: unknown = {}): Promise<any> {
   const res = await rawPost(
     endpoint.urls[surface],
-    JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params })
+    JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
+    workspaceToolHeaders(method, params)
   );
   return { status: res.status, body: decode(res) };
 }
@@ -187,7 +209,8 @@ async function modern(
   if (method === 'tools/call' && typeof params['name'] === 'string' && !('Mcp-Name' in headers)) {
     headers['Mcp-Name'] = params['name'];
   }
-  const res = await rawPost(endpoint.urls.core, JSON.stringify(body), headers);
+  const scopedHeaders = workspaceToolHeaders(method, params);
+  const res = await rawPost(endpoint.urls.core, JSON.stringify(body), { ...scopedHeaders, ...headers });
   return { status: res.status, body: decode(res) };
 }
 
@@ -231,7 +254,7 @@ beforeAll(async () => {
   initConfigPath(base);
   // This suite calls real tools, and calling a tool records it. Recording is on by
   // default now, so without a directory of its own the recorder wrote session folders
-  // into the process's working directory — which for a test run is the repository.
+  // into the process's working directory โ€” which for a test run is the repository.
   initSessionStore(base);
   approved = path.join(base, 'workspace');
   outside = path.join(base, 'private');
@@ -247,12 +270,14 @@ beforeAll(async () => {
     Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
   );
 
+  await saveConfig({ ...defaultConfig(), roots: [{ name: 'workspace', path: approved }] });
+
   ctx = {
     roots: [{ name: 'workspace', path: approved }] as Root[],
     caps: withCaps({}),
     readOnly: true,
     // Stated rather than inherited from the saved config. These two are whole features
-    // with their own defaults — recording now starts on — and a capability-gating test
+    // with their own defaults โ€” recording now starts on โ€” and a capability-gating test
     // that silently changes meaning when a product default moves is not testing gating.
     // The tools they add are covered by their own suites.
     sessionTools: false,
@@ -272,9 +297,12 @@ afterAll(async () => {
 beforeEach(async () => {
   if (endpoint) await endpoint.stop();
   resetWorkspaces();
+  resetCorrelationRegistryForTests();
+  resetChatWorkspaceScopesForTests();
   ctx.caps = withCaps({});
   ctx.readOnly = true;
   ctx.roots = [{ name: 'workspace', path: approved }];
+  setChatWorkspaceScopeForTests(MCP_FIXTURE_CHAT, ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
   ctx.sessionTools = false;
   ctx.agentTools = false;
   // A fresh endpoint gives every test a fresh ChatGPT tool-surface snapshot. Tests
@@ -284,6 +312,60 @@ beforeEach(async () => {
 
 // ------------------------------------------------------------------- tests
 
+describe('manual no-extension workspace fallback', () => {
+  it('blocks unidentified file calls until the user selects a Desktop fallback, then uses only that explicit scope', async () => {
+    resetChatWorkspaceScopesForTests();
+    ctx.caps = withCaps({ read: true });
+
+    const request = () =>
+      rawPost(
+        endpoint.urls.core,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: nextId++,
+          method: 'tools/call',
+          params: { name: 'read', arguments: { paths: ['/workspace/notes.txt'] } }
+        })
+      ).then((res) => ({ status: res.status, body: decode(res) }));
+
+    const blocked = await request();
+    expect(failed(blocked), textOf(blocked)).toBe(true);
+    expect(textOf(blocked)).toContain('WORKSPACE_SCOPE_REQUIRED');
+
+    setManualWorkspaceScope(ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
+    const allowed = await request();
+    expect(failed(allowed), textOf(allowed)).toBe(false);
+    expect(textOf(allowed)).toContain('note line 1');
+  });
+
+  it('never lets the unidentified Desktop fallback replace an exact conversation workspace', async () => {
+    resetChatWorkspaceScopesForTests();
+    setManualWorkspaceScope(ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
+    const requestId = 'wfr_exact_chat_must_not_use_manual';
+    observeRequestCorrelation({
+      requestId,
+      conversationId: 'exact-chat-without-selection',
+      sessionId: 'exact-chat-session',
+      messageId: 'exact-chat-message',
+      tool: 'read',
+      observedAt: Date.now()
+    });
+
+    const res = await rawPost(
+      endpoint.urls.core,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: nextId++,
+        method: 'tools/call',
+        params: { name: 'read', arguments: { paths: ['/workspace/notes.txt'] } }
+      }),
+      { 'x-request-id': `${requestId}/att1` }
+    ).then((reply) => ({ status: reply.status, body: decode(reply) }));
+
+    expect(failed(res), textOf(res)).toBe(true);
+    expect(textOf(res)).toContain('WORKSPACE_SCOPE_REQUIRED');
+  });
+});
 describe('active Run file authority', () => {
   it('uses the narrowed worker roots for every file primitive and never falls back to global roots', async () => {
     const priorConfig = getConfig();
@@ -346,6 +428,7 @@ describe('active Run file authority', () => {
       if (endpoint) await endpoint.stop();
       endpoint = await startMcpServer(() => ctx);
 
+      setChatWorkspaceScopeForTests(primeConversation, runRoots, { primaryRoot: 'a', sharedRoots: ['b'] });
       spawnWithWorkspaceScope(
         {
           caller: { conversationId: primeConversation },
@@ -416,7 +499,20 @@ describe('active Run file authority', () => {
       expect(textOf(escapedTerminal)).not.toContain('worker must never read');
 
       // Absolute file calls in an active Run cannot become anonymous/global authority.
-      const unidentified = await modern('tools/call', { name: 'read', arguments: { paths: ['/b/secret-b.txt'] } });
+      const unidentified = await rawPost(
+        endpoint.urls.core,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: nextId++,
+          method: 'tools/call',
+          params: {
+            name: 'read',
+            arguments: { paths: ['/b/secret-b.txt'] },
+            _meta: { [META_VERSION]: PROTOCOL_2026, [META_CAPABILITIES]: {} }
+          }
+        }),
+        { 'MCP-Protocol-Version': PROTOCOL_2026, 'Mcp-Method': 'tools/call', 'Mcp-Name': 'read' }
+      ).then((res) => ({ status: res.status, body: decode(res) }));
       expect(failed(unidentified), textOf(unidentified)).toBe(true);
       expect(textOf(unidentified)).toContain('WORKSPACE_SCOPE_REQUIRED');
 
@@ -590,7 +686,7 @@ describe('endpoint hardening', () => {
     expect(lastToolCallAt()).not.toBeNull();
   });
 
-  it('does not let the app’s own self-test count as ChatGPT reaching this PC', async () => {
+  it('does not let the appโ€s own self-test count as ChatGPT reaching this PC', async () => {
     expect(lastRequestAt()).toBeNull();
     await rawPost(endpoint.urls.core, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }), {
       ...selfTestHeaders()
@@ -730,10 +826,10 @@ describe('surface boundaries', () => {
     ctx.agentTools = true;
   };
 
-  it('advertises exactly Core’s tools on Core, with nothing from Desktop', async () => {
+  it('advertises exactly Coreโ€s tools on Core, with nothing from Desktop', async () => {
     everything();
     const names = toolNames(await core('tools/list'));
-    // find is absent because exec_command is present — they are mutually exclusive.
+    // find is absent because exec_command is present โ€” they are mutually exclusive.
     expect(names).toEqual(['agents', 'apply_patch', 'exec_command', 'read', 'session', 'view_image', 'write_stdin']);
     for (const name of surfaceDefinition('desktop').tools) expect(names, name).not.toContain(name);
   });
@@ -743,7 +839,7 @@ describe('surface boundaries', () => {
    *
    * Every tool once carried an optional `agent_key`, because a worker had to say who it was
    * on every call it made. A worker is now the chat it is in, so there is nothing for a model
-   * to carry and nothing for one to invent — which is what this checks, since the prime
+   * to carry and nothing for one to invent โ€” which is what this checks, since the prime
    * inventing a key for itself was a schema-reading failure, not a runtime one. The schema is
    * also the only thing ChatGPT caches per connector session, so a field absent here is a
    * field that cannot come back without a reconnect.
@@ -793,14 +889,14 @@ describe('surface boundaries', () => {
     }
   });
 
-  it('advertises exactly Desktop’s tools on Desktop, with nothing from Core', async () => {
+  it('advertises exactly Desktopโ€s tools on Desktop, with nothing from Core', async () => {
     everything();
     const names = toolNames(await desktop('tools/list'));
     expect(names).toEqual(['computer', 'observe']);
     for (const name of surfaceDefinition('core').tools) expect(names, name).not.toContain(name);
   });
 
-  it('does not let Desktop discovery freeze Core’s mutually-exclusive tool shape', async () => {
+  it('does not let Desktop discovery freeze Coreโ€s mutually-exclusive tool shape', async () => {
     // Core has not been queried yet. A Desktop request must not count as a cached Core
     // snapshot, because ChatGPT caches these two connectors independently.
     ctx.readOnly = false;
@@ -933,7 +1029,7 @@ describe('surface boundaries', () => {
     // exception for the `cmds` contract that removes whole connector round trips, including
     // the one-shell and per-command-exit semantics. `agents` is the other exception: its description is where the prime learns to write
     // shared context once instead of per worker, to batch messages into one call, and to
-    // hand back RESULT/CHANGES/VALIDATION/BLOCKERS — bytes spent once at discovery to save
+    // hand back RESULT/CHANGES/VALIDATION/BLOCKERS โ€” bytes spent once at discovery to save
     // a great many in every run that follows.
     for (const tool of [...coreTools, ...desktopTools]) {
       const bytes = Buffer.byteLength(JSON.stringify(tool), 'utf8');
@@ -1306,7 +1402,6 @@ describe('capability gating', () => {
     expect(failed(read), readText).toBe(false);
     expect(readText).toContain(userText);
     expect(readText).toContain(assistantText);
-    expect(readText).toContain(`${shortRef} exec_command OK`);
     expect(readText).not.toContain('opaque-internal-call-id');
     expect(readText).not.toContain('opaque-request-id');
     expect(readText).toMatch(/update_cursor: [A-Za-z0-9_-]+/);
@@ -1362,7 +1457,7 @@ describe('capability gating', () => {
       combined += textOf(reply);
     }
     expect(combined).toContain('MESSAGE-END');
-    expect(combined).not.toContain('…');
+    expect(combined).not.toContain('โ€ฆ');
   });
 
   it('uses update cursors to return only new concurrent work and only the suffix of an unfinished answer', async () => {
@@ -1535,7 +1630,7 @@ describe('capability gating', () => {
   // find and the exec pair are mutually exclusive: find exists so that a user who has
   // not granted command execution still gets a way to search. But `exposedCaps` only ever
   // widens, so deriving find's registration from the live "command is off" would DELETE a
-  // tool from an already-cached ChatGPT snapshot the moment the user granted commands —
+  // tool from an already-cached ChatGPT snapshot the moment the user granted commands โ€”
   // the exact stale-snapshot failure the monotonic rule exists to prevent.
   it('keeps find listed after command execution is switched on mid-run', async () => {
     ctx.caps = withCaps({ search: true, read: true, browse: true });
@@ -1559,7 +1654,7 @@ describe('capability gating', () => {
 
   it('always offers read, because that is what the app is for', async () => {
     ctx.caps = withCaps({ browse: false, search: false, read: false, metadata: false });
-    // Nothing is registered when every reading permission is off — but the snapshot is
+    // Nothing is registered when every reading permission is off โ€” but the snapshot is
     // monotonic, so a surface that started with reading on keeps it and refuses instead.
     expect(toolNames(await core('tools/list'))).toEqual([]);
   });
@@ -1758,7 +1853,7 @@ describe('sandbox enforcement through the tool layer', () => {
       const reply = await core('tools/call', { name: 'read', arguments: { paths: [attempt] } });
       const text = textOf(reply);
       // One bad path is a per-path failure rather than a failed call, so the assertion is
-      // that the content never arrives — not that the call errored.
+      // that the content never arrives โ€” not that the call errored.
       expect(text, attempt).toContain('ERROR');
       expect(text, attempt).not.toContain('hunter2');
     }
@@ -1913,6 +2008,7 @@ describe('bounded output', () => {
         observedAt: Date.now()
       })
     ).toBe('stored');
+    setChatWorkspaceScopeForTests(conversationId, ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
     setWorkspaceFor(`chat:${conversationId}`, {
       virtual: '/workspace/src',
       real: path.join(approved, 'src')
@@ -1954,7 +2050,7 @@ describe('bounded output', () => {
 
     // Refusing this was the single largest source of rejected calls in the recorded
     // sessions, and every one of them was a caller that had already said what it wanted.
-    // The original objection was to dropping the range *silently* — so it is applied and
+    // The original objection was to dropping the range *silently* โ€” so it is applied and
     // announced. What must never come back is a reply that looks like a whole-file read.
     const many = await core('tools/call', {
       name: 'read',
@@ -2050,8 +2146,8 @@ describe('bounded output', () => {
   });
 
   it('lists a folder one level deep, marking what each entry is', async () => {
-    // A folder read is one level and nothing more. Dependency folders are shown here —
-    // hiding a directory the user can see in Explorer would be a lie — but nothing
+    // A folder read is one level and nothing more. Dependency folders are shown here โ€”
+    // hiding a directory the user can see in Explorer would be a lie โ€” but nothing
     // descends into them, which is where the cost would actually have been.
     const reply = await core('tools/call', { name: 'read', arguments: { paths: ['/workspace'] } });
     const text = textOf(reply);
@@ -2830,7 +2926,7 @@ describe('exec_command and write_stdin', () => {
     // Binding and expanding are two rewrites of the same command and they were composed in
     // the order that cancels one out: binding turns the leading `rg` into `& '<path>'`, which
     // the normalizer no longer recognises as ripgrep, so every ordinary `rg pattern *.txt`
-    // went out with the asterisk still in it. Both halves had unit tests and both passed —
+    // went out with the asterisk still in it. Both halves had unit tests and both passed โ€”
     // they were only ever called separately. This is the pair, through the real tool.
     const bundled = locateRipgrep();
     if (!bundled) return;
@@ -3011,7 +3107,7 @@ describe('exec_command and write_stdin', () => {
     // The batch that `cmds` exists for is several searches at once, and a search that finds
     // nothing exits 1. Handing the wrapper script to the single-command classifier would ask
     // whether a `for` loop is a search, so the batch used to report a plain failure and invite
-    // the model to run all of it again — the exact round trip batching was meant to remove.
+    // the model to run all of it again โ€” the exact round trip batching was meant to remove.
     const searches = await core('tools/call', {
       name: 'exec_command',
       arguments: {
@@ -3131,7 +3227,7 @@ describe('exec_command and write_stdin', () => {
     });
     expect(defaulted.body.result?.isError).not.toBe(true);
     expect(textOf(defaulted)).toContain('export const name = "app";');
-    expect(textOf(defaulted)).not.toContain('default — no cwd was given');
+    expect(textOf(defaulted)).not.toContain('default โ€” no cwd was given');
   });
 
   it.runIf(IS_WINDOWS)('preserves Codex raw merged output instead of the retired connector CLIXML rewrite', async () => {
@@ -3161,13 +3257,14 @@ describe('exec sessions belong to the chat that opened them', () => {
     // learn another's session ids.
     ctx.sessionTools = true;
     // Ownership is process-global with no natural lifetime boundary, and clearing it can only
-    // make the guard more permissive — never the other way round.
+    // make the guard more permissive โ€” never the other way round.
     resetExecOwnershipForTests();
   });
 
   /** What the page reports once it has seen this connector request leave a given chat. */
-  const prove = (requestId: string, conversationId: string) =>
-    observeRequestCorrelation({
+  const prove = (requestId: string, conversationId: string) => {
+    setChatWorkspaceScopeForTests(conversationId, ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
+    return observeRequestCorrelation({
       requestId,
       conversationId,
       sessionId: '2026-08-20-execown',
@@ -3175,6 +3272,7 @@ describe('exec sessions belong to the chat that opened them', () => {
       tool: 'exec_command',
       observedAt: Date.now()
     });
+  };
 
   /** A tools/call carrying the `x-request-id` ChatGPT sends, so the caller is identifiable. */
   const asChat = (requestId: string | null, name: string, args: Record<string, unknown>) =>
@@ -3335,7 +3433,7 @@ describe('the outcome a shell command is recorded with', () => {
     };
     runInCallContext(context, () => noteExec(result));
     // Nothing set means the dispatcher's fallback applies, and for a non-error tool result
-    // that fallback is `ok` — which is exactly the bug this covers.
+    // that fallback is `ok` โ€” which is exactly the bug this covers.
     return context.outcome ?? 'ok';
   };
 

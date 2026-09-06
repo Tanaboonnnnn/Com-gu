@@ -13,11 +13,18 @@ files:
   - package.json
   - '!node_modules/@img/sharp-*/**/*'
   - '!node_modules/@img/sharp-libvips-*/**/*'
+  # MXC's npm package carries multiple CPU payloads. Re-add only the verified target-specific
+  # staging tree from resources/packaging/native/<platform>/<arch>/node_modules below.
+  - '!node_modules/@microsoft/mxc-sdk/**/*'
   # node-pty prefers build/Release over prebuilds. npm may leave a host-native build there,
   # which would silently override the target prebuild in a cross-arch package.
   - '!node_modules/node-pty/build/**/*'
   - '!node_modules/node-pty/third_party/**/*'
   - '!node_modules/node-pty/prebuilds/**/*'
+  # tree-sitter packages contain C/C++ build sources, generated parser sources, queries and
+  # foreign prebuilds. Re-add the audited runtime-only staging trees below.
+  - '!node_modules/tree-sitter/**/*'
+  - '!node_modules/tree-sitter-bash/**/*'
   - '!node_modules/tree-sitter/prebuilds/**/*'
   - '!node_modules/tree-sitter-bash/prebuilds/**/*'
 
@@ -35,6 +42,11 @@ extraResources:
 npmRebuild: false
 
 asarUnpack:
+  # Keep startup-sensitive native packages on the real filesystem. A measured attempt to
+  # move their JS/metadata back into compressed ASAR increased packaged startup median from
+  # 1,103 ms to 1,415 ms on the same host; restoring broad unpack measured 1,075 ms. Package
+  # footprint is reduced instead by the target-only staging/exclusion rules above, which keep
+  # foreign CPUs, PDBs and compile-time tree-sitter sources out without adding startup I/O.
   - '**/node_modules/node-pty/**'
   - '**/node_modules/@microsoft/mxc-sdk/**'
   - '**/node_modules/sharp/**'

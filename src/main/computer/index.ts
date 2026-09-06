@@ -177,7 +177,11 @@ function helperTimeoutMs(request: Record<string, unknown>): number {
     case 'cursor':
       return 5_000;
     case 'find_ui':
-      return 8_000;
+      // UI Automation providers can legitimately stall for several seconds on a busy
+      // Windows desktop (the hosted Windows 2025 runner crossed the old 8s boundary while
+      // traversing ControlView). A longer watchdog does not slow successful scans; it only
+      // avoids retiring a healthy helper prematurely when UIA is temporarily slow.
+      return 15_000;
     case 'capture':
     case 'snapshot':
     case 'warm':

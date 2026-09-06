@@ -23,7 +23,7 @@ vi.mock('electron', () => ({
   shell: { openExternal: async () => undefined }
 }));
 
-const { defaultConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
+const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
 const {
   AgentError,
   PRIME_ID,
@@ -80,8 +80,8 @@ const {
   stageMessages,
   stageSpawn,
   snapshotSwarm,
-  spawn,
-  spawnWithWorkspaceScope,
+  spawn: spawnAgent,
+  spawnWithWorkspaceScope: spawnWithWorkspaceScopeAgent,
   swarmRunning,
   swarmState,
   swarmStateForCaller,
@@ -100,12 +100,33 @@ const { recordChatObservations, resetRecorderForTests } = await import('../src/m
 const { resetWorkspaces, setWorkspaceFor, workspaceEntries, workspaceForChat } = await import('../src/main/workspace.js');
 const { DEFAULT_CAPABILITIES } = await import('../src/shared/types.js');
 const { makeTempDir, removeTempDir } = await import('./helpers.js');
+const { chatWorkspaceScopeView, resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } = await import('../src/main/chat-workspace-scope.js');
 
 let dir: string;
 
+function ensureSpawnChatScope(input: SpawnInput, requested?: unknown): void {
+  const conversationId = input.caller?.conversationId;
+  if (!conversationId || chatWorkspaceScopeView(conversationId)) return;
+  const roots = getConfig().roots;
+  const first = roots[0];
+  if (!first) throw new Error('agents spawn fixture needs at least one approved root');
+  const selection = requested ?? input.workspaceScope ?? { primaryRoot: first.name, sharedRoots: [] };
+  setChatWorkspaceScopeForTests(conversationId, roots, selection);
+}
+
+function spawn(input: SpawnInput): ReturnType<typeof spawnAgent> {
+  ensureSpawnChatScope(input);
+  return spawnAgent(input);
+}
+
+function spawnWithWorkspaceScope(input: SpawnInput, scope: unknown): ReturnType<typeof spawnWithWorkspaceScopeAgent> {
+  ensureSpawnChatScope(input, scope);
+  return spawnWithWorkspaceScopeAgent(input, scope);
+}
+
 async function setEnabled(enabled: boolean, maxWorkers = 3): Promise<void> {
   const base = defaultConfig();
-  await saveConfig({ ...base, multiAgent: { enabled, maxWorkers } });
+  await saveConfig({ ...base, roots: [{ name: 'project', path: dir }], multiAgent: { enabled, maxWorkers } });
 }
 
 beforeAll(async () => {
@@ -126,6 +147,7 @@ beforeEach(() => {
   resetAgentsForTests();
   resetRecorderForTests();
   resetWorkspaces();
+  resetChatWorkspaceScopesForTests();
   // The real app wires the broker's immediate persistence sink during startup. MCP endpoint
   // tests exercise that production contract rather than an intentionally half-wired broker;
   // durability-specific cases below replace this no-op sink with controlled writers.
@@ -248,23 +270,20 @@ describe('spawning a run', () => {
     expect(JSON.stringify(state)).not.toContain('rootIdentities');
   });
 
-  it('lets the app preselect the next Run from approved root names and makes that selection authoritative', async () => {
+  it('uses the exact chat workspace as the fresh Run ceiling even when legacy next-Run telemetry differs', async () => {
     const base = defaultConfig();
-    await saveConfig({
-      ...base,
-      roots: [
-        { name: 'project', path: 'C:\\work\\project' },
-        { name: 'shared', path: 'C:\\work\\shared' }
-      ],
-      multiAgent: { enabled: true, maxWorkers: 3 }
-    });
+    const roots = [
+      { name: 'project', path: 'C:\\work\\project' },
+      { name: 'shared', path: 'C:\\work\\shared' }
+    ];
+    await saveConfig({ ...base, roots, multiAgent: { enabled: true, maxWorkers: 3 } });
 
     const selected = setNextRunWorkspaceScope({ primaryRoot: 'project', sharedRoots: ['shared'] });
     expect(selected).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
-    expect(swarmState().selectedWorkspaceScope).toEqual(selected);
+    setChatWorkspaceScopeForTests(PRIME_CHAT, roots, { primaryRoot: 'project', sharedRoots: [] });
 
-    spawn({ caller: prime, workers: [{ task: 'inherits user-selected run scope' }] });
-    expect(workspaceScopeForCaller(prime)).toMatchObject(selected);
+    spawnAgent({ caller: prime, workers: [{ task: 'inherits this chat scope only' }] });
+    expect(workspaceScopeForCaller(prime)).toMatchObject({ primaryRoot: 'project', sharedRoots: [] });
     expect(JSON.stringify(swarmState())).not.toContain('C:\\work');
   });
 
@@ -290,14 +309,14 @@ describe('spawning a run', () => {
     expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
   });
 
-  it('clears Prime and worker cwd when a new Run intentionally has no workspace scope', () => {
+  it('fails closed before mutation when a fresh Run has no chat workspace scope', () => {
     setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/project/src', real: 'C:\\work\\project\\src' });
 
-    spawn({ caller: prime, workers: [{ task: 'scope-less work' }] });
+    expect(() => spawnAgent({ caller: prime, workers: [{ task: 'scope-less work' }] })).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
 
-    expect(workspaceForChat(PRIME_CHAT)).toBeNull();
-    expect(workspaceEntries().find((entry) => entry.key === 'agent:prime')).toBeUndefined();
-    expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
+    expect(workspaceForChat(PRIME_CHAT)?.virtual).toBe('/project/src');
+    expect(swarmRunning()).toBe(false);
+    expect(swarmState().agents).toEqual([]);
   });
 
   it('does not fall back to an older Prime mirror when the latest Prime cwd is outside the new scope', async () => {
@@ -2078,6 +2097,7 @@ describe('restart', () => {
       critical.push(snapshot);
     });
 
+    ensureSpawnChatScope({ workers: [{ task: 'inspect topology' }], caller: prime });
     const staged = stageSpawn({ workers: [{ task: 'inspect topology' }], caller: prime });
 
     // The broker reserves the one global run while acceptance is in flight, but nothing that
@@ -2290,6 +2310,16 @@ describe('through the MCP endpoint', () => {
    * spawn impossible.
    */
   const asChat = async (conversationId: string, action: string, args: Record<string, unknown> = {}): Promise<string> => {
+    if (action === 'spawn' && !chatWorkspaceScopeView(conversationId) && getConfig().roots[0]) {
+      const roots = getConfig().roots;
+      const requested = args['workspaceScope'];
+      const first = roots[0]!;
+      setChatWorkspaceScopeForTests(
+        conversationId,
+        roots,
+        requested ?? { primaryRoot: first.name, sharedRoots: [] }
+      );
+    }
     const seq = ++evidenceSeq;
     const requestId = `wfr_agents_${seq}`;
     const pending = agentsWithRequestId(requestId, action, args);
@@ -2406,6 +2436,7 @@ describe('through the MCP endpoint', () => {
       }
     ]);
 
+    setChatWorkspaceScopeForTests('c-ahead', getConfig().roots, { primaryRoot: getConfig().roots[0]!.name, sharedRoots: [] });
     const text = await agentsWithRequestId('wfr_agents_ahead', 'spawn', { workers: [{ task: 'read the file' }] });
 
     expect(text).not.toContain('UNIDENTIFIED_CALLER');
@@ -2414,6 +2445,7 @@ describe('through the MCP endpoint', () => {
   });
 
   it('refuses a spawn whose conversation this app cannot prove, and creates nothing', async () => {
+    setManualWorkspaceScope(getConfig().roots, { primaryRoot: getConfig().roots[0]!.name, sharedRoots: [] });
     const text = await agents('spawn', { workers: [{ task: 'anything' }] });
     expect(text).toMatch(/UNIDENTIFIED_CALLER|could not/i);
     expect(swarmRunning()).toBe(false);

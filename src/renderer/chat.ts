@@ -9,7 +9,7 @@
  * rest of the renderer.
  *
  * The timeline is drawn from what the recorder actually stored. Where a value is a
- * local estimate rather than a fact — token counts above all — the UI says so, because
+ * local estimate rather than a fact โ€” token counts above all โ€” the UI says so, because
  * the whole point of this panel is to be more honest than the wall of "Called tool".
  */
 
@@ -31,6 +31,7 @@ import {
 } from '../shared/goal.js';
 import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
+import type { PendingChatWorkspaceView } from '../preload/index.js';
 import { $, clockTime, compactNumber, el, icon, run, toast, type IpcFailure } from './dom.js';
 
 const api = window.api;
@@ -70,8 +71,8 @@ const SESSION_SCROLL_MARGIN = 72;
  * Which agent's events the timeline is showing.
  *
  * `null` is everything. `UNATTRIBUTED` is its own bucket rather than being folded into
- * "all", because a call this app could not tie to any agent is a real category — with
- * ChatGPT's stateless connector it is the *default* category — and hiding it inside the
+ * "all", because a call this app could not tie to any agent is a real category โ€” with
+ * ChatGPT's stateless connector it is the *default* category โ€” and hiding it inside the
  * total would let a filtered view look complete when it is not.
  */
 const UNATTRIBUTED = '\u0000unattributed';
@@ -80,13 +81,15 @@ let agentFilter: string | null = null;
 let filterFor: string | null = null;
 
 interface Deps {
-  /** The renderer's single save path — reads every control, including ours. */
+  /** The renderer's single save path โ€” reads every control, including ours. */
   save: () => Promise<void>;
   state: () => AppState | null;
 }
 
 let deps: Deps;
 let visible = false;
+let pendingWorkspaceView: PendingChatWorkspaceView | null = null;
+const MANUAL_WORKSPACE_TARGET = '__manual__';
 
 function tr(key: MessageKey, values?: Record<string, string | number>): string {
   const locale = (deps?.state() as Partial<AppState> | null | undefined)?.config?.ui?.locale === 'th' ? 'th' : 'en';
@@ -170,8 +173,8 @@ function agentBadge(state: AgentState): Badge {
  *
  * Once resume and multi-agent mode are in use, most rows in the list are chats this app
  * opened, and they are all recorded within a minute of each other. A name alone cannot
- * separate them — which run a chat belonged to, whether its tab ever opened, whether the
- * worker in it ever joined — and that is how a user loses track of a delayed tab. The
+ * separate them โ€” which run a chat belonged to, whether its tab ever opened, whether the
+ * worker in it ever joined โ€” and that is how a user loses track of a delayed tab. The
  * first badge is durable and comes from the session itself; the second is live and comes
  * from the swarm or the compaction currently reported by the app.
  */
@@ -225,7 +228,7 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   for (const badge of sessionBadges(summary)) {
     sub.append(el('span', `chip${badge.tone ? ` ${badge.tone}` : ''}`, badge.text));
   }
-  sub.append(el('span', 'sess-bits', bits.join(' · ')));
+  sub.append(el('span', 'sess-bits', bits.join(' ยท ')));
 
   const level = pressureOf(summary.id);
   const bar = el('div', `bar${level ? ` is-${level.level}` : ''}`);
@@ -352,10 +355,10 @@ function paintSessions(): void {
   const shown = sessions.length < sessionTotal
     ? tr('sessions.retainedShown', { shown: sessions.length, total: sessionTotal })
     : retained;
-  const more = sessionPageCursor && sessions.length < sessionTotal ? ` · ${tr('sessions.scrollOlder')}` : '';
+  const more = sessionPageCursor && sessions.length < sessionTotal ? ` ยท ${tr('sessions.scrollOlder')}` : '';
   $('sessionsFoot').textContent = recording
-    ? `${shown}${more}${activeId ? ` · ${tr('sessions.oneLive')}` : ''}`
-    : `${tr('sessions.recordingOff')} · ${shown}${more}`;
+    ? `${shown}${more}${activeId ? ` ยท ${tr('sessions.oneLive')}` : ''}`
+    : `${tr('sessions.recordingOff')} ยท ${shown}${more}`;
 }
 
 function canonicalMessageKey(event: SessionEvent): string | null {
@@ -408,7 +411,7 @@ async function loadDetail(): Promise<void> {
   // label several times. `foldProgress` turns those snapshots back into the one logical row
   // their stable progressId/messageId names, then chronology places that row at its first
   // appearance. This helper existed already but was never wired into the desktop reader,
-  // which is why "Inspecting…" and "Inspected…" still appeared as siblings.
+  // which is why "Inspectingโ€ฆ" and "Inspectedโ€ฆ" still appeared as siblings.
   if (incremental) mergeDetailDelta(detail.events);
   else {
     const folded = chronological(foldProgress(detail.events));
@@ -543,7 +546,7 @@ export function renderedMessage(html: string, fallback: string): HTMLElement {
  *
  * The timeline is redrawn from scratch whenever anything is recorded, and a fresh
  * `<details>` is closed. So opening a call to read its arguments and then having ChatGPT
- * make one more MCP call — which is to say, the normal case — silently collapsed what you
+ * make one more MCP call โ€” which is to say, the normal case โ€” silently collapsed what you
  * were reading, several times a minute. Remembering the open set outside the DOM is what
  * makes a redraw invisible; the ids are the recorder's own, so they survive the rebuild.
  *
@@ -572,7 +575,7 @@ function toolBody(event: Extract<SessionEvent, { kind: 'tool_call' }>): HTMLElem
   const raw = el('div', 'raw');
   const facts = el('p', 'raw-facts');
   facts.textContent =
-    `${call.tool} · ${call.outcome} · ${Math.round(call.durationMs)} ms · ` +
+    `${call.tool} ยท ${call.outcome} ยท ${Math.round(call.durationMs)} ms ยท ` +
     `placed by ${ATTRIBUTION_LABELS[call.attribution] ?? call.attribution}`;
   raw.append(facts);
 
@@ -581,7 +584,7 @@ function toolBody(event: Extract<SessionEvent, { kind: 'tool_call' }>): HTMLElem
     for (const change of call.changes) {
       const li = el('li');
       li.append(el('code', '', change.path));
-      const counts = `+${change.added} −${change.removed}${change.approximate ? ' (approx.)' : ''}`;
+      const counts = `+${change.added} โ’${change.removed}${change.approximate ? ' (approx.)' : ''}`;
       li.append(el('span', 'metric', counts));
       changes.append(li);
     }
@@ -594,7 +597,7 @@ function toolBody(event: Extract<SessionEvent, { kind: 'tool_call' }>): HTMLElem
   raw.append(textBlock('pre', call.result.text, call.result.truncated, call.result.chars));
 
   for (const asset of call.assets ?? []) {
-    raw.append(el('p', 'raw-facts', `asset ${asset.id} · ${asset.mimeType} · ${compactNumber(asset.bytes)} bytes`));
+    raw.append(el('p', 'raw-facts', `asset ${asset.id} ยท ${asset.mimeType} ยท ${compactNumber(asset.bytes)} bytes`));
   }
 
   box.append(raw);
@@ -630,7 +633,7 @@ function eventBody(event: SessionEvent): HTMLElement {
       const line = el(
         'p',
         event.outcome === 'completed' ? 'meta' : 'meta is-warn',
-        `${tr('chat.turnOutcome', { outcome: outcomeLabel(event.outcome) })}${event.detail ? ` — ${event.detail}` : ''}`
+        `${tr('chat.turnOutcome', { outcome: outcomeLabel(event.outcome) })}${event.detail ? ` โ€” ${event.detail}` : ''}`
       );
       return line;
     }
@@ -645,7 +648,7 @@ function eventBody(event: SessionEvent): HTMLElement {
      *
      * The timeline is how the user checks what the agents actually said to each other, and
      * a run of grey "Unknown event" rows in the middle of a multi-agent session reads as a
-     * broken log — the one impression a session recorder cannot afford to give.
+     * broken log โ€” the one impression a session recorder cannot afford to give.
      */
     case 'agent_message': {
       const box = el('div', 'said');
@@ -655,7 +658,7 @@ function eventBody(event: SessionEvent): HTMLElement {
         event.delivery === 'sent'
           ? tr('chat.agentSentTitle', { from: event.from })
           : tr('chat.agentReceivedTitle', { to: event.to });
-      box.append(el('b', '', `${event.from} → ${event.to}`));
+      box.append(el('b', '', `${event.from} โ’ ${event.to}`));
       box.append(textBlock('msg', event.message.text, event.message.truncated, event.message.chars));
       return box;
     }
@@ -686,7 +689,7 @@ function eventRow(event: SessionEvent): HTMLElement {
  * The agent chips above the timeline.
  *
  * Drawn only when this session actually has more than one attribution in it, so a
- * single-agent session — which is every session unless multi-agent mode is running —
+ * single-agent session โ€” which is every session unless multi-agent mode is running โ€”
  * keeps exactly the view it had before.
  */
 function paintAgentFilter(): void {
@@ -694,7 +697,7 @@ function paintAgentFilter(): void {
   const named = [...new Set(events.flatMap((event) => (event.agent ? [event.agent] : [])))].sort();
   const anyUnattributed = events.some((event) => !event.agent);
   // A filter belongs to the session it was chosen in. Carrying it across a selection
-  // change showed the next session's timeline as empty with no chip lit to explain why —
+  // change showed the next session's timeline as empty with no chip lit to explain why โ€”
   // and agent ids repeat between runs, so it could also silently hide half of one. The
   // same guard catches an agent that simply is not in this session's events.
   if (filterFor !== selectedId) {
@@ -781,7 +784,7 @@ function paintDetail(): void {
   const shown = windowed.shown;
 
   // The scroller is the card body, not the list: a live session appends to the bottom,
-  // so stay pinned there unless the user has scrolled up to read something — and if they
+  // so stay pinned there unless the user has scrolled up to read something โ€” and if they
   // have, put them back exactly where they were instead of letting the rebuild jump.
   const pane = $('chatBody');
   const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 40;
@@ -825,7 +828,7 @@ function paintDetail(): void {
       facts.push(tr('chat.lastTurn', { outcome: outcomeLabel(summary.lastTurnOutcome) }));
     }
   }
-  $('chatFoot').textContent = facts.join(' · ');
+  $('chatFoot').textContent = facts.join(' ยท ');
   $('chatFoot').classList.toggle('is-warn', pressureOf(selectedId ?? '')?.level === 'huge');
 }
 
@@ -834,8 +837,8 @@ function paintDetail(): void {
 /**
  * The brief the last compaction of this session left behind.
  *
- * A record, not a control. The compaction itself happens in the ChatGPT conversation — the
- * chat writes its own brief as its final answer — so what is worth showing here is the
+ * A record, not a control. The compaction itself happens in the ChatGPT conversation โ€” the
+ * chat writes its own brief as its final answer โ€” so what is worth showing here is the
  * document that came out of it, and any warning attached to it.
  */
 function paintHandoff(): void {
@@ -926,7 +929,7 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad' } {
   if (count('failed') > 0) parts.push(tr('agents.workerFailed', { count: count('failed') }));
   const live = count('invited') + count('active') + count('detached') + count('waking');
   return {
-    text: `${workers.length === 1 ? tr('agents.workerOne') : tr('agents.workerMany', { count: workers.length })} · ${parts.join(' · ')}`,
+    text: `${workers.length === 1 ? tr('agents.workerOne') : tr('agents.workerMany', { count: workers.length })} ยท ${parts.join(' ยท ')}`,
     tone: count('failed') > 0 ? 'is-bad' : live > 0 ? 'is-live' : ''
   };
 }
@@ -996,7 +999,7 @@ function paintSwarm(state: SwarmState): void {
         const sub = el('div', 'model-sub');
         const bits = [tr('agents.pending', { count: agent.pending }), tr('agents.delivered', { count: agent.delivered })];
         if (agent.conversationId) bits.push(tr('agents.chatBound'));
-        sub.textContent = bits.join(' · ');
+        sub.textContent = bits.join(' ยท ');
         row.append(top, sub);
         if (agent.workspaceScope) {
           row.append(el('p', 'agent-scope', `${tr('agents.effectiveScope')}: ${scopeLabel(agent.workspaceScope)}`));
@@ -1016,9 +1019,78 @@ function paintSwarm(state: SwarmState): void {
 }
 
 function scopeLabel(scope: { primaryRoot: string; sharedRoots: string[] }): string {
-  return [`/${scope.primaryRoot}`, ...scope.sharedRoots.map((name) => `/${name}`)].join(' · ');
+  return [`/${scope.primaryRoot}`, ...scope.sharedRoots.map((name) => `/${name}`)].join(' ยท ');
 }
 
+function pendingWorkspaceSelection(): { target: string; primaryRoot: string; sharedRoots: string[] } | null {
+  const target = $<HTMLSelectElement>('pendingWorkspaceChat').value;
+  const primaryRoot = $<HTMLSelectElement>('pendingWorkspacePrimary').value;
+  if (!target || !primaryRoot) return null;
+  const sharedRoots = [...$('pendingWorkspaceShared').querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+    .map((input) => input.value)
+    .filter((name) => name !== primaryRoot);
+  return { target, primaryRoot, sharedRoots };
+}
+
+function paintPendingWorkspace(view: PendingChatWorkspaceView, preferredPrimary?: string): void {
+  pendingWorkspaceView = view;
+  const box = $('chatWorkspaceFallback');
+  const manualVisible = view.manual.pending || view.manual.scope !== null;
+  box.hidden = view.pending.length === 0 && !manualVisible;
+  if (box.hidden) return;
+
+  const chat = $<HTMLSelectElement>('pendingWorkspaceChat');
+  const priorChat = chat.value;
+  const choices = [
+    ...view.pending.map(({ conversationId }) => ({ value: conversationId, label: conversationId })),
+    ...(manualVisible ? [{ value: MANUAL_WORKSPACE_TARGET, label: tr('workspaceFallback.withoutExtension') }] : [])
+  ];
+  chat.replaceChildren(
+    ...choices.map((choice) => {
+      const option = document.createElement('option');
+      option.value = choice.value;
+      option.textContent = choice.label;
+      return option;
+    })
+  );
+  chat.value = choices.some((choice) => choice.value === priorChat) ? priorChat : choices[0]!.value;
+
+  const selectedScope = chat.value === MANUAL_WORKSPACE_TARGET ? view.manual.scope : null;
+  const primary = $<HTMLSelectElement>('pendingWorkspacePrimary');
+  const priorPrimary = preferredPrimary ?? selectedScope?.primaryRoot ?? primary.value;
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = tr('agents.choosePrimaryFolder');
+  primary.replaceChildren(
+    placeholder,
+    ...view.roots.map((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = `/${name}`;
+      return option;
+    })
+  );
+  primary.value = view.roots.includes(priorPrimary) ? priorPrimary : '';
+
+  $('pendingWorkspaceShared').replaceChildren(
+    ...view.roots
+      .filter((name) => name !== primary.value)
+      .map((name) => {
+        const label = el('label', 'run-shared-root');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = name;
+        input.checked = selectedScope?.sharedRoots.includes(name) ?? false;
+        label.append(input, el('span', '', `/${name}`));
+        return label;
+      })
+  );
+  $<HTMLButtonElement>('pendingWorkspaceSave').disabled = !primary.value;
+}
+async function refreshPendingWorkspace(): Promise<void> {
+  const view = await run(api.getPendingChatWorkspaces());
+  if (view) paintPendingWorkspace(view);
+}
 function runSelectionFromControls(): { primaryRoot: string; sharedRoots: string[] } | null {
   const primaryRoot = $<HTMLSelectElement>('runPrimaryRoot').value;
   if (!primaryRoot) return null;
@@ -1040,7 +1112,7 @@ function paintRunWorkspace(state: SwarmState): void {
   chip.textContent = active && state.runId ? tr('agents.runId', { id: state.runId.slice(0, 8) }) : '';
   $('runWorkspaceSummary').textContent = active
     ? scope
-      ? `${tr('agents.primaryFolder')}: /${scope.primaryRoot} · ${tr('agents.sharedFolders')}: ${scope.sharedRoots.length > 0 ? scope.sharedRoots.map((name) => `/${name}`).join(', ') : tr('agents.noneSelected')}`
+      ? `${tr('agents.primaryFolder')}: /${scope.primaryRoot} ยท ${tr('agents.sharedFolders')}: ${scope.sharedRoots.length > 0 ? scope.sharedRoots.map((name) => `/${name}`).join(', ') : tr('agents.noneSelected')}`
       : tr('agents.noWorkspaceScope')
     : scope
       ? tr('agents.nextRunScope', { scope: scopeLabel(scope) })
@@ -1112,13 +1184,13 @@ function paintCommandSandbox(state: AppState): void {
 /**
  * The meter's red line, derived from the one threshold the user actually sets.
  *
- * There used to be three numbers for one quantity — "suggest at", "urgent at" and
- * "compact at" — all measured in the same local estimate and all editable apart. That is
+ * There used to be three numbers for one quantity โ€” "suggest at", "urgent at" and
+ * "compact at" โ€” all measured in the same local estimate and all editable apart. That is
  * three ways to describe one line, and they drifted: a meter could sit red for an hour on
  * a chat whose automatic trigger was set far higher, or fill only halfway on the turn that
  * compaction actually fired. The threshold is now the amber line by definition, and the red
  * line sits a third further on, which is the relation the app's own defaults have always
- * carried (300k → 400k when the threshold was 300k; 400k → 533k now).
+ * carried (300k โ’ 400k when the threshold was 300k; 400k โ’ 533k now).
  */
 function urgentFrom(threshold: number): number {
   return Math.min(4_000_000, Math.max(10_000, Math.round((threshold * 4) / 3)));
@@ -1195,7 +1267,7 @@ function releasedOn(created: number): string {
  * Loads the next twenty models, newest first.
  *
  * Paged rather than fetched whole because the catalogue is several hundred entries long and
- * the question this list answers — what is new — is answered by the first screen of it.
+ * the question this list answers โ€” what is new โ€” is answered by the first screen of it.
  */
 async function loadGoalModels(reset: boolean): Promise<void> {
   if (goalLoading) return;
@@ -1224,7 +1296,7 @@ function paintGoalModels(): void {
   const list = $('goalModelList');
   // Emptying an element scrolls it back to the top, and this repaints the whole list every
   // time a page lands. Without holding the offset, paging in the next twenty threw the
-  // reader back to the newest model — which is the one place they had already decided
+  // reader back to the newest model โ€” which is the one place they had already decided
   // against by scrolling away from it.
   const keep = list.scrollTop;
   list.textContent = '';
@@ -1236,8 +1308,8 @@ function paintGoalModels(): void {
     row.append(el('b', 'goal-model-name', model.name));
     const meta = [releasedOn(model.created), model.contextLength > 0 ? `${compactNumber(model.contextLength)} ctx` : '']
       .filter(Boolean)
-      .join(' · ');
-    row.append(el('em', 'goal-model-meta', `${model.id} · ${meta}`));
+      .join(' ยท ');
+    row.append(el('em', 'goal-model-meta', `${model.id} ยท ${meta}`));
     list.append(row);
   }
   const shown = goalModels.length;
@@ -1302,7 +1374,7 @@ function applyGoal(state: AppState, previous?: Config): void {
     previous?.goal.objectivePrompt
   );
   // The one sentence somebody switching this on needs, and the exact words the extension
-  // shows under the same switch — two places saying the same thing differently is how a
+  // shows under the same switch โ€” two places saying the same thing differently is how a
   // missing key turns into a support question.
   $('goalHint').textContent = !config.sessions.record
     ? tr('goal.recordFirst')
@@ -1314,7 +1386,7 @@ function applyGoal(state: AppState, previous?: Config): void {
   $('goalHint').classList.toggle('is-warn', !config.sessions.record || !state.hasGoalKey);
   $('goalModelName').textContent = config.goal.model;
   const goalKey = $<HTMLInputElement>('goalKey');
-  goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-…';
+  goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-โ€ฆ';
   goalKey.disabled = !secureStorageAvailable;
   $('goalKeyState').textContent = !secureStorageAvailable
     ? (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
@@ -1418,7 +1490,7 @@ function applyAutoCompactHint(config: Config): void {
  * A field that is not here does not save: it keeps what was typed until the next repaint
  * and then quietly reverts. `autoCompactTokens` was missing, which made the one number the
  * automatic trigger fires on the one control in the app that never kept what you typed.
- * `sessRecord` is deliberately absent — it lives in the Home permission list now, with
+ * `sessRecord` is deliberately absent โ€” it lives in the Home permission list now, with
  * every other switch that decides what ChatGPT can reach, and saves from there.
  */
 const CHAT_INPUTS = [
@@ -1483,7 +1555,7 @@ export function chatVisible(next: boolean): void {
 }
 
 async function refreshAll(): Promise<void> {
-  await loadSessions();
+  await Promise.all([loadSessions(), refreshPendingWorkspace()]);
   const swarmNow = await run(api.getSwarm());
   if (swarmNow) paintSwarm(swarmNow);
 }
@@ -1515,7 +1587,7 @@ function showView(name: string): void {
   $('chatSettingsBtn').classList.toggle('is-on', name === 'settings');
 }
 
-/** Timeline or Compaction — whichever the gear was opened over. */
+/** Timeline or Compaction โ€” whichever the gear was opened over. */
 let lastContentView = 'timeline';
 
 /** The gear toggles: pressing it again returns to the view the user came from. */
@@ -1574,6 +1646,28 @@ export function initChat(next: Deps): void {
     }
   });
 
+  $('pendingWorkspacePrimary').addEventListener('change', () => {
+    if (!pendingWorkspaceView) return;
+    paintPendingWorkspace(pendingWorkspaceView, $<HTMLSelectElement>('pendingWorkspacePrimary').value);
+  });
+
+  $('pendingWorkspaceSave').addEventListener('click', async () => {
+    const selection = pendingWorkspaceSelection();
+    if (!selection) return;
+    const button = $<HTMLButtonElement>('pendingWorkspaceSave');
+    button.disabled = true;
+    try {
+      const scope = { primaryRoot: selection.primaryRoot, sharedRoots: selection.sharedRoots };
+      const next = await run(
+        selection.target === MANUAL_WORKSPACE_TARGET
+          ? api.setManualChatWorkspace(scope)
+          : api.setPendingChatWorkspace(selection.target, scope)
+      );
+      if (next) paintPendingWorkspace(next);
+    } finally {
+      if (pendingWorkspaceView && (pendingWorkspaceView.pending.length > 0 || pendingWorkspaceView.manual.pending || pendingWorkspaceView.manual.scope !== null)) button.disabled = false;
+    }
+  });
   $('runPrimaryRoot').addEventListener('change', async () => {
     const state = swarm;
     if (!state || state.running) return;
@@ -1617,9 +1711,9 @@ export function initChat(next: Deps): void {
     paintSwarm(outcome.swarm);
     toast(
       outcome.cleared === 'run'
-        ? 'Run cleared — every worker ended'
+        ? 'Run cleared โ€” every worker ended'
         : outcome.cleared === 'worker'
-          ? `${id} cleared — its slot is free`
+          ? `${id} cleared โ€” its slot is free`
           : outcome.reason
     );
   });
@@ -1640,5 +1734,6 @@ export function initChat(next: Deps): void {
   });
 
   api.onSessionChanged(scheduleReload);
+  api.onPendingChatWorkspacesChanged(paintPendingWorkspace);
   api.onSwarmChanged(paintSwarm);
 }

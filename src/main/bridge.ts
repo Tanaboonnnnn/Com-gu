@@ -17,7 +17,8 @@
  *
  * It is deliberately not a general control API. It accepts observations about a
  * ChatGPT conversation and hands back activity summaries and queued commands. It
- * cannot read a file, run anything, or change a permission.
+ * cannot read a file or run anything. The one authority mutation it exposes is the
+ * explicit per-chat workspace picker: it can bind only roots already approved in Desktop.
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -114,6 +115,8 @@ import { APP_VERSION, BRIDGE_PROTOCOL } from './version.js';
 import { requestCorrelation } from './session/correlation.js';
 import { bindAgentWorkspace } from './workspace.js';
 import { MAX_GOAL_OBJECTIVE_CHARS } from '../shared/goal.js';
+import { chatWorkspaceScopeView, setChatWorkspaceScope } from './chat-workspace-scope.js';
+import { WorkspaceScopeError } from './run/scope.js';
 
 /** Fixed candidates so the extension can find the app without being told a port. */
 export const DEFAULT_PORTS = [8765, 8766, 8767, 8768, 8769];
@@ -1273,6 +1276,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         entries: [],
         stream: [],
         userAnchors: [],
+        workspace: {
+          roots: getConfig().roots.map((root) => root.name),
+          selected: chatWorkspaceScopeView(id)
+        },
         nextSince: Number.isFinite(since) ? Math.max(0, since) : 0,
         job: null,
         ...(workerBlocked
@@ -1466,6 +1473,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         // it to fold that message away. Read off the session record rather than remembered
         // in the tab, so it still holds after a reload, days later.
         bootstrap: summary?.origin?.kind ?? null,
+        workspace: {
+          roots: getConfig().roots.map((root) => root.name),
+          selected: chatWorkspaceScopeView(id)
+        },
         entries,
         stream,
         userAnchors,
@@ -1971,6 +1982,58 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       { context: contextView(), goal: { enabled: next.goal.enabled, hasKey: await goalKeyPresent(), model: next.goal.model } },
       origin
     );
+  }
+
+  /**
+   * The workspace picker rendered beside ChatGPT's composer.
+   *
+   * The extension sees approved root names only. Native paths stay in the main process, and
+   * a write can bind only names already present in Config.roots.
+   */
+  if (route === '/workspace' && req.method === 'GET') {
+    const rawId = url.searchParams.get('conversationId');
+    const id = rawId === null ? null : conversationId(rawId);
+    if (rawId !== null && !id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    return json(
+      res,
+      200,
+      {
+        roots: getConfig().roots.map((root) => root.name),
+        selected: id ? chatWorkspaceScopeView(id) : null
+      },
+      origin
+    );
+  }
+
+  if (route === '/workspace' && req.method === 'POST') {
+    let body: Record<string, unknown>;
+    try {
+      body = (await readBody(req)) as Record<string, unknown>;
+    } catch (err) {
+      if ((err as Error).message === 'body_too_large') return tooLarge(res, origin);
+      return json(res, 400, { error: 'bad_request' }, origin);
+    }
+    const id = conversationId(body['conversationId']);
+    if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
+    try {
+      const selected = await setChatWorkspaceScope(id, getConfig().roots, {
+        primaryRoot: body['primaryRoot'],
+        sharedRoots: body['sharedRoots']
+      });
+      changed();
+      logInfo(`bridge: workspace selected for conversation ${id}`);
+      return json(
+        res,
+        200,
+        { roots: getConfig().roots.map((root) => root.name), selected },
+        origin
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceScopeError) {
+        return json(res, 400, { error: 'workspace_scope_invalid', code: error.code, message: error.message }, origin);
+      }
+      throw error;
+    }
   }
 
   // The targeted-open path: one page, opened by the app, redeeming the one command the

@@ -60,7 +60,7 @@ Linux AppImage ใช้ static launcher ของ electron-builder; ถ้า�
 4. ใน ChatGPT เปิด Developer mode แล้วเพิ่ม **ComGu Core**; บน Windows เพิ่ม **ComGu Desktop** ถ้าจะใช้ screen/input/clipboard
 5. ใน ComGu กด **Open extension folder** แล้วไป `chrome://extensions`
 6. เปิด Developer mode → **Load unpacked** → เลือกโฟลเดอร์ extension ที่ ComGu เปิดให้
-7. Reload extension หลังอัปเดต ComGu ทุกครั้งเพื่อให้ app/extension version ตรงกัน
+7. หลังอัปเดต ComGu ตัวแอปจะ sync extension folder และ extension จะ reload ตัวเองเมื่อไฟล์รุ่นใหม่พร้อม; ถ้าต้องการบังคับซ่อมเองใช้ **Reload extension** ใน popup
 
 ## MCP surfaces
 
