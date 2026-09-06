@@ -4,6 +4,65 @@ import { openRootSearchEngine, routesForMode } from '../src/main/zvec-search/eng
 import { smartSearchStoragePaths } from '../src/main/zvec-search/paths.js';
 
 describe('smart-search root engine', () => {
+  it('ignores ambient remote zvec configuration and passes only explicit local embedding options', async () => {
+    const prior = {
+      embedding: process.env.ZVEC_GREP_EMBEDDING,
+      apiKey: process.env.ZVEC_GREP_API_KEY,
+      endpoint: process.env.ZVEC_GREP_ENDPOINT
+    };
+    process.env.ZVEC_GREP_EMBEDDING = 'qwen/qwen3.7-text-embedding';
+    process.env.ZVEC_GREP_API_KEY = 'must-not-be-used';
+    process.env.ZVEC_GREP_ENDPOINT = 'https://example.invalid';
+    try {
+      const storage = smartSearchStoragePaths(path.join('C:', 'userData'));
+      const received: Record<string, unknown>[] = [];
+      const createService = vi.fn(async (options: Record<string, unknown>) => {
+        received.push(options);
+        return {
+          info: vi.fn(async () => ({ indexed: true })),
+          index: vi.fn(async () => ({})),
+          context: vi.fn(async () => ({ items: [] })),
+          close: vi.fn(async () => undefined)
+        };
+      });
+      const canonicalRoot = path.resolve('D:\\work\\repo');
+      const engine = await openRootSearchEngine({
+        root: { name: 'repo', path: canonicalRoot },
+        canonicalRoot,
+        storage,
+        embedding: 'local/potion-code-16m-v2',
+        createService
+      });
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ embedding: 'local/potion-code-16m-v2' });
+      expect(received[0]).not.toHaveProperty('apiKey');
+      expect(received[0]).not.toHaveProperty('endpoint');
+      await engine.close();
+    } finally {
+      if (prior.embedding === undefined) delete process.env.ZVEC_GREP_EMBEDDING;
+      else process.env.ZVEC_GREP_EMBEDDING = prior.embedding;
+      if (prior.apiKey === undefined) delete process.env.ZVEC_GREP_API_KEY;
+      else process.env.ZVEC_GREP_API_KEY = prior.apiKey;
+      if (prior.endpoint === undefined) delete process.env.ZVEC_GREP_ENDPOINT;
+      else process.env.ZVEC_GREP_ENDPOINT = prior.endpoint;
+    }
+  });
+
+  it('refuses a non-local embedding before opening any zvec service', async () => {
+    const createService = vi.fn();
+    const canonicalRoot = path.resolve('D:\\work\\repo');
+    await expect(
+      openRootSearchEngine({
+        root: { name: 'repo', path: canonicalRoot },
+        canonicalRoot,
+        storage: smartSearchStoragePaths(path.join('C:', 'userData')),
+        embedding: 'openai/text-embedding-3-small',
+        createService
+      })
+    ).rejects.toThrow(/local embedding/i);
+    expect(createService).not.toHaveBeenCalled();
+  });
+
   it('opens a local-only service and indexes the approved canonical root once when missing', async () => {
     const storage = smartSearchStoragePaths(path.join('C:', 'userData'));
     const createOptions: Record<string, unknown>[] = [];

@@ -65,6 +65,9 @@ function lineRange(item: ZvecContextItemLike): { startLine: number; endLine: num
 
 export async function openRootSearchEngine(options: RootSearchEngineOptions): Promise<RootSearchEngine> {
   const { root, canonicalRoot, storage, embedding } = options;
+  if (!embedding.startsWith('local/')) {
+    throw new Error('Smart Search requires an explicit local embedding model.');
+  }
   const indexPaths = rootIndexPaths(storage, root, canonicalRoot);
   await Promise.all([
     mkdir(storage.models, { recursive: true }),
