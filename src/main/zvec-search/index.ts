@@ -2,8 +2,8 @@ import { createSmartSearchManager, type SmartSearchManager, type SmartSearchMana
 import { smartSearchStoragePaths } from './paths.js';
 import type { SmartSearchProvider } from './types.js';
 
-// Measured winner of the frozen 10-Thai/10-English retrieval gate documented under
-// docs/performance/2026-09-06-zvec-search-model-benchmark.md.
+// Candidate frozen only for implementation until the bilingual benchmark task compares it with
+// the multilingual model. Task 11 updates this constant to the measured winner before release.
 export const DEFAULT_SMART_SEARCH_EMBEDDING = 'local/potion-code-16m-v2';
 
 interface InitSmartSearchOptions {
