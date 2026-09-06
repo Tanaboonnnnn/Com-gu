@@ -450,7 +450,16 @@ describe('cross-platform packaging targets', () => {
     const packagedRuntime = readFileSync(path.join(root, 'scripts', 'smoke-packaged-runtime.mjs'), 'utf8');
 
     expect(pkg.dependencies['@microsoft/mxc-sdk']).toBe('0.8.0');
-    expect(builder.asarUnpack).toContain('**/node_modules/@microsoft/mxc-sdk/**');
+    expect(builder.files).toContain('!node_modules/@microsoft/mxc-sdk/**/*');
+    expect(builder.asarUnpack).toContain('**/node_modules/@microsoft/mxc-sdk/bin/**');
+    expect(builder.win.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: 'resources/packaging/native/win32/${arch}/node_modules',
+          to: 'node_modules'
+        })
+      ])
+    );
     expect(packagedRuntime).toContain("@microsoft/mxc-sdk/bin/${targetArch}/wxc-exec.exe");
     expect(packagedRuntime).toContain("@microsoft/mxc-sdk/bin/${targetArch}/wxc-host-prep.exe");
   });

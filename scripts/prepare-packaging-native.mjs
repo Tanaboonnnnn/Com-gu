@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nativePrebuildDir, parseTarget, sharpPackagesFor, tarExecutableForPlatform } from './packaging-targets.mjs';
@@ -21,6 +21,35 @@ const cacheDir = path.join(root, 'node_modules', '.cache', 'packaging-native');
 const stagingRoot = path.join(root, 'resources', 'packaging', 'native');
 
 const say = (message) => process.stdout.write(`${message}\n`);
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function acquireTargetLock(platform, arch) {
+  await mkdir(cacheDir, { recursive: true });
+  const lockPath = path.join(cacheDir, `prepare-${platform}-${arch}.lock`);
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    try {
+      const handle = await open(lockPath, 'wx');
+      await handle.writeFile(`${process.pid}\n`, 'utf8');
+      await handle.close();
+      return async () => rm(lockPath, { force: true });
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      try {
+        const info = await stat(lockPath);
+        if (Date.now() - info.mtimeMs > 5 * 60_000) {
+          await rm(lockPath, { force: true });
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code !== 'ENOENT') throw statError;
+        continue;
+      }
+      await delay(100);
+    }
+  }
+  throw new Error(`Timed out waiting for native packaging preparation lock ${platform}-${arch}`);
+}
 
 function sha512FromIntegrity(integrity) {
   const match = /^sha512-([A-Za-z0-9+/=]+)$/.exec(integrity ?? '');
@@ -100,7 +129,10 @@ async function stageSharpPackage(lock, packageName, platform, arch) {
     throw new Error(`Integrity mismatch for ${packageName}@${lockEntry.version}`);
   }
 
-  const extractDir = path.join(cacheDir, `extract-${packageName.replace('@img/', '')}-${lockEntry.version}`);
+  const extractDir = path.join(
+    cacheDir,
+    `extract-${packageName.replace('@img/', '')}-${lockEntry.version}-${process.pid}`
+  );
   await rm(extractDir, { recursive: true, force: true });
   await mkdir(extractDir, { recursive: true });
   execFileSync(tarExecutableForPlatform(), ['-xzf', tarball, '-C', extractDir], { stdio: 'inherit' });
@@ -137,12 +169,59 @@ async function stageTargetPayload(platform, arch, sharpPackages) {
     await cp(path.join(root, 'node_modules', ...relative), path.join(payloadRoot, ...relative), { recursive: true });
   }
 
+  // MXC ships binaries for more than one CPU in a single npm package. ComGu's Windows
+  // command confinement resolves helpers from @microsoft/mxc-sdk/bin/<process.arch>, while
+  // the SDK itself resolves the same target directory for its native executors. Stage the
+  // package identity/license plus exactly one architecture directory; never copy the foreign
+  // CPU payload into a target package. Keeping the complete selected directory is deliberate:
+  // MXC owns helper-to-helper native dependencies inside that directory and may add one without
+  // changing ComGu's TypeScript import graph.
+  const mxcSource = path.join(root, 'node_modules', '@microsoft', 'mxc-sdk');
+  const mxcDestination = path.join(payloadRoot, '@microsoft', 'mxc-sdk');
+  await mkdir(mxcDestination, { recursive: true });
+  for (const file of ['package.json', 'LICENSE.md', 'README.md']) {
+    await copyFile(path.join(mxcSource, file), path.join(mxcDestination, file));
+  }
+  await mkdir(path.join(mxcDestination, 'bin'), { recursive: true });
+  await cp(path.join(mxcSource, 'bin', arch), path.join(mxcDestination, 'bin', arch), { recursive: true });
+  if (platform !== 'win32') {
+    for (const executable of ['lxc-exec', 'mxc-exec-mac', 'unix-test-proxy']) {
+      const candidate = path.join(mxcDestination, 'bin', arch, executable);
+      if (existsSync(candidate)) await chmod(candidate, 0o755);
+    }
+  }
+
+  // Runtime audit for tree-sitter 0.25.1 / tree-sitter-bash 0.25.1:
+  // - tree-sitter's package main is index.js, which loads the target .node through node-gyp-build.
+  // - tree-sitter-bash's package main is bindings/node/index.js, which does the same for its
+  //   grammar addon. src/node-types.json is optional metadata; parser.c, binding.cc, queries,
+  //   grammar.js and the WASM build are not reached by ComGu's native Node path.
+  // Keep package identity/license plus those two JS loaders; target prebuilds are staged below.
+  const treeRuntimeFiles = new Map([
+    ['tree-sitter', ['package.json', 'LICENSE', 'index.js']],
+    ['tree-sitter-bash', ['package.json', 'LICENSE', path.join('bindings', 'node', 'index.js')]]
+  ]);
+  for (const [dependency, files] of treeRuntimeFiles) {
+    const sourceRoot = path.join(root, 'node_modules', dependency);
+    const destinationRoot = path.join(payloadRoot, dependency);
+    for (const relative of files) {
+      const destination = path.join(destinationRoot, relative);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await copyFile(path.join(sourceRoot, relative), destination);
+    }
+  }
+
   const prebuildDir = nativePrebuildDir(platform, arch);
   for (const dependency of ['node-pty', 'tree-sitter', 'tree-sitter-bash']) {
     const source = path.join(root, 'node_modules', dependency, 'prebuilds', prebuildDir);
     const destination = path.join(payloadRoot, dependency, 'prebuilds', prebuildDir);
     await mkdir(path.dirname(destination), { recursive: true });
-    await cp(source, destination, { recursive: true });
+    await cp(source, destination, {
+      recursive: true,
+      // PDBs are compiler/debug symbols, never runtime inputs. Filter only the staged copy so
+      // development/debugging installs retain their symbols and every OS/CPU gets the same rule.
+      filter: (candidate) => dependency !== 'node-pty' || !candidate.toLowerCase().endsWith('.pdb')
+    });
   }
   // node-pty launches this helper as a process on macOS. Preserve the npm tarball's executable
   // contract explicitly instead of depending on host/filesystem copy-mode behaviour.
@@ -154,25 +233,30 @@ async function stageTargetPayload(platform, arch, sharpPackages) {
 
 async function main() {
   const { platform, arch } = parseTarget();
-  const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
-  const sharpPackages = sharpPackagesFor(platform, arch);
-  for (const packageName of sharpPackages) {
-    await stageSharpPackage(lock, packageName, platform, arch);
-  }
+  const releaseLock = await acquireTargetLock(platform, arch);
+  try {
+    const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
+    const sharpPackages = sharpPackagesFor(platform, arch);
+    for (const packageName of sharpPackages) {
+      await stageSharpPackage(lock, packageName, platform, arch);
+    }
 
-  const prebuildDir = nativePrebuildDir(platform, arch);
-  if (platform === 'win32') {
-    requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty.node`);
-    requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty_console_list.node`);
-    requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty/OpenConsole.exe`);
-  } else {
-    requirePrebuild(`node-pty/prebuilds/${prebuildDir}/pty.node`);
-    if (platform === 'darwin') requirePrebuild(`node-pty/prebuilds/${prebuildDir}/spawn-helper`);
+    const prebuildDir = nativePrebuildDir(platform, arch);
+    if (platform === 'win32') {
+      requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty.node`);
+      requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty_console_list.node`);
+      requirePrebuild(`node-pty/prebuilds/win32-${arch}/conpty/OpenConsole.exe`);
+    } else {
+      requirePrebuild(`node-pty/prebuilds/${prebuildDir}/pty.node`);
+      if (platform === 'darwin') requirePrebuild(`node-pty/prebuilds/${prebuildDir}/spawn-helper`);
+    }
+    requirePrebuild(`tree-sitter/prebuilds/${prebuildDir}/tree-sitter.node`);
+    requirePrebuild(`tree-sitter-bash/prebuilds/${prebuildDir}/tree-sitter-bash.node`);
+    await stageTargetPayload(platform, arch, sharpPackages);
+    say(`${platform}-${arch} native dependency prebuilds are ready.`);
+  } finally {
+    await releaseLock();
   }
-  requirePrebuild(`tree-sitter/prebuilds/${prebuildDir}/tree-sitter.node`);
-  requirePrebuild(`tree-sitter-bash/prebuilds/${prebuildDir}/tree-sitter-bash.node`);
-  await stageTargetPayload(platform, arch, sharpPackages);
-  say(`${platform}-${arch} native dependency prebuilds are ready.`);
 }
 
 main().catch((error) => {

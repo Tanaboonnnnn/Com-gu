@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { extractFile } from '@electron/asar';
 import { RIPGREP, TUNNEL_CLIENT } from './packaging-versions.mjs';
 import { normalizeArch, normalizePlatform, PLATFORM_INFO } from './packaging-targets.mjs';
 
@@ -65,6 +66,18 @@ function required(relative) {
   return target;
 }
 
+const appAsar = path.join(resourcesDir, 'app.asar');
+function requiredAsar(relative) {
+  try {
+    // @electron/asar expects archive-internal separators in the host platform's spelling.
+    const bytes = extractFile(appAsar, relative.split('/').join(path.sep));
+    if (!bytes || bytes.length === 0) throw new Error('empty file');
+    return bytes;
+  } catch (error) {
+    throw new Error(`Packaged ASAR is missing ${relative}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 for (const relative of [
   'app.asar',
   'LICENSE',
@@ -93,17 +106,20 @@ for (const relative of [
   'rg/COPYING',
   'rg/LICENSE-MIT',
   'rg/UNLICENSE',
-  'app.asar.unpacked/node_modules/sharp/LICENSE',
-  'app.asar.unpacked/node_modules/node-pty/LICENSE',
-  'app.asar.unpacked/node_modules/tree-sitter/LICENSE',
-  'app.asar.unpacked/node_modules/tree-sitter-bash/LICENSE',
   `app.asar.unpacked/node_modules/tree-sitter/prebuilds/${nativeDir}/tree-sitter.node`,
   `app.asar.unpacked/node_modules/tree-sitter-bash/prebuilds/${nativeDir}/tree-sitter-bash.node`
 ]) required(relative);
 
+for (const relative of [
+  'node_modules/sharp/LICENSE',
+  'node_modules/node-pty/LICENSE',
+  'node_modules/tree-sitter/LICENSE',
+  'node_modules/tree-sitter-bash/LICENSE'
+]) requiredAsar(relative);
+
 if (targetPlatform === 'win32') {
   required(`THIRD-PARTY-NOTICES-sharp-win32-${targetArch}.md`);
-  required(`app.asar.unpacked/node_modules/@img/sharp-win32-${targetArch}/LICENSE`);
+  requiredAsar(`node_modules/@img/sharp-win32-${targetArch}/LICENSE`);
   required(`app.asar.unpacked/node_modules/@microsoft/mxc-sdk/bin/${targetArch}/wxc-exec.exe`);
   required(`app.asar.unpacked/node_modules/@microsoft/mxc-sdk/bin/${targetArch}/wxc-host-prep.exe`);
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/conpty.node`);
@@ -111,7 +127,7 @@ if (targetPlatform === 'win32') {
   required(`app.asar.unpacked/node_modules/node-pty/prebuilds/${nativeDir}/conpty/OpenConsole.exe`);
 } else {
   required(`THIRD-PARTY-NOTICES-sharp-libvips-${targetPlatform}-${targetArch}.md`);
-  required(`app.asar.unpacked/node_modules/@img/sharp-${targetPlatform}-${targetArch}/LICENSE`);
+  requiredAsar(`node_modules/@img/sharp-${targetPlatform}-${targetArch}/LICENSE`);
   // The pinned sharp-libvips 1.3.2 npm packages declare LGPL-3.0-or-later in package.json
   // but do not ship a LICENSE file. Require the metadata + version manifest they actually
   // publish instead of making every macOS/Linux smoke test fail on an invented file.
