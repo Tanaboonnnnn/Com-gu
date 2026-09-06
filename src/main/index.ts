@@ -8,6 +8,7 @@ import { getConfig, initConfigPath, loadConfig } from './config.js';
 import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
 import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
 import { logError, logInfo, logWarn } from './logger.js';
+import { writePerfReadyMarker } from './perf-marker.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
 import { setBrowserOpener, shutdownBridge, startBridge } from './bridge.js';
@@ -370,6 +371,9 @@ void app.whenReady().then(async () => {
   onStatusChange(refreshTray);
 
   logInfo('app started');
+  void writePerfReadyMarker(process.env).catch((error) =>
+    logError(`performance ready marker failed: ${error instanceof Error ? error.message : String(error)}`)
+  );
 
   // Policy B: learn whether an update exists once per launch, but never make startup wait
   // for GitHub and never download or launch an installer without a later explicit user action.
