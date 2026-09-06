@@ -1306,8 +1306,25 @@ var CLF_DOM = (() => {
       const sections = turnNodes(turn);
       if (sections.length === 0) return false;
       for (const section of sections) {
-        if (replaced) section.setAttribute('data-clf-turn-replaced', '1');
-        else section.removeAttribute('data-clf-turn-replaced');
+        if (replaced) {
+          section.setAttribute('data-clf-turn-replaced', '1');
+          // Recorder text can reproduce prose, but not ChatGPT-owned interaction state.
+          // Keep copy controls and generated-file links native so Overwrite never turns a
+          // usable answer into an inert transcription. Mark the smallest direct child so
+          // React keeps owning the actual button/link and its event handlers.
+          for (const control of section.querySelectorAll(
+            'button[aria-label*="copy" i], button[data-testid*="copy" i], a[download], a[href^="blob:"]'
+          )) {
+            let preserve = control;
+            while (preserve.parentElement && preserve.parentElement !== section) preserve = preserve.parentElement;
+            if (preserve.parentElement === section) preserve.setAttribute('data-clf-native-preserve', '1');
+          }
+        } else {
+          section.removeAttribute('data-clf-turn-replaced');
+          for (const node of section.querySelectorAll('[data-clf-native-preserve]')) {
+            node.removeAttribute('data-clf-native-preserve');
+          }
+        }
       }
       const embedded = Boolean(root && sections.some((section) => root.parentElement === section));
       if (replaced && root && (!root.isConnected || embedded)) {

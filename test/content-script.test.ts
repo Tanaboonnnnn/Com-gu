@@ -2779,8 +2779,25 @@ describe('the app-owned chronological stream', () => {
     expect(section.getAttribute('data-clf-turn-replaced')).toBe('1');
     expect(overwriteStream(section)?.querySelector('.clf-stream-assistant_message')?.textContent).toContain('Here is the answer.');
     expect(overwriteStream(section)?.querySelector('.clf-stream-turn_end')?.textContent).toContain('Turn completed');
+    // Native interaction affordances are not reconstructible from recorder text. Overwrite
+    // may own prose/order, but it must keep ChatGPT's copy/download controls visible and live.
+    const code = live.document.createElement('pre');
+    code.textContent = 'npm run verify';
+    const copyCode = live.document.createElement('button');
+    copyCode.setAttribute('aria-label', 'Copy code');
+    code.append(copyCode);
+    const file = live.document.createElement('a');
+    file.setAttribute('download', 'report.zip');
+    file.setAttribute('href', 'blob:https://chatgpt.com/report');
+    file.textContent = 'report.zip';
+    section.append(code, file);
+    live.hook.renderStreams();
+
     // React's original answer is deliberately still mounted underneath the replacement.
     expect(prose.textContent).toBe('Here is the answer.');
+    expect(section.getAttribute('data-clf-turn-replaced')).toBe('1');
+    expect(copyCode.closest('[data-clf-native-preserve]')).not.toBeNull();
+    expect(file.closest('[data-clf-native-preserve]')).not.toBeNull();
   });
 
   it('aligns durable app turns to visible assistant turns after a page reload even when DOM ids differ', async () => {
