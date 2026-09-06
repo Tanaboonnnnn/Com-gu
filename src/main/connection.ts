@@ -14,6 +14,7 @@ import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
 import { prewarmComputerHelper } from './computer/index.js';
 import { effectiveCapabilities, getConfig } from './config.js';
 import { logError, logInfo, logWarn } from './logger.js';
+import { writePerfMcpEndpointMarker } from './perf-marker.js';
 import { lastRequestAt, startMcpServer, tunnelProbeHeaders, type McpEndpoint } from './mcp/server.js';
 import { lastToolCallAt } from './mcp/tools.js';
 import { SURFACE_LIST, surfaceIsUseful, type SurfaceId } from './mcp/surfaces.js';
@@ -257,6 +258,9 @@ async function connectImpl(): Promise<void> {
     }
     endpoint = startedEndpoint;
     setStatus({ localUrl: endpoint.url, surfaces: describeSurfaces() });
+    void writePerfMcpEndpointMarker(process.env, endpoint.url).catch((error) =>
+      logError(`performance MCP endpoint marker failed: ${error instanceof Error ? error.message : String(error)}`)
+    );
     if (desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
     updateSurface('core', { state: 'starting', detail: 'Connecting…' });
 
