@@ -294,7 +294,9 @@ async function smokeCommandSurface(exe, root, timeoutMs) {
       const rg = assertToolOk(
         await client.callTool({
           name: 'exec_command',
-          arguments: { cmd: 'rg COMGU_PACKAGED_CORE_NEEDLE fixture.txt', workdir: '/fixture', yield_time_ms: 1000 }
+          // Packaging smoke validates the result, not Codex's short-yield session behavior.
+          // Under host load rg can legitimately outlive a 1s yield and return a live session.
+          arguments: { cmd: 'rg COMGU_PACKAGED_CORE_NEEDLE fixture.txt', workdir: '/fixture', yield_time_ms: 30000 }
         }),
         'exec_command bundled rg'
       );

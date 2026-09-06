@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 // @ts-ignore packaged smoke scripts are intentionally plain ESM JavaScript.
 import { coreSmokeConfig, expectedCoreTools } from '../scripts/smoke-packaged-core.mjs';
 
@@ -24,5 +26,10 @@ describe('packaged Core smoke configuration', () => {
     expect(config.multiAgent.enabled).toBe(false);
     expect(config.sessions.record).toBe(true);
     expect(config.tunnel.kind).toBe('manual');
+  });
+
+  it('gives the bundled rg smoke enough time to finish instead of mistaking a live session for failure', () => {
+    const source = readFileSync(fileURLToPath(new URL('../scripts/smoke-packaged-core.mjs', import.meta.url)), 'utf8');
+    expect(source).toContain("arguments: { cmd: 'rg COMGU_PACKAGED_CORE_NEEDLE fixture.txt', workdir: '/fixture', yield_time_ms: 30000 }");
   });
 });
