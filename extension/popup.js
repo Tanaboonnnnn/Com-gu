@@ -408,6 +408,15 @@ $('copyBtn').addEventListener('click', (event) => {
   void copyInto(event.currentTarget, lines.join('\n'));
 });
 
+$('reloadExtensionBtn').addEventListener('click', async () => {
+  $('reloadExtensionBtn').disabled = true;
+  try {
+    await chrome.runtime.sendMessage({ type: 'reload_extension' });
+  } catch {
+    // A successful reload tears down this popup before the promise necessarily settles.
+  }
+});
+
 $('more').addEventListener('toggle', () => paintDetails(latest.status, latest.tab));
 
 $('retryBtn').addEventListener('click', async () => {

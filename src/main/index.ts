@@ -64,6 +64,7 @@ import {
   restoreChatWorkspaceScopes,
   type ChatWorkspaceScopesSnapshot
 } from './chat-workspace-scope.js';
+import { extensionDir } from './extension-path.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -256,6 +257,13 @@ void app.whenReady().then(async () => {
   initDurableStore(userData);
   await loadConfig();
   if (windowActivation.isDisabled()) return;
+  // Keep Chrome's stable unpacked folder synchronized with the installed ComGu release before
+  // the bridge can tell an older running service worker which app version it is talking to.
+  // The extension itself verifies the on-disk manifest before reloading, so a failed copy cannot
+  // turn an app/extension mismatch into a reload loop.
+  if (app.isPackaged && !extensionDir()) {
+    logWarn('packaged extension could not be refreshed; keeping any last-known-good copy');
+  }
   // The renderer has its own explicit light/dark palette, so native chrome must follow the same
   // user choice instead of Electron's default `system` theme. On macOS this controls the window
   // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.

@@ -123,6 +123,36 @@ let portCompatible = null;
 let appVersion = null;
 let appProtocol = null;
 const PORT_TRUST_MS = 30_000;
+let extensionReloadScheduled = false;
+
+async function syncExtensionToAppVersion(version) {
+  const wanted = typeof version === 'string' ? version.trim() : '';
+  if (!wanted || extensionReloadScheduled) return false;
+  let running = '';
+  try {
+    running = String(chrome.runtime.getManifest().version || '');
+  } catch {
+    return false;
+  }
+  if (!running || running === wanted) return false;
+
+  // The app refreshes the unpacked extension directory transactionally before the bridge starts.
+  // Confirm that Chrome's on-disk source already contains that exact release before restarting
+  // this worker; otherwise a damaged/failed materialization could produce a reload loop.
+  try {
+    const manifestUrl = chrome.runtime.getURL('manifest.json');
+    const response = await fetchBounded(manifestUrl, { cache: 'no-store' }, HELLO_TIMEOUT_MS);
+    if (!response.ok) return false;
+    const disk = await response.json();
+    if (!disk || String(disk.version || '') !== wanted) return false;
+  } catch {
+    return false;
+  }
+
+  extensionReloadScheduled = true;
+  setTimeout(() => chrome.runtime.reload(), 0);
+  return true;
+}
 
 /**
  * Observations accepted from content scripts but not yet accepted by the app.
@@ -862,6 +892,7 @@ async function discover(force = false) {
       portCompatible = body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
       appVersion = typeof body.version === 'string' ? body.version : null;
       appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
+      await syncExtensionToAppVersion(appVersion);
       return { port, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
     }
   }
@@ -874,6 +905,7 @@ async function discover(force = false) {
       portCompatible = body.compatible !== false && body.bridge === BRIDGE_PROTOCOL;
       appVersion = typeof body.version === 'string' ? body.version : null;
       appProtocol = Number.isFinite(Number(body.bridge)) ? Number(body.bridge) : null;
+      await syncExtensionToAppVersion(appVersion);
       await persist();
       return { port: candidate, paired: body.paired === true, compatible: portCompatible, version: appVersion, bridge: appProtocol };
     }
@@ -1653,6 +1685,10 @@ function serializeTab(tab, operation) {
 }
 
 const HANDLERS = {
+  async reload_extension() {
+    setTimeout(() => chrome.runtime.reload(), 0);
+    return { ok: true };
+  },
   async register_document(_message, sender) {
     const result = await registerDocument(sender, _message);
     if (result && result.ok === true) void recoverDeferredRevivals().catch(() => undefined);

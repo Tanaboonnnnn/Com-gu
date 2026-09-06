@@ -187,6 +187,17 @@ describe('extension release metadata', () => {
     expect(backgroundSource).toContain('async overwriteNow()');
     expect(backgroundSource).toContain("chrome.tabs.sendMessage(id, { type: 'clf-overwrite-now' })");
   });
+
+  it('exposes a manual extension reload control in the popup', async () => {
+    const dir = path.join(process.cwd(), 'extension');
+    const [html, popup] = await Promise.all([
+      fs.readFile(path.join(dir, 'popup.html'), 'utf8'),
+      fs.readFile(path.join(dir, 'popup.js'), 'utf8')
+    ]);
+    expect(html).toContain('id="reloadExtensionBtn"');
+    expect(html).toContain('data-i18n="popup.reloadExtension"');
+    expect(popup).toContain("type: 'reload_extension'");
+  });
 });
 
 // ---------------------------------------------------------------------- DOM
@@ -488,6 +499,7 @@ interface WorkerHarness {
   scriptingInsertCSS: ReturnType<typeof vi.fn>;
   alarmCreate: ReturnType<typeof vi.fn>;
   alarmClear: ReturnType<typeof vi.fn>;
+  runtimeReload: ReturnType<typeof vi.fn>;
 }
 
 function response(status: number, data: unknown) {
@@ -512,6 +524,8 @@ function loadWorker(options: {
   tabsGet?: (tabId: number) => Promise<{ id?: number; url?: string; pendingUrl?: string; status?: string }>;
   tabsQuery?: () => Promise<Array<{ id?: number; windowId?: number; url?: string; pendingUrl?: string }>>;
   tabsSendMessage?: (tabId: number, message: Record<string, unknown>) => Promise<unknown>;
+  extensionVersion?: string;
+  diskExtensionVersion?: string;
 }): WorkerHarness {
   let listener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
@@ -528,6 +542,7 @@ function loadWorker(options: {
   const alarmCreate = vi.fn(() => undefined);
   const alarmClear = vi.fn(async () => true);
   const windowsUpdate = vi.fn(async () => ({ id: 7 }));
+  const runtimeReload = vi.fn(() => undefined);
   const documentNumbers = new Map<number, number>();
   const currentDocuments = new Map<number, string>();
   const documentFor = (tabId: number): string => {
@@ -542,7 +557,9 @@ function loadWorker(options: {
   const chrome = {
     storage: { local: options.local, session: options.session },
     runtime: {
-      getManifest: () => ({ version: '1.6.0' }),
+      getManifest: () => ({ version: options.extensionVersion ?? '1.6.0' }),
+      getURL: (name: string) => `chrome-extension://comgu/${name}`,
+      reload: runtimeReload,
       onMessage: {
         addListener(fn: typeof listener) {
           listener = fn;
@@ -591,7 +608,12 @@ function loadWorker(options: {
       }
     }
   };
-  const fetch = options.fetch ?? (async () => response(503, {}));
+  const fetch = options.fetch ?? (async (input: string) => {
+    if (input === 'chrome-extension://comgu/manifest.json' && options.diskExtensionVersion) {
+      return response(200, { version: options.diskExtensionVersion });
+    }
+    return response(503, {});
+  });
   vm.runInNewContext(backgroundSource, {
     chrome,
     fetch,
@@ -616,6 +638,7 @@ function loadWorker(options: {
     scriptingInsertCSS,
     alarmCreate,
     alarmClear,
+    runtimeReload,
     async installed(reason = 'update') {
       for (const fn of installedListeners) fn({ reason });
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -696,6 +719,57 @@ function journalOf(session: FakeStorageArea): any[] {
   const value = session.data.journal;
   return Array.isArray(value) ? value : [];
 }
+
+describe('extension/app version synchronization', () => {
+  it('reloads itself when the app is newer and the on-disk extension already matches it', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.protocol === 'chrome-extension:') return response(200, { version: '3.1.2' });
+      if (url.pathname === '/hello') {
+        return response(200, { app: 'chat-on-steroids', paired: true, version: '3.1.2' });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({
+      local: new FakeStorageArea({ port: 8765, token: 'paired-token' }),
+      session: new FakeStorageArea(),
+      fetch,
+      extensionVersion: '3.1.1'
+    });
+
+    await worker.send({ type: 'status' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(worker.runtimeReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reload-loop when the app is newer but the materialized extension is still stale', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.protocol === 'chrome-extension:') return response(200, { version: '3.1.1' });
+      if (url.pathname === '/hello') {
+        return response(200, { app: 'chat-on-steroids', paired: true, version: '3.1.2' });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({
+      local: new FakeStorageArea({ port: 8765, token: 'paired-token' }),
+      session: new FakeStorageArea(),
+      fetch,
+      extensionVersion: '3.1.1'
+    });
+
+    await worker.send({ type: 'status' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(worker.runtimeReload).not.toHaveBeenCalled();
+  });
+
+  it('allows the popup to request an explicit reload', async () => {
+    const worker = loadWorker({ local: new FakeStorageArea(), session: new FakeStorageArea() });
+    expect(await worker.send({ type: 'reload_extension' })).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(worker.runtimeReload).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('worker settings authority', () => {
   const paired = { port: 8765, token: 'paired-token' };
