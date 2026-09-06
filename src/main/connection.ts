@@ -152,6 +152,7 @@ function toolsFor(id: SurfaceId): string[] {
   if (caps.read || caps.browse || caps.metadata) tools.push('read');
   if (caps.read) tools.push('view_image');
   if (!caps.command && caps.search) tools.push('find');
+  if (caps.search) tools.push('search');
   if (caps.create || caps.edit || caps.move || caps.deleteFile) tools.push('apply_patch');
   if (caps.command) tools.push('exec_command', 'write_stdin');
   if (config.sessions.record) tools.push('session');

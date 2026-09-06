@@ -533,7 +533,7 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
  */
 export const CAPABILITY_DETAILS: Record<Capability, string> = {
   browse: 'List what is inside an approved folder.',
-  search: 'Find files by name or glob, and text inside them.',
+  search: 'Find exact text and discover related code or documents by meaning.',
   read: 'Read text in ranges, and open local images into vision.',
   metadata: 'Size, dates and line count, without the contents.',
   create: 'Add new files, and the folders they need.',
@@ -557,7 +557,7 @@ export const CAPABILITY_DETAILS: Record<Capability, string> = {
  */
 export const CAPABILITY_TOOLS: Record<Capability, readonly string[]> = {
   browse: ['read'],
-  search: ['read', 'find'],
+  search: ['read', 'find', 'search'],
   read: ['read', 'view_image'],
   metadata: ['read'],
   create: ['apply_patch'],

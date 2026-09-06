@@ -145,6 +145,12 @@ import {
   type ToolResult
 } from './kernel.js';
 import { registerSessionTool as registerSessionSearchReadTool } from './session-tool.js';
+import {
+  SMART_SEARCH_MAX_LIMIT,
+  SMART_SEARCH_MODES,
+  type SmartSearchScope
+} from '../zvec-search/types.js';
+import { formatSmartSearchResponse } from '../zvec-search/format.js';
 
 /** Entries one `read` of a directory returns before it says it stopped. */
 const MAX_DIR_ENTRIES = 200;
@@ -183,6 +189,41 @@ const MAX_READ_TARGETS = 40;
 const GLOB_SCAN_LIMIT = 5_000;
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+
+const smartSearchSchema = z
+  .object({
+    query: z.string().min(1).max(2000),
+    path: pathArg.optional(),
+    mode: z.enum(SMART_SEARCH_MODES).optional(),
+    include: z.array(z.string().min(1).max(300)).max(20).optional(),
+    file_types: z.array(z.string().min(1).max(40)).max(20).optional(),
+    limit: z.number().int().min(1).max(SMART_SEARCH_MAX_LIMIT).optional()
+  })
+  .strict();
+
+async function smartSearchScopes(roots: readonly Root[], requested?: string): Promise<SmartSearchScope[]> {
+  const inputs = requested === undefined ? roots.map((root) => `/${root.name}`) : [requested];
+  const scopes: SmartSearchScope[] = [];
+  for (const input of inputs) {
+    const resolved = await resolveIn(roots, input);
+    const stat = await fs.stat(resolved.real);
+    const root = roots.find(
+      (candidate) =>
+        resolved.virtual === `/${candidate.name}` || resolved.virtual.startsWith(`/${candidate.name}/`)
+    );
+    if (!root) throw new SandboxError('Smart Search path did not resolve to an effective root.');
+    if (!stat.isFile() && !stat.isDirectory()) {
+      throw new SandboxError('Smart Search path must be a regular file or folder.');
+    }
+    scopes.push({
+      root,
+      realPath: resolved.real,
+      virtualPath: resolved.virtual,
+      kind: stat.isFile() ? 'file' : 'directory'
+    });
+  }
+  return scopes;
+}
 
 // Codex advertises these as JSON Schema `number`, but serde still deserializes them into
 // integer Rust types. Refinements preserve the model-visible number schema while rejecting
@@ -573,6 +614,40 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           const meta = `\n\nfiles_scanned: ${scanned}\nelapsed_ms: ${elapsedMs}\nresults_returned: ${hits.length}${contentLimit}${reason}`;
           if (hits.length === 0) return ok(`No matches${meta}`);
           return ok(`${hits.length} matches\n${hits.join('\n')}${meta}`);
+        })
+    );
+  }
+
+  // ------------------------------------------------------------ smart search
+
+  if (exposedCaps.search) {
+    reg.register(
+      'search',
+      {
+        title: 'Search by meaning or exact terms',
+        description:
+          'Search approved local files with ComGu\'s local semantic/hybrid index. Use this when you know what a concept means but not the exact file or wording. ' +
+          'Every candidate result is revalidated against this call\'s current workspace authority before it is returned. ' +
+          'For exhaustive exact text search, keep using find when it is available or rg through exec_command.',
+        inputSchema: smartSearchSchema,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+      },
+      async ({ query, path: requested, mode, include, file_types, limit }) =>
+        reg.guarded('search', 'search', async () => {
+          const roots = effectiveRootsForCall(ctx);
+          if (!ctx.smartSearch) return fail('SMART_SEARCH_UNAVAILABLE: local search engine is not initialized.');
+          const scopes = await smartSearchScopes(roots, requested);
+          if (scopes.length === 0) return fail('No folders are approved');
+          const response = await ctx.smartSearch.search(scopes, {
+            query,
+            ...(requested === undefined ? {} : { path: requested }),
+            ...(mode === undefined ? {} : { mode }),
+            ...(include === undefined ? {} : { include }),
+            ...(file_types === undefined ? {} : { fileTypes: file_types }),
+            ...(limit === undefined ? {} : { limit })
+          });
+          noteCount(response.hits.length);
+          return ok(formatSmartSearchResponse(response));
         })
     );
   }
