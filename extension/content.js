@@ -5867,7 +5867,15 @@
       const reply = await ask({ type: 'workspace_set', conversationId: routeId, roots: [...workspaceDraft] });
       if (!alive || epoch !== forEpoch || CLF_DOM.conversationId() !== routeId) return;
       if (!reply || reply.ok !== true || !reply.data) {
-        workspaceError = replyError(reply) || ui('composer.workspaceError');
+        // A freshly injected content script can temporarily coexist with an older MV3 service
+        // worker after ComGu refreshed the unpacked extension folder. The old worker can still
+        // bind/report this chat, but it has no workspace_set handler and answers the otherwise
+        // baffling internal discriminator `unknown_message`. Name the actual recovery instead
+        // of leaking that protocol detail into the user-facing picker.
+        workspaceError =
+          reply && reply.error === 'unknown_message'
+            ? ui('composer.workspaceExtensionStale')
+            : replyError(reply) || ui('composer.workspaceError');
         return;
       }
       workspaceState = readWorkspace(reply.data);

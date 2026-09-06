@@ -6752,6 +6752,38 @@ describe('the Compact & resume control', () => {
     expect((live.document.querySelector('.clf-workspace-btn') as HTMLButtonElement).textContent).toBe('comgu +1');
   });
 
+  it('explains a stale extension service worker instead of exposing unknown_message', async () => {
+    const chat = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    live = await harness(`https://chatgpt.com/c/${chat}`, {
+      activity: () => ({
+        ok: true,
+        data: {
+          sessionId: null,
+          entries: [],
+          stream: [],
+          userAnchors: [],
+          nextSince: 0,
+          workspace: { roots: ['comgu', 'lecture'], selected: null }
+        }
+      }),
+      workspace_get: () => ({ ok: false, error: 'unknown_message' }),
+      workspace_set: () => ({ ok: false, error: 'unknown_message' })
+    });
+    await live.hook.pullActivity();
+    live.hook.injectControl();
+    await settle();
+
+    (live.document.querySelector('.clf-workspace-btn') as HTMLButtonElement).click();
+    await settle();
+    const panel = live.document.querySelector('[data-clf-workspace-menu]') as HTMLElement;
+    (panel.querySelector('[data-clf-workspace-root="comgu"]') as HTMLButtonElement).click();
+    (panel.querySelector('[data-clf-workspace-save]') as HTMLButtonElement).click();
+    await settle();
+
+    expect(panel.textContent).toContain('Reload the ComGu extension');
+    expect(panel.textContent).not.toContain('unknown_message');
+  });
+
   it('does not let a New Chat mint persistent workspace authority before it has a conversation id', async () => {
     live = await harness('https://chatgpt.com/', {
       workspace_get: () => ({ ok: true, data: { roots: ['comgu'], selected: null } })
