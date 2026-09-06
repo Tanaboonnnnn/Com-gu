@@ -144,7 +144,7 @@ let nextId = 1;
  * Every request names its surface, because "which server answered" is the property most
  * of this file is about. There is no default-surface helper on purpose.
  */
-const WORKSPACE_TOOLS = new Set(['read', 'view_image', 'find', 'search', 'apply_patch', 'exec_command', 'write_stdin']);
+const WORKSPACE_TOOLS = new Set(['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin']);
 const MCP_FIXTURE_CHAT = 'c-mcp-workspace-fixture';
 let nextFixtureRequest = 1;
 
@@ -281,21 +281,7 @@ beforeAll(async () => {
     // that silently changes meaning when a product default moves is not testing gating.
     // The tools they add are covered by their own suites.
     sessionTools: false,
-    agentTools: false,
-    smartSearch: {
-      search: vi.fn(async () => ({
-        hits: [{
-          virtualPath: '/workspace/src/app.ts',
-          startLine: 1,
-          endLine: 1,
-          content: 'export const name = "app";',
-          matchedBy: 'vector',
-          freshness: 'fresh' as const
-        }],
-        rootsSearched: 1,
-        elapsedMs: 1
-      }))
-    }
+    agentTools: false
   };
 });
 
@@ -844,7 +830,7 @@ describe('surface boundaries', () => {
     everything();
     const names = toolNames(await core('tools/list'));
     // find is absent because exec_command is present โ€” they are mutually exclusive.
-    expect(names).toEqual(['agents', 'apply_patch', 'exec_command', 'read', 'search', 'session', 'view_image', 'write_stdin']);
+    expect(names).toEqual(['agents', 'apply_patch', 'exec_command', 'read', 'session', 'view_image', 'write_stdin']);
     for (const name of surfaceDefinition('desktop').tools) expect(names, name).not.toContain(name);
   });
 
@@ -925,7 +911,6 @@ describe('surface boundaries', () => {
     expect(names).toContain('exec_command');
     expect(names).toContain('write_stdin');
     expect(names).not.toContain('find');
-    expect(names).toContain('search');
   });
 
   it('never advertises a tool its surface does not declare', async () => {
@@ -1022,9 +1007,9 @@ describe('surface boundaries', () => {
     const coreTools = toolList(await core('tools/list'));
     const desktopTools = toolList(await desktop('tools/list'));
 
-    // Counts are the design: Core is capped at eight live schemas because find and the exec
-    // pair cannot both exist while Smart Search remains independent. Desktop is two.
-    expect(coreTools).toHaveLength(8);
+    // Counts are the design: Core is capped at seven live schemas because find and the exec
+    // pair cannot both exist, and Desktop is two.
+    expect(coreTools).toHaveLength(7);
     expect(desktopTools).toHaveLength(2);
 
     // And the size, which is what a discovery pull actually costs the model on every
@@ -1034,7 +1019,7 @@ describe('surface boundaries', () => {
     // catches the regression it exists to catch.
     const coreBytes = Buffer.byteLength(JSON.stringify(coreTools), 'utf8');
     const desktopBytes = Buffer.byteLength(JSON.stringify(desktopTools), 'utf8');
-    expect(coreBytes, `core tools/list is ${coreBytes} bytes`).toBeLessThan(20_500);
+    expect(coreBytes, `core tools/list is ${coreBytes} bytes`).toBeLessThan(18_000);
     expect(desktopBytes, `desktop tools/list is ${desktopBytes} bytes`).toBeLessThan(8_500);
 
     // Per tool as well as per surface, so one schema cannot quietly eat the whole budget
@@ -1226,7 +1211,7 @@ describe('capability gating', () => {
     ctx.caps = effectiveCapabilities(config);
     ctx.readOnly = true;
 
-    expect(toolNames(await core('tools/list'))).toEqual(['find', 'read', 'search', 'view_image']);
+    expect(toolNames(await core('tools/list'))).toEqual(['find', 'read', 'view_image']);
   });
 
   it('offers apply_patch only when a writing permission is on', async () => {
@@ -1290,7 +1275,6 @@ describe('capability gating', () => {
     const names = toolNames(await core('tools/list'));
     expect(names).toContain('exec_command');
     expect(names).not.toContain('find');
-    expect(names).toContain('search');
   });
 
   it('offers find when there is no shell to search with', async () => {
@@ -1304,43 +1288,6 @@ describe('capability gating', () => {
     expect(reply.body.result?.isError).toBeFalsy();
     expect(textOf(reply)).toContain('/workspace/src/lib/util.ts');
     expect(textOf(reply)).toContain('results_returned:');
-  });
-
-  it('advertises Smart Search with a closed local-only schema and executes through the provider', async () => {
-    ctx.caps = withCaps({ search: true, command: false });
-    const tool = toolList(await core('tools/list')).find((entry) => entry.name === 'search')!;
-    expect(Object.keys(tool.inputSchema.properties)).toEqual(['query', 'path', 'mode', 'include', 'file_types', 'limit']);
-    expect(tool.inputSchema.required).toEqual(['query']);
-    expect(tool.inputSchema.additionalProperties).toBe(false);
-    for (const forbidden of ['root', 'home', 'embedding', 'apiKey', 'endpoint', 'rebuild', 'drop', 'server']) {
-      expect(tool.inputSchema.properties).not.toHaveProperty(forbidden);
-    }
-    expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
-
-    const reply = await core('tools/call', {
-      name: 'search',
-      arguments: { query: 'app name', mode: 'semantic', limit: 3 }
-    });
-    expect(reply.body.result?.isError).toBeFalsy();
-    expect(textOf(reply)).toContain('/workspace/src/app.ts');
-    expect(ctx.smartSearch?.search).toHaveBeenCalled();
-  });
-
-  it('does not expose Smart Search on a fresh endpoint without search permission', async () => {
-    ctx.caps = withCaps({ search: false });
-    await endpoint.stop();
-    endpoint = await startMcpServer(() => ctx);
-    expect(toolNames(await core('tools/list'))).not.toContain('search');
-  });
-
-  it('keeps exposed Smart Search stable and returns TOOL_DISABLED after permission is revoked', async () => {
-    ctx.caps = withCaps({ search: true });
-    expect(toolNames(await core('tools/list'))).toContain('search');
-    ctx.caps = withCaps({ search: false });
-    expect(toolNames(await core('tools/list'))).toContain('search');
-    const reply = await core('tools/call', { name: 'search', arguments: { query: 'app' } });
-    expect(failed(reply)).toBe(true);
-    expect(textOf(reply)).toContain('TOOL_DISABLED');
   });
 
   it('offers session and agents only when those features are on', async () => {
