@@ -8,8 +8,6 @@
 
 **Tech Stack:** Electron 43, electron-builder 26, TypeScript, Node 22 runtime APIs, MXC SDK 0.8, node-pty, Sharp, tree-sitter, Vitest, PowerShell/Node benchmark scripts.
 
-**Spec:** `docs/superpowers/specs/2026-09-06-zvec-search-and-performance-design.md`
-
 ## Global Constraints
 
 - Correctness, security, and stability outrank size.
@@ -22,7 +20,6 @@
 - Benchmark the packaged build, not only development Electron.
 - Compare on the same machine, power mode, architecture, Electron version, fixture, and measurement script.
 - A size win that fails a runtime/security/stability gate is reverted.
-- Smart Search, when present, must remain lazy: no zvec module/model/index initialization before first semantic search.
 - No sub-agent execution is required for this user's workflow; use inline `executing-plans` when implementing unless the user later asks otherwise.
 
 ---
@@ -511,7 +508,6 @@ git commit -m "perf(package): narrow native ASAR unpacking"
 **Files:**
 - Create: `scripts/trace-main-startup-imports.mjs`
 - Create: `test/startup-lazy-loading.test.ts`
-- Modify: `src/main/zvec-search/loader.ts` only if Smart Search exists and the trace proves its approved lazy boundary is broken.
 - Modify: `docs/performance/2026-09-06-optimization-results.md`
 
 **Interfaces:**
@@ -520,38 +516,30 @@ git commit -m "perf(package): narrow native ASAR unpacking"
 
 - [ ] **Step 1: Build an import trace before changing code**
 
-The script must list modules evaluated between process start and the app-ready marker. Classify at least zvec, computer helper, updater, MXC terminal backend, Sharp, and session/agent code.
+The script must list modules evaluated between process start and the app-ready marker. Classify at least the computer helper, updater, MXC terminal backend, Sharp, and session/agent code.
 
 - [ ] **Step 2: Write assertions for known optional heavy work**
 
-When Smart Search exists:
+Do not assert that core security/session code is absent just because it is large; only optional code with a real deferred lifecycle is eligible. The audit should identify eager optional work without changing its lifecycle in this task.
 
-```ts
-expect(startupTrace).not.toContain('@zvec/zvec-grep');
-```
+- [ ] **Step 3: Record separately scoped lazy-load candidates**
 
-Do not assert that core security/session code is absent just because it is large; only optional code with a real deferred lifecycle is eligible.
+If the trace identifies a heavy eager optional subsystem, record its module, startup cost, and likely use boundary in `optimization-results.md` and stop there for that subsystem. Changing lifecycle behavior requires its own bounded design approval rather than opportunistic refactoring inside this packaging plan.
 
-- [ ] **Step 3: Fix only a broken already-approved Smart Search lazy boundary**
+- [ ] **Step 4: Run startup audit regression**
 
-If the trace shows `@zvec/zvec-grep` is evaluated before first Smart Search use, repair `src/main/zvec-search/loader.ts` so the existing memoized dynamic import remains the first runtime load. If the trace instead identifies another heavy eager subsystem, record its module, startup cost, and likely use boundary in `optimization-results.md` and stop there for that subsystem: changing a different subsystem's lifecycle requires its own bounded design approval rather than opportunistic refactoring inside this packaging plan.
-
-- [ ] **Step 4: Run startup and Smart Search regressions if the lazy boundary required repair**
-
-Run `npx vitest run test/startup-lazy-loading.test.ts test/zvec-search-loader.test.ts` followed by the packaged startup benchmark. If no repair was needed, record the audit result without changing production code.
+Run `npx vitest run test/startup-lazy-loading.test.ts` followed by the packaged startup benchmark. Record the audit result without changing production code.
 
 - [ ] **Step 5: Record the audit and measured result**
 
-Document startup median, idle RSS, whether zvec was present in the startup trace, and any separately scoped future candidate. If a zvec lazy-load repair was made, also record Smart Search first-use latency before/after.
+Document startup median, idle RSS, and any separately scoped future candidate.
 
-- [ ] **Step 6: Commit only a real zvec lazy-boundary repair**
+- [ ] **Step 6: Commit the startup audit**
 
 ```powershell
-git add src/main/zvec-search/loader.ts test/startup-lazy-loading.test.ts scripts/trace-main-startup-imports.mjs docs/performance/2026-09-06-optimization-results.md
-git commit -m "perf(startup): keep smart search lazy"
+git add test/startup-lazy-loading.test.ts scripts/trace-main-startup-imports.mjs docs/performance/2026-09-06-optimization-results.md
+git commit -m "perf(startup): audit lazy loading"
 ```
-
-If no production repair was needed, commit only the trace/test/report files with `git commit -m "perf(startup): audit lazy loading"`.
 
 ---
 
@@ -664,7 +652,6 @@ app.asar bytes
 app.asar.unpacked bytes
 tunnel bytes
 native runtime bytes by dependency
-Smart Search model cache bytes separately, if already downloaded
 ```
 
 If installed size grows, explain exactly which retained capability/dependency accounts for it. Do not conceal the increase by quoting only compressed installer size.
@@ -694,4 +681,4 @@ git commit -m "docs(perf): record final optimization results"
 - Incompleteness scan: every optimization candidate has a concrete test, package smoke, measurement gate, and keep/revert rule; no size estimate is treated as guaranteed savings.
 - Type/interface consistency: benchmark artifacts feed the same final gate; native staging remains owned by `prepare-packaging-native.mjs`; normal application behavior never depends on benchmark env variables.
 - Stability discipline: tunnel, MXC confinement, PTY, Sharp, tree-sitter behavior, extension, and supported target architectures are preserved and explicitly smoked rather than removed for size.
-- Independence: this plan does not require Smart Search to exist, except that if it is present its lazy-loading invariant is included in startup verification.
+- Independence: this plan does not require any optional search subsystem and keeps the existing exact-search behavior unchanged.
