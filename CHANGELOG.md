@@ -9,6 +9,27 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
+## [3.1.2] — 2026-09-06
+
+3.1.2 focuses on ChatGPT companion reliability, Overwrite interoperability and a smaller cross-platform package while keeping the original exact-search stack and existing security boundaries.
+
+### Changed
+- The companion extension can refresh the materialized extension copy with the desktop app and exposes an explicit Reload action, reducing manual disable/enable cycles after app updates.
+- Native packaging now stages only the target CPU runtime for MXC and trims unused node-pty/tree-sitter build payloads. Startup-sensitive native package families remain broadly unpacked because measured narrow-ASAR packing regressed startup latency.
+- Windows x64 package footprint drops from about 157.56 MiB to 148.40 MiB for the installer and from 543.50 MiB to 493.08 MiB unpacked in the recorded optimization benchmark.
+- ComGu keeps the original exact-search behavior. The experimental zvec Smart Search work is not part of this release.
+
+### Fixed
+- ChatGPT workspace selection now gives a recoverable stale-extension/worker mismatch path instead of surfacing a raw `unknown_message` failure.
+- Overwrite mode preserves ChatGPT-native copy controls and generated-file/download links instead of hiding them behind the replacement stream.
+- Windows UI Automation scans get a bounded 15-second helper watchdog so slow hosted Windows providers are not retired just beyond the old 8-second limit; fast window-metadata operations keep their existing shorter deadlines.
+- Packaged Core smoke/benchmark tooling no longer depends on an undeclared MCP client package.
+
+### Security and compatibility
+- MXC command confinement, WorkspaceScope authority, path virtualization, permission gates and fail-closed behavior are unchanged.
+- Release packaging continues to cover Windows x64/ARM64, macOS ARM64 and Linux x64/ARM64. macOS/Linux Run command confinement remains fail closed where no proven backend exists.
+- macOS artifacts remain publisher-unsigned and unnotarized.
+
 ## [3.1.1] ? 2026-09-03
 
 3.1.1 moves workspace authority from a global next-Run choice to an explicit per-ChatGPT-conversation selection and makes the existing Sub-agent setting visible in the header.
