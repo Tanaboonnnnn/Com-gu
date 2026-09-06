@@ -63,7 +63,6 @@ import {
 import { effectiveWorkspaceRoots } from '../run/scope.js';
 import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
-import type { SmartSearchProvider } from '../zvec-search/types.js';
 import {
   currentCall,
   emptyEvidence,
@@ -121,8 +120,6 @@ export interface ToolContext {
    * ever added to. Defaults to the live answer when the caller does not track it.
    */
   exposedFind?: boolean;
-  /** Local semantic/hybrid search provider. Carries no filesystem authority of its own. */
-  smartSearch?: SmartSearchProvider;
 }
 
 export type ToolContent =
@@ -608,13 +605,13 @@ async function dispatchTracked(
 }
 
 /** Whether this handler must know which chat it is before resolving its paths. */
-export function needsWorkspaceIdentity(name: string, args: unknown): boolean {
+function needsWorkspaceIdentity(name: string, args: unknown): boolean {
   const input = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
   const relative = (value: unknown): boolean =>
     typeof value === 'string' && !isAbsoluteVirtualPath(value) && !isNativeWindowsPath(value);
   // Every filesystem/terminal operation is chat-scoped, including absolute paths. Absolute
   // spelling proves location, never identity/authority.
-  if (['read', 'view_image', 'find', 'search', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)) return true;
+  if (['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin'].includes(name)) return true;
   if (name === 'read') {
     const paths = Array.isArray(input['paths']) ? input['paths'] : [];
     return paths.some(relative);
