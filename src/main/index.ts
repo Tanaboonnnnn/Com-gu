@@ -65,7 +65,6 @@ import {
   type ChatWorkspaceScopesSnapshot
 } from './chat-workspace-scope.js';
 import { extensionDir } from './extension-path.js';
-import { initSmartSearch, shutdownSmartSearch } from './zvec-search/index.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -256,7 +255,6 @@ void app.whenReady().then(async () => {
   initSecretsPath(userData);
   initSessionStore(userData);
   initDurableStore(userData);
-  initSmartSearch(userData);
   await loadConfig();
   if (windowActivation.isDisabled()) return;
   // Keep Chrome's stable unpacked folder synchronized with the installed ComGu release before
@@ -442,7 +440,7 @@ app.on('will-quit', (event) => {
       {
         name: 'process cleanup',
         budgetMs: 15_000,
-        run: () => [unifiedExecManager.terminateAllProcesses(), stopComputerHelper(), shutdownSmartSearch()]
+        run: () => [unifiedExecManager.terminateAllProcesses(), stopComputerHelper()]
       },
       // Phase 3: recorder work can enqueue both session projections and named durable state.
       { name: 'recorder flush', budgetMs: 10_000, run: () => [flushRecorder()] },
