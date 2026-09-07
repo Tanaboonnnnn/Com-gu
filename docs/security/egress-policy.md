@@ -32,3 +32,7 @@ Any change that adds a programmatic runtime destination must, in the same change
 2. update `test/security-invariants.test.ts` deliberately;
 3. state whether the behavior is automatic, user-triggered or opt-in; and
 4. preserve the existing loopback, workspace-scope, MXC and credential boundaries.
+
+## v3.1.3 runtime verification
+
+The Windows x64 v3.1.3 candidate was observed at runtime on 2026-09-07. Idle, extension-only, OpenAI tunnel and Goal/OpenRouter observations matched this policy; Cloudflare was not exercised. See docs/security/2026-09-07-v3.1.3-runtime-egress-verification.md for process ownership, endpoints and capture limitations.
