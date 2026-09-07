@@ -129,7 +129,7 @@ linux:
   icon: build/icon.png
   category: Development
   executableName: comgu
-  maintainer: ComGu <227782719+totec448-spec@users.noreply.github.com>
+  maintainer: ComGu <noreply@comgu.local>
   syncDesktopName: true
   # electron-builder rewrites x64 to x86_64 for AppImage and amd64 for DEB when ${arch}
   # is used. Keep one stable public architecture label across formats/releases instead.
