@@ -174,6 +174,10 @@ beforeEach(async () => {
   writeDurableSoon('bridge-commands', null);
   await flushDurable();
   await setSecret('bridgeToken', '');
+  // Pairing approval is durable app state. Each end-to-end resume case models an already-approved
+  // shipped companion, just like the bridge integration suite; /pair may rotate the bearer token
+  // but must not silently create trust for a new extension identity.
+  await setSecret('approvedExtensionOrigin' as never, EXTENSION_ORIGIN);
   token = null;
   opened.length = 0;
   setBrowserOpener(async (url) => {
