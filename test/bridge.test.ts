@@ -729,6 +729,23 @@ describe('provisioning', () => {
     expect((await request('GET', '/status', { auth: second })).status).toBe(200);
   });
 
+  it('can invalidate only the live browser credential for identity recovery without revoking approval', async () => {
+    const first = await pair();
+    const bridge = await import('../src/main/bridge.js');
+    const resetCredential = (bridge as any).resetBrowserCredentialForRecovery;
+    expect(typeof resetCredential).toBe('function');
+
+    await resetCredential();
+
+    expect(await bridgeStatus()).toMatchObject({ paired: false, present: false });
+    expect((await request('GET', '/status', { auth: first })).status).toBe(401);
+    // This is recovery, not the user's Disconnect action. The already-approved extension may
+    // silently mint a fresh credential on its next local request.
+    const repaired = await request('POST', '/pair', { auth: null });
+    expect(repaired.status).toBe(200);
+    expect(repaired.body.token).not.toBe(first);
+  });
+
   it('drops the token when the user disconnects the browser', async () => {
     await pair();
     expect((await request('GET', '/status')).status).toBe(200);

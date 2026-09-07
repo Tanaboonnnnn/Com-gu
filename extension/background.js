@@ -36,6 +36,11 @@ const MAX_JOURNAL_BYTES = 4 * 1024 * 1024;
 const BATCH = 100;
 const RETRY_ALARM = 'clf-bridge-drain';
 let retryAlarmScheduled = false;
+// Long ChatGPT turns can outlive either injected extension world. The request-id evidence
+// path is security-critical once a dormant/retired worker exists, so periodically prove the
+// already-open tabs are still wired instead of waiting for a manual extension reload.
+const IDENTITY_HEALTH_ALARM = 'clf-identity-health';
+let identityHealthAlarmScheduled = false;
 
 function browserFamily() {
   try {
@@ -310,6 +315,7 @@ async function loadOnce() {
     delivery = { ...delivery, ...live.delivery };
   }
   loaded = true;
+  if (token && !disconnected) scheduleIdentityHealth();
 }
 
 async function persist() {
@@ -854,6 +860,27 @@ function clearRetryIfIdle() {
   }
 }
 
+function scheduleIdentityHealth() {
+  if (identityHealthAlarmScheduled || disconnected || !token) return;
+  try {
+    if (chrome.alarms && typeof chrome.alarms.create === 'function') {
+      chrome.alarms.create(IDENTITY_HEALTH_ALARM, { delayInMinutes: 0.5, periodInMinutes: 0.5 });
+      identityHealthAlarmScheduled = true;
+    }
+  } catch {
+    // Service-worker startup and the next browser message still run the ordinary repair path.
+  }
+}
+
+function clearIdentityHealth() {
+  try {
+    if (chrome.alarms && typeof chrome.alarms.clear === 'function') void chrome.alarms.clear(IDENTITY_HEALTH_ALARM);
+  } catch {
+    // No alarms API in narrow test harnesses.
+  }
+  identityHealthAlarmScheduled = false;
+}
+
 async function hello(candidate) {
   try {
     const response = await fetchBounded(`http://127.0.0.1:${candidate}/hello`, {
@@ -941,6 +968,7 @@ function forgetPort() {
 async function latchAppDisconnect() {
   token = null;
   disconnected = true;
+  clearIdentityHealth();
   await persist();
 }
 
@@ -1071,6 +1099,7 @@ async function pairOnce(intent = connectionEpoch, reconnect = false) {
     // Connecting is the counterpart of disconnecting, and the only thing that clears it.
     disconnected = false;
     await persist();
+    scheduleIdentityHealth();
     scheduleRetry();
     return { ok: true };
   } catch (err) {
@@ -1748,6 +1777,11 @@ const HANDLERS = {
     connectionEpoch++;
     const result = await provision(true);
     if (result && result.ok) {
+      // Reconnecting the credential is only half of recovery. A long-lived ChatGPT tab can
+      // still have a dead/stale isolated recorder or MAIN-world Fiber helper, which leaves
+      // exact request-id ownership unavailable and correctly trips CALLER_IDENTITY_REQUIRED.
+      // Repair every open eligible tab while the user's reconnect intent is fresh.
+      await restoreOpenChatgptTabs();
       void drainCommandAcks()
         .then(() => drain())
         .then(() => drainCloses())
@@ -1773,6 +1807,7 @@ const HANDLERS = {
     pairingError = null;
     pairingRequired = false;
     pairingRetryAfter = 0;
+    clearIdentityHealth();
     await persist();
     return { ok: true };
   },
@@ -2832,11 +2867,30 @@ if (chrome.runtime.onStartup && typeof chrome.runtime.onStartup.addListener === 
 
 if (chrome.alarms && chrome.alarms.onAlarm && typeof chrome.alarms.onAlarm.addListener === 'function') {
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (!alarm || alarm.name !== RETRY_ALARM) return;
-    void drainCommandAcks()
-      .then(() => drain())
-      .then(() => drainCloses())
-      .catch(() => undefined);
+    if (!alarm) return;
+    if (alarm.name === IDENTITY_HEALTH_ALARM) {
+      void load()
+        .then(async () => {
+          if (disconnected) return;
+          // Validate the bearer too. Desktop recovery deliberately rotates only this
+          // credential; call() turns the expected 401 into one approved /pair and retries.
+          // A dead content script therefore cannot strand the worker on an obsolete token.
+          const status = await call('/status');
+          if (!status || status.ok !== true) return;
+          // This is local-only health work. Healthy tabs pay one cheap recorder ping plus an
+          // idempotent Fiber reinjection; a dead isolated world gets the full deterministic
+          // recovery sequence. Nothing here relaxes caller identity or invents evidence.
+          await restoreOpenChatgptTabs();
+        })
+        .catch(() => undefined);
+      return;
+    }
+    if (alarm.name === RETRY_ALARM) {
+      void drainCommandAcks()
+        .then(() => drain())
+        .then(() => drainCloses())
+        .catch(() => undefined);
+    }
   });
 }
 

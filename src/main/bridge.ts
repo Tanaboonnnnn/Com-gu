@@ -491,6 +491,27 @@ export async function unpair(): Promise<void> {
   changed();
 }
 
+/**
+ * Invalidates only the current browser bearer credential for bounded recovery.
+ *
+ * This is deliberately different from unpair(): the user did not revoke the extension and
+ * the approved extension origin remains authoritative. The next request from that exact
+ * approved origin may therefore provision a fresh token silently. Clearing process-local
+ * presence at the same time prevents the Desktop recovery UI from mistaking the old sighting
+ * for proof that the repaired identity path has actually returned.
+ */
+export async function resetBrowserCredentialForRecovery(): Promise<boolean> {
+  const stored = await getSecret('bridgeToken');
+  if (!stored || stored === BROWSER_DISCONNECTED) return false;
+  await setSecret('bridgeToken', '');
+  if (browserPresenceTimer) clearTimeout(browserPresenceTimer);
+  browserPresenceTimer = null;
+  lastSeenAt = null;
+  logInfo('bridge: browser credential reset for identity recovery');
+  changed();
+  return true;
+}
+
 // ------------------------------------------------------------------ helpers
 
 function json(res: http.ServerResponse, status: number, body: unknown, origin: string | null): void {
