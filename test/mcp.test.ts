@@ -2863,14 +2863,16 @@ describe('exec_command and write_stdin', () => {
     // contract properties, not implementation details: model-run commands must never inherit a
     // connector credential, and `rg` is a runtime the app deliberately ships for those commands.
     const heldSecret = process.env.OPENAI_API_KEY;
+    const heldGitHub = process.env.GITHUB_TOKEN;
     process.env.OPENAI_API_KEY = 'sk-must-never-reach-exec-command';
+    process.env.GITHUB_TOKEN = 'ghp_must_never_reach_exec_command';
     try {
       const secret = await core('tools/call', {
         name: 'exec_command',
         arguments: {
           cmd: IS_WINDOWS
-            ? "if ($env:OPENAI_API_KEY) { Write-Output 'LEAKED' } else { Write-Output 'SCRUBBED' }"
-            : "if [ -n \"${OPENAI_API_KEY:-}\" ]; then printf '%s\\n' LEAKED; else printf '%s\\n' SCRUBBED; fi",
+            ? "if ($env:OPENAI_API_KEY -or $env:GITHUB_TOKEN) { Write-Output 'LEAKED' } else { Write-Output 'SCRUBBED' }"
+            : "if [ -n \"${OPENAI_API_KEY:-}${GITHUB_TOKEN:-}\" ]; then printf '%s\\n' LEAKED; else printf '%s\\n' SCRUBBED; fi",
           workdir: '/workspace',
           yield_time_ms: 5_000
         }
@@ -2881,6 +2883,8 @@ describe('exec_command and write_stdin', () => {
     } finally {
       if (heldSecret === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = heldSecret;
+      if (heldGitHub === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = heldGitHub;
     }
 
     const bundled = locateRipgrep();
