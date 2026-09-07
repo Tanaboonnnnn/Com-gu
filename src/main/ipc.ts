@@ -32,6 +32,7 @@ import {
   unpair
 } from './bridge.js';
 import { extensionDir } from './extension-path.js';
+import { approvePendingExtensionOrigin, extensionPairingView, revokeExtensionOrigin } from './bridge-pairing.js';
 import { extensionDownloadUrl } from './version.js';
 import {
   deleteSession,
@@ -728,6 +729,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle('bridge:unpair', async () => {
     await unpair();
     return buildState();
+  });
+
+  handle('bridge:getExtensionPairing', async () => extensionPairingView());
+
+  handle('bridge:approveExtensionPairing', async () => {
+    await approvePendingExtensionOrigin();
+    return extensionPairingView();
+  });
+
+  handle('bridge:revokeExtensionPairing', async () => {
+    await revokeExtensionOrigin();
+    return extensionPairingView();
   });
 
   handle('bridge:downloadExtension', async () => {

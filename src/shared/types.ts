@@ -375,6 +375,11 @@ export interface LogEntry {
   agent?: string;
 }
 
+export interface ExtensionPairingView {
+  approvedOrigin: string | null;
+  pendingOrigin: string | null;
+}
+
 /** What the renderer needs to know about the extension bridge, without any secrets. */
 export interface BridgeStatus {
   running: boolean;

@@ -51,7 +51,8 @@ vi.mock('../src/main/recovery.js', () => ({
 }));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
-const { initSecretsPath, resetSecretsCacheForTests } = await import('../src/main/secrets.js');
+const { getSecret, initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
+const { requestExtensionPairing } = await import('../src/main/bridge-pairing.js');
 const { appendEvent, createSession, initSessionStore, resetSessionStoreForTests } = await import('../src/main/session/store.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
 const { pendingCommands, resetBridgeForTests, setBrowserOpener, startBridge, stopBridge } = await import(
@@ -425,6 +426,32 @@ describe('bounded IPC identities and OS launch results', () => {
     };
     expect(reply.ok).toBe(false);
     expect(reply.error).toMatch(/could not open.*access is denied/i);
+  });
+
+  it('exposes pending extension identity and approves it without exposing a bearer token', async () => {
+    const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    await setSecret('approvedExtensionOrigin', '');
+    await setSecret('bridgeToken', 'secret-that-must-stay-main-process-only');
+    await requestExtensionPairing(origin);
+
+    const pending = await handlers.get('bridge:getExtensionPairing')!(null, undefined);
+    expect(pending).toEqual({ ok: true, data: { approvedOrigin: null, pendingOrigin: origin } });
+    expect(JSON.stringify(pending)).not.toContain('secret-that-must-stay-main-process-only');
+
+    const approved = await handlers.get('bridge:approveExtensionPairing')!(null, undefined);
+    expect(approved).toEqual({ ok: true, data: { approvedOrigin: origin, pendingOrigin: null } });
+    expect(await getSecret('approvedExtensionOrigin')).toBe(origin);
+  });
+
+  it('revokes extension identity and its bearer token together', async () => {
+    const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    await setSecret('approvedExtensionOrigin', origin);
+    await setSecret('bridgeToken', 'old-token');
+
+    const revoked = await handlers.get('bridge:revokeExtensionPairing')!(null, undefined);
+    expect(revoked).toEqual({ ok: true, data: { approvedOrigin: null, pendingOrigin: null } });
+    expect(await getSecret('approvedExtensionOrigin')).toBeNull();
+    expect(await getSecret('bridgeToken')).toBeNull();
   });
 
   it('opens the extension recovery ZIP from the installed app version, never releases/latest', async () => {

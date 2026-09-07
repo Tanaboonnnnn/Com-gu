@@ -29,7 +29,7 @@ import {
   DEFAULT_GOAL_SYSTEM_PROMPT,
   MAX_GOAL_SYSTEM_PROMPT_CHARS
 } from '../shared/goal.js';
-import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
+import { browserExtensionRequired, type AppState, type Config, type ExtensionPairingView } from '../shared/types.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
 import type { PendingChatWorkspaceView } from '../preload/index.js';
 import { $, clockTime, compactNumber, el, icon, run, toast, type IpcFailure } from './dom.js';
@@ -943,6 +943,25 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad' } {
  * that cannot be followed. Asked once and cached, because the answer cannot change while
  * the app is running.
  */
+let extensionPairingGeneration = 0;
+
+function extensionId(origin: string): string {
+  return origin.replace(/^chrome-extension:\/\//, '');
+}
+
+function paintExtensionPairing(view: ExtensionPairingView): void {
+  const approval = $('extensionApproval');
+  approval.hidden = view.pendingOrigin === null;
+  $('pendingExtensionId').textContent = view.pendingOrigin ? extensionId(view.pendingOrigin) : '';
+  $<HTMLButtonElement>('revokeExtension').hidden = view.approvedOrigin === null;
+}
+
+async function refreshExtensionPairing(): Promise<void> {
+  const generation = ++extensionPairingGeneration;
+  const view = await run(api.getExtensionPairing());
+  if (view && generation === extensionPairingGeneration) paintExtensionPairing(view);
+}
+
 let extensionPathShown = false;
 async function showExtensionPath(): Promise<void> {
   if (extensionPathShown) return;
@@ -1544,6 +1563,7 @@ export function chatApply(state: AppState, previous?: Config): void {
           : tr('chat.bridgeListening', { port: bridge.port ?? '?' });
   $('bridgeState').classList.toggle('is-warn', browserRequired && (!bridge.present || !secureStorageAvailable));
   void showExtensionPath();
+  void refreshExtensionPairing();
 
   if (sessions.length > 0) paintSessions();
 }
@@ -1727,6 +1747,20 @@ export function initChat(next: Deps): void {
   $('bridgeUnpair').addEventListener('click', async () => {
     const state = await run(api.unpairExtension());
     if (state) toast(tr('chat.browserDisconnected'));
+  });
+  $('approveExtension').addEventListener('click', async () => {
+    const view = await run(api.approveExtensionPairing());
+    if (view) {
+      paintExtensionPairing(view);
+      toast(tr('setup.extensionApprovedToast'));
+    }
+  });
+  $('revokeExtension').addEventListener('click', async () => {
+    const view = await run(api.revokeExtensionPairing());
+    if (view) {
+      paintExtensionPairing(view);
+      toast(tr('setup.extensionRevokedToast'));
+    }
   });
   $('bridgeFolder').addEventListener('click', async () => {
     const dir = await run(api.openExtensionFolder());

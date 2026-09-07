@@ -61,7 +61,7 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
  * only credential in here that a *model* can cause to be spent, so it lives under the same
  * OS-backed encrypted blob as the rest and never leaves the main process.
  */
-export type SecretKey = 'openaiApiKey' | 'bridgeToken' | 'openRouterApiKey';
+export type SecretKey = 'openaiApiKey' | 'bridgeToken' | 'openRouterApiKey' | 'approvedExtensionOrigin';
 
 export type SecretStorageErrorCode = 'secure_storage_unavailable' | 'stored_credentials_unreadable';
 

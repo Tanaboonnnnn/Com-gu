@@ -109,6 +109,11 @@ let pairingEpoch = -1;
 let pairingReconnect = false;
 /** Most recent pairing failure, for the popup. Process-local and never a credential. */
 let pairingError = null;
+/** Durable non-secret state: Desktop has seen this extension but has not approved it yet. */
+let pairingRequired = false;
+/** Earliest time a pending approval may retry /pair; process-local and never a credential. */
+let pairingRetryAfter = 0;
+const PAIR_RETRY_MS = 30_000;
 
 /**
  * When the app was last confirmed to be on `port`, and how long that is believed for.
@@ -255,12 +260,13 @@ function load() {
 }
 
 async function loadOnce() {
-  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'commandAckOutbox']);
+  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'pairingRequired', 'deferredRevivals', 'commandAckOutbox']);
   port = typeof stored.port === 'number' ? stored.port : null;
   token = typeof stored.token === 'string' ? stored.token : null;
   // Deliberately in `local` rather than `session`: a choice to disconnect that a browser
   // restart undoes is not a choice, it is a delay.
   disconnected = stored.disconnected === true;
+  pairingRequired = stored.pairingRequired === true;
   deferredRevivals = Array.isArray(stored.deferredRevivals) ? stored.deferredRevivals.slice(-100) : [];
   const live = await chrome.storage.session.get([
     'settled',
@@ -307,7 +313,7 @@ async function loadOnce() {
 }
 
 async function persist() {
-  await chrome.storage.local.set({ port, token, disconnected });
+  await chrome.storage.local.set({ port, token, disconnected, pairingRequired });
 }
 
 let liveWriteQueue = Promise.resolve();
@@ -950,8 +956,9 @@ async function call(path, init = {}, retried = false) {
     if (disconnected) return { ok: false, status: 401, error: 'disconnected' };
     // First use. Ask the app for a token instead of asking the user for one — see
     // provision() for why that is not a downgrade.
+    if (pairingRequired && Date.now() < pairingRetryAfter) return { ok: false, status: 403, error: 'pairing_required' };
     const got = await provision();
-    if (!got.ok) return { ok: false, status: 401, error: got.error || 'not_paired' };
+    if (!got.ok) return { ok: false, status: got.status || 401, error: got.error || 'not_paired' };
   }
   try {
     const response = await fetchBounded(`http://127.0.0.1:${found.port}${path}`, {
@@ -1042,6 +1049,13 @@ async function pairOnce(intent = connectionEpoch, reconnect = false) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || typeof data.token !== 'string') {
+      if (response.status === 403 && data && data.error === 'pairing_required') {
+        pairingRequired = true;
+        pairingRetryAfter = Date.now() + PAIR_RETRY_MS;
+        token = null;
+        await persist();
+        return { ok: false, status: 403, error: 'pairing_required', message: data.message };
+      }
       if (data && data.error === 'browser_disconnected') {
         await latchAppDisconnect();
         return { ok: false, error: 'disconnected', message: data.message };
@@ -1052,6 +1066,8 @@ async function pairOnce(intent = connectionEpoch, reconnect = false) {
     // authoritative and must not be undone just because the network answered out of order.
     if (intent !== connectionEpoch) return { ok: false, error: 'disconnected' };
     token = data.token;
+    pairingRequired = false;
+    pairingRetryAfter = 0;
     // Connecting is the counterpart of disconnecting, and the only thing that clears it.
     disconnected = false;
     await persist();
@@ -1696,12 +1712,12 @@ const HANDLERS = {
   },
   async status() {
     await load();
-    const found = await discover();
+    const found = await discover(pairingRequired);
     // Provisioning here as well as in call() is what makes the popup show "Connected"
     // the first time it is opened, rather than a truthful but useless "not paired".
     // Not after a deliberate disconnect: opening the popup to check is not a request to
     // undo the thing the popup was opened to check.
-    if (found && !token && !disconnected) await provision();
+    if (found && !token && !disconnected && (!pairingRequired || Date.now() >= pairingRetryAfter)) await provision();
     if (found && token) {
       void drainCommandAcks()
         .then(() => drain())
@@ -1713,6 +1729,7 @@ const HANDLERS = {
       port: found ? found.port : null,
       paired: token !== null,
       disconnected,
+      pairingRequired,
       pending: journal.length,
       pendingCommandAcks: commandAckOutbox.length,
       compatible: found ? found.compatible !== false : null,
@@ -1754,6 +1771,8 @@ const HANDLERS = {
     // open tab — provisions a new token and the browser is connected again.
     disconnected = true;
     pairingError = null;
+    pairingRequired = false;
+    pairingRetryAfter = 0;
     await persist();
     return { ok: true };
   },

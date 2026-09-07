@@ -852,6 +852,34 @@ it('guides rootless setup from the capabilities that actually need a filesystem 
   expect(connect.disabled).toBe(false);
 });
 
+it('shows the pending extension id and requires an explicit Desktop approval before pairing', async () => {
+  const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+  let pairing = { approvedOrigin: null as string | null, pendingOrigin: origin as string | null };
+  const mounted = await mountChat({}, [], {
+    getExtensionPairing: () => Promise.resolve({ ok: true, data: structuredClone(pairing) }),
+    approveExtensionPairing: () => {
+      pairing = { approvedOrigin: origin, pendingOrigin: null };
+      return Promise.resolve({ ok: true, data: structuredClone(pairing) });
+    },
+    revokeExtensionPairing: () => {
+      pairing = { approvedOrigin: null, pendingOrigin: null };
+      return Promise.resolve({ ok: true, data: structuredClone(pairing) });
+    }
+  });
+  const doc = mounted.window.document;
+  await settle();
+
+  const box = doc.getElementById('extensionApproval') as HTMLElement;
+  expect(box.hidden).toBe(false);
+  expect(box.textContent).toContain('abcdefghijklmnopabcdefghijklmnop');
+  expect(box.textContent).not.toContain('bridgeToken');
+
+  (doc.getElementById('approveExtension') as HTMLButtonElement).click();
+  await settle();
+  expect(box.hidden).toBe(true);
+  expect((doc.getElementById('revokeExtension') as HTMLButtonElement).hidden).toBe(false);
+});
+
 it('requires a live browser only when a browser-backed feature is actually enabled', async () => {
   const mounted = await mountChat({
     hasApiKey: true,

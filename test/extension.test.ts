@@ -526,6 +526,7 @@ function loadWorker(options: {
   tabsSendMessage?: (tabId: number, message: Record<string, unknown>) => Promise<unknown>;
   extensionVersion?: string;
   diskExtensionVersion?: string;
+  now?: () => number;
 }): WorkerHarness {
   let listener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
@@ -614,6 +615,12 @@ function loadWorker(options: {
     }
     return response(503, {});
   });
+  const HostDate = Date;
+  const WorkerDate = class extends HostDate {
+    static override now(): number {
+      return options.now ? options.now() : HostDate.now();
+    }
+  };
   vm.runInNewContext(backgroundSource, {
     chrome,
     fetch,
@@ -623,6 +630,7 @@ function loadWorker(options: {
     clearTimeout,
     URL,
     TextEncoder,
+    Date: WorkerDate,
     console
   }, { filename: 'background.js' });
   if (!listener) throw new Error('background.js did not register a message listener');
@@ -1093,6 +1101,35 @@ describe('extension command delivery', () => {
     expect(second).toMatchObject({ paired: false, pairingRequired: true });
     expect(local.data.token ?? null).toBeNull();
     expect(pairAttempts).toBe(1);
+  });
+
+  it('retries a pending Desktop approval after backoff and pairs automatically once approved', async () => {
+    const local = new FakeStorageArea({ port: 8765 });
+    const session = new FakeStorageArea();
+    let pairAttempts = 0;
+    let now = 10_000;
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: false });
+      if (url.pathname === '/pair') {
+        pairAttempts++;
+        return pairAttempts === 1
+          ? response(403, { error: 'pairing_required' })
+          : response(200, { token: 'approved-token' });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local, session, fetch, now: () => now });
+
+    const first = await worker.send({ type: 'status' });
+    expect(first).toMatchObject({ paired: false, pairingRequired: true });
+    expect(pairAttempts).toBe(1);
+
+    now += 31_000;
+    const recovered = await worker.send({ type: 'status' });
+    expect(recovered).toMatchObject({ paired: true, pairingRequired: false });
+    expect(local.data.token).toBe('approved-token');
+    expect(pairAttempts).toBe(2);
   });
 
   it('re-provisions once when the app no longer recognises the stored token', async () => {

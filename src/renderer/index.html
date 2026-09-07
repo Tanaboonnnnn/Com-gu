@@ -348,8 +348,17 @@
                       <svg class="ico" viewBox="0 0 24 24"><use href="#i-out" /></svg><span data-i18n="setup.downloadExtensionZip">Download extension ZIP</span>
                     </button>
                     <button class="btn" id="bridgeUnpair" type="button" data-i18n="setup.disconnectBrowser">Disconnect browser</button>
+                    <button class="btn" id="revokeExtension" type="button" hidden data-i18n="setup.revokeExtension">Revoke extension approval</button>
                     <span class="chosen" id="bridgeState"></span>
                   </div>
+                  <section class="field" id="extensionApproval" hidden>
+                    <b data-i18n="setup.extensionWaiting">Extension waiting for approval</b>
+                    <p class="hint"><span data-i18n="setup.extensionId">ID:</span> <code id="pendingExtensionId"></code></p>
+                    <p class="hint is-required" data-i18n="setup.extensionApproveHint">Approve only if this is the ComGu companion extension you loaded.</p>
+                    <div class="step-actions">
+                      <button class="btn btn-solid" id="approveExtension" type="button" data-i18n="setup.approveExtension">Approve extension</button>
+                    </div>
+                  </section>
                   <p class="hint" id="extensionPath"></p>
                 </div>
               </li>

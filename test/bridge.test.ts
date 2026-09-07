@@ -324,6 +324,7 @@ beforeEach(async () => {
   writeDurableSoon('bridge-commands', null);
   await flushDurable();
   await setSecret('bridgeToken', '');
+  await setSecret('approvedExtensionOrigin' as never, EXTENSION_ORIGIN);
   token = null;
 });
 
@@ -667,6 +668,13 @@ describe('provisioning', () => {
     const other = await request('POST', '/pair', { origin: OTHER_EXTENSION_ORIGIN, auth: null });
     expect(other.status).toBe(403);
     expect(other.body).not.toHaveProperty('token');
+
+    const stolen = await request('GET', '/settings', {
+      origin: OTHER_EXTENSION_ORIGIN,
+      auth: approved.body.token
+    });
+    expect(stolen.status).toBe(401);
+    expect(stolen.body.error).toBe('unauthorised');
   });
 
   it('issues a token to the extension with nothing for the user to type', async () => {
