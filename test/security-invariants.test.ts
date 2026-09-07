@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parse } from '@babel/parser';
 import { describe, expect, it } from 'vitest';
+// @ts-expect-error Runtime .mjs scanner is exercised directly by Vitest; it intentionally ships without a declaration file.
+import { scanText } from '../scripts/verify-security-invariants.mjs';
 
 const root = process.cwd();
 const RUNTIME_ROOTS = ['src/main', 'src/renderer', 'extension'];
@@ -80,6 +82,31 @@ describe('security invariants', () => {
         expect(approved, `${file}: unexpected runtime URL host ${host} from ${value}`).toBe(true);
       }
     }
+  });
+
+  it('detects high-confidence secrets and floating Actions without flagging the ComGu repository URL', () => {
+    expect(scanText('const x = "' + 'AKIA' + '0'.repeat(16) + '"')).toContain('AWS access key');
+    expect(scanText('uses: vendor/action@' + 'main')).toContain('floating GitHub Action ref');
+    expect(scanText('https://github.com/Tanaboonnnnn/Com-gu')).toEqual([]);
+  });
+
+  it('wires deterministic security and production-audit gates into CI and release preflight', async () => {
+    const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    expect(pkg.scripts?.['verify:security']).toBe('node scripts/verify-security-invariants.mjs');
+    expect(pkg.scripts?.['audit:prod']).toBe('npm audit --omit=dev --audit-level=high');
+    expect(pkg.scripts?.['verify:ci']).toMatch(/^npm run verify:security && /);
+
+    const security = await fs.readFile(path.join(root, '.github/workflows/security.yml'), 'utf8').catch(() => '');
+    expect(security).toContain('permissions:');
+    expect(security).toContain('contents: read');
+    expect(security).toContain('actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09');
+    expect(security).toContain('actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444');
+    expect(security).toContain('npm run verify:security');
+    expect(security).toContain('npm run audit:prod');
+
+    const publish = await fs.readFile(path.join(root, '.github/workflows/publish.yml'), 'utf8');
+    expect(publish).toContain('Verify security invariants');
+    expect(publish).toContain('node scripts/verify-security-invariants.mjs');
   });
 
   it('keeps the old upstream owner out of runtime source and release configuration', async () => {

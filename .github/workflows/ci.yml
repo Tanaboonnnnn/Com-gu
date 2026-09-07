@@ -44,5 +44,5 @@ jobs:
         if: runner.os == 'Windows'
         run: node scripts/prepare-windows-command-sandbox-ci.mjs
 
-      - name: Verify
+      - name: Verify (security gate included)
         run: npm run verify:ci
