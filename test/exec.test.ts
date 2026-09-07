@@ -228,6 +228,29 @@ describe('runCommand', () => {
  * live incident, because it asks the real `childEnv()` about the real inherited path.
  */
 describe('the environment prepared for a child process', () => {
+  it('does not inherit unrelated host credentials into model-launched children', () => {
+    const held = {
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      NPM_TOKEN: process.env.NPM_TOKEN,
+      AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY
+    };
+    process.env.GITHUB_TOKEN = 'ghp_test_should_not_escape';
+    process.env.NPM_TOKEN = 'npm_test_should_not_escape';
+    process.env.AWS_SECRET_ACCESS_KEY = 'aws_test_should_not_escape';
+    try {
+      const env = childEnv();
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.NPM_TOKEN).toBeUndefined();
+      expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(env.PATH ?? env.Path).toBeTruthy();
+    } finally {
+      for (const [key, value] of Object.entries(held)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('hands over one path variable that still contains the inherited directories', () => {
     const env = childEnv();
     const keys = Object.keys(env).filter((key) => key.toLowerCase() === 'path');

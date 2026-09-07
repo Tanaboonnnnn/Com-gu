@@ -1071,6 +1071,30 @@ describe('extension command delivery', () => {
     expect(fetch.mock.calls.some(([, init]) => String((init as any)?.body ?? '').includes('code'))).toBe(false);
   });
 
+  it('backs off when Desktop approval is required instead of hammering /pair', async () => {
+    const local = new FakeStorageArea({ port: 8765 });
+    const session = new FakeStorageArea();
+    let pairAttempts = 0;
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: false });
+      if (url.pathname === '/pair') {
+        pairAttempts++;
+        return response(403, { error: 'pairing_required' });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local, session, fetch });
+
+    const first = await worker.send({ type: 'status' });
+    const second = await worker.send({ type: 'status' });
+
+    expect(first).toMatchObject({ paired: false, pairingRequired: true });
+    expect(second).toMatchObject({ paired: false, pairingRequired: true });
+    expect(local.data.token ?? null).toBeNull();
+    expect(pairAttempts).toBe(1);
+  });
+
   it('re-provisions once when the app no longer recognises the stored token', async () => {
     const local = new FakeStorageArea({ port: 8765, token: 'stale-token' });
     const session = new FakeStorageArea();

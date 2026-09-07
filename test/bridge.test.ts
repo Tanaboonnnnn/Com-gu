@@ -114,6 +114,7 @@ const {
 } = await import('../src/main/chat-workspace-scope.js');
 
 const EXTENSION_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+const OTHER_EXTENSION_ORIGIN = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba';
 /** The chat that spawns the swarm in these tests: only a proven conversation can. */
 const PRIME_CHAT = 'c-prime-bridge';
 
@@ -649,6 +650,25 @@ describe('prime inbox auto-wake', () => {
 // -------------------------------------------------------------- provisioning
 
 describe('provisioning', () => {
+  it('does not issue a bearer token to an unapproved extension origin', async () => {
+    await setSecret('approvedExtensionOrigin' as never, '');
+    const reply = await request('POST', '/pair', { origin: OTHER_EXTENSION_ORIGIN, auth: null });
+    expect(reply.status).toBe(403);
+    expect(reply.body).toEqual(expect.objectContaining({ error: 'pairing_required' }));
+    expect(reply.body).not.toHaveProperty('token');
+  });
+
+  it('issues a token only to the approved extension origin', async () => {
+    await setSecret('approvedExtensionOrigin' as never, EXTENSION_ORIGIN);
+    const approved = await request('POST', '/pair', { auth: null });
+    expect(approved.status).toBe(200);
+    expect(approved.body.token).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+
+    const other = await request('POST', '/pair', { origin: OTHER_EXTENSION_ORIGIN, auth: null });
+    expect(other.status).toBe(403);
+    expect(other.body).not.toHaveProperty('token');
+  });
+
   it('issues a token to the extension with nothing for the user to type', async () => {
     const reply = await request('POST', '/pair', { auth: null });
     expect(reply.status).toBe(200);
