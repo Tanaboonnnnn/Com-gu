@@ -56,14 +56,18 @@ it('drains an accepted MCP mutation before closing its response socket', async (
       arguments: {
         cmd:
           process.platform === 'win32'
-            ? "Set-Content -LiteralPath 'started.txt' -Value 'started' -NoNewline; Start-Sleep -Milliseconds 500; Set-Content -LiteralPath 'after-stop.txt' -Value 'after' -NoNewline"
+            ? "Set-Content -LiteralPath 'started.txt' -Value 'started' -NoNewline; Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath 'after-stop.txt' -Value 'after' -NoNewline"
             : "printf '%s' started > started.txt; sleep 1; printf '%s' after > after-stop.txt",
         workdir: '/probe',
         shell:
           process.platform === 'win32'
             ? path.join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
             : '/bin/sh',
-        yield_time_ms: 5_000
+        // This test is specifically about graceful endpoint drain while one MCP response
+        // is still in flight. Keep the exec request in its synchronous-response phase long
+        // enough for a cold Windows MXC launch; a short yield legitimately converts the
+        // call into a managed session and closes the HTTP response before command startup.
+        yield_time_ms: 30_000
       }
     }
   };
