@@ -2956,19 +2956,45 @@ describe('through the MCP endpoint', () => {
 
     const reply = await pending;
     const text = ((reply.result?.content ?? []) as Array<{ text?: string }>).map((part) => part.text ?? '').join('\n');
-    expect(text).toContain('held-call-done');
     expect(text).not.toContain('wake text belongs to the browser user turn');
     // This call began before the browser offered the real user message, so completing later is
     // not evidence that it saw that message. The row remains pending but is non-reofferable.
     expect(pendingCount('worker-1')).toBe(1);
     expect(offerMessages('worker-1')).toEqual([]);
 
-    // The next authenticated call really did begin after the user-message delivery and may
-    // retire it. It still must not repeat those words through its own result.
-    const later = await asChat('c-worker-1', 'status');
-    expect(later).not.toContain('wake text belongs to the browser user turn');
+    const sessionIdText = text.match(/Process running with session ID (\d+)/)?.[1];
+    if (sessionIdText) {
+      // `exec_command` is allowed to yield a managed session when process startup consumes the
+      // response budget (notably cold MXC on hosted Windows). `write_stdin` is then the next
+      // authenticated call, so it both drains the command and provides exactly the post-delivery
+      // acknowledgement boundary this regression needs. The browser-delivered row must still
+      // never be repeated through the tool result.
+      const followUp = await post(
+        {
+          jsonrpc: '2.0',
+          id: nextId++,
+          method: 'tools/call',
+          params: {
+            name: 'write_stdin',
+            arguments: { session_id: Number(sessionIdText), yield_time_ms: 5_000 }
+          }
+        },
+        { 'x-request-id': `${requestId}/relay` }
+      );
+      const followUpText = ((followUp.result?.content ?? []) as Array<{ text?: string }>)
+        .map((part) => part.text ?? '')
+        .join('\n');
+      expect(followUpText).toContain('held-call-done');
+      expect(followUpText).not.toContain('wake text belongs to the browser user turn');
+    } else {
+      expect(text).toContain('held-call-done');
+      // The next authenticated call really did begin after the user-message delivery and may
+      // retire it. It still must not repeat those words through its own result.
+      const later = await asChat('c-worker-1', 'status');
+      expect(later).not.toContain('wake text belongs to the browser user turn');
+    }
     expect(pendingCount('worker-1')).toBe(0);
-  }, 45_000);
+  }, 60_000);
 
   it('keeps a terminal worker tombstone only for finish retry and re-offers the lost finish inbox', async () => {
     startSwarm(1);
