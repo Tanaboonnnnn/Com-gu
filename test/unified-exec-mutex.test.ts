@@ -7,12 +7,11 @@ const truncationPolicy = { kind: 'tokens' as const, tokens: 10_000 };
 
 it('repairs built-in PowerShell module discovery from the selected shell home', () => {
   const requested = "Start-Sleep -Milliseconds 10; Write-Output 'done'";
-  const command = [
-    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    '-NoProfile',
-    '-Command',
-    requested
-  ];
+  // Keep this parser contract platform-neutral. The production command carries an absolute
+  // Windows path on Windows, but node:path on POSIX deliberately does not parse backslashes as
+  // separators; a bare recognised shell token exercises the same PowerShell-prefix branch on
+  // every CI runner instead of making this pure test depend on the host path grammar.
+  const command = ['powershell', '-NoProfile', '-Command', requested];
 
   const prepared = prefixPowershellScriptWithUtf8(command);
   const script = prepared.at(-1) ?? '';
