@@ -463,6 +463,8 @@ export interface AppState {
   status: ConnectionStatus;
   platform: PlatformInfo;
   secureStorage: SecureStorageInfo;
+  /** True only after the main process observed an encrypted blob the available OS provider cannot open. */
+  storedCredentialsUnreadable: boolean;
   /** True when an OpenAI control-plane API key is stored. The key itself never leaves the main process. */
   hasApiKey: boolean;
   /** True when an OpenRouter key is stored, which is what the goal loop spends. Same rule: the key stays here. */

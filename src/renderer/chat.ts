@@ -1379,6 +1379,7 @@ function applyChatChecked(input: HTMLInputElement, value: boolean, previous: boo
 function applyGoal(state: AppState, previous?: Config): void {
   const { config } = state;
   const secureStorageAvailable = state.secureStorage?.available ?? true;
+  const storedCredentialsUnreadable = state.storedCredentialsUnreadable === true;
   goalModel = config.goal.model;
   const goalToggle = $<HTMLInputElement>('goalEnabled');
   applyChatChecked(goalToggle, config.goal.enabled, previous?.goal.enabled);
@@ -1406,14 +1407,16 @@ function applyGoal(state: AppState, previous?: Config): void {
   $('goalModelName').textContent = config.goal.model;
   const goalKey = $<HTMLInputElement>('goalKey');
   goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-โ€ฆ';
-  goalKey.disabled = !secureStorageAvailable;
-  $('goalKeyState').textContent = !secureStorageAvailable
+  goalKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable;
+  $('goalKeyState').textContent = storedCredentialsUnreadable
+    ? tr('setup.secureStorageUnreadable')
+    : !secureStorageAvailable
     ? (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : state.hasGoalKey
       ? tr('goal.keyStored')
       : tr('goal.keySafe');
-  $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable);
-  $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable;
+  $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable);
+  $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable || storedCredentialsUnreadable;
   if (goalModels.length > 0) paintGoalModels();
 }
 

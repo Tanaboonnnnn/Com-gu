@@ -51,7 +51,7 @@ vi.mock('../src/main/recovery.js', () => ({
 }));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
-const { getSecret, initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
+const { deleteAllSecrets, getSecret, initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
 const { requestExtensionPairing } = await import('../src/main/bridge-pairing.js');
 const { appendEvent, createSession, initSessionStore, resetSessionStoreForTests } = await import('../src/main/session/store.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
@@ -158,6 +158,11 @@ beforeEach(async () => {
   currentWindow = null;
   nativeTheme.themeSource = 'system';
   vi.mocked(safeStorage.isAsyncEncryptionAvailable).mockResolvedValue(true);
+  vi.mocked(safeStorage.encryptStringAsync).mockImplementation(async (value: string) => Buffer.from(value, 'utf8'));
+  vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer: Buffer) => ({
+    result: buffer.toString('utf8'),
+    shouldReEncrypt: false
+  }));
   vi.mocked(shell.openPath).mockReset().mockResolvedValue('');
   vi.mocked(shell.openExternal).mockReset().mockResolvedValue(undefined);
   vi.mocked(app.getVersion).mockReset().mockReturnValue('0.0.0');
@@ -418,6 +423,27 @@ describe('turning multi-agent mode off', () => {
 });
 
 describe('bounded IPC identities and OS launch results', () => {
+  it('exposes an explicit unreadable-credential recovery channel that preserves the encrypted backup', async () => {
+    await deleteAllSecrets();
+    await setSecret('openaiApiKey', 'sk-before-app-identity-change');
+    resetSecretsCacheForTests();
+    // buildState also asks the bridge for its persisted bearer before projecting key booleans.
+    // An old application identity cannot decrypt any slot in the shared blob, so reproduce a
+    // persistent identity mismatch rather than a one-shot transient provider error.
+    vi.mocked(safeStorage.decryptStringAsync).mockRejectedValue(new Error('previous application identity'));
+
+    const before = await handlers.get('state:get')!(null, undefined) as any;
+    expect(before.ok, before.error).toBe(true);
+    expect(before.data.storedCredentialsUnreadable).toBe(true);
+
+    const recover = handlers.get('secret:resetUnreadable');
+    expect(recover, 'recovery channel was not registered').toBeTypeOf('function');
+    const recovered = await recover!(null, undefined) as any;
+    expect(recovered.ok, recovered.error).toBe(true);
+    expect(recovered.data.storedCredentialsUnreadable).toBe(false);
+    expect(recovered.data.hasApiKey).toBe(false);
+  });
+
   it('reports shell.openPath failure instead of claiming the extension folder opened', async () => {
     vi.mocked(shell.openPath).mockResolvedValueOnce('Access is denied');
     const reply = (await handlers.get('bridge:openExtensionFolder')!(null, undefined)) as {

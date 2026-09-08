@@ -20,7 +20,15 @@ import { forgetExposedSurface } from './mcp/server.js';
 import { runDiagnostics } from './diagnostics.js';
 import { formatLogAsJson, formatLogForClipboard, getLog, logInfo, onLog } from './logger.js';
 import { RESERVED_ROOT_NAMES, uniqueRootName, validateNewRoot, SandboxError } from './sandbox.js';
-import { hasSecret, isEncryptionAvailable, SecretStorageError, secureStorageStatus, setSecret } from './secrets.js';
+import {
+  archiveUnreadableSecrets,
+  hasSecret,
+  isEncryptionAvailable,
+  SecretStorageError,
+  secureStorageStatus,
+  setSecret,
+  storedCredentialsUnreadable
+} from './secrets.js';
 import { bundledVersion, locateBinary } from './tunnel/locate.js';
 import { TUNNEL_ID_PATTERN } from './tunnel/index.js';
 import {
@@ -299,13 +307,22 @@ async function buildState(): Promise<AppState> {
   const config = getConfig();
   const status = getStatus();
   const bridge = await bridgeStatus();
+  // The two reads share loadAll()'s single-flight promise. That matters on Keychain/Secret
+  // Service: an unreadable blob must not cause two sequential unlock/decrypt attempts merely
+  // because the renderer needs two booleans.
+  const [secureStorage, hasApiKey, hasGoalKey] = await Promise.all([
+    secureStorageStatus(),
+    hasSecret('openaiApiKey'),
+    hasSecret('openRouterApiKey')
+  ]);
   return {
     config,
     status,
     platform: hostPlatformInfo(),
-    secureStorage: await secureStorageStatus(),
-    hasApiKey: await hasSecret('openaiApiKey'),
-    hasGoalKey: await hasSecret('openRouterApiKey'),
+    secureStorage,
+    storedCredentialsUnreadable: storedCredentialsUnreadable(),
+    hasApiKey,
+    hasGoalKey,
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
     bridge,
@@ -577,6 +594,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (key === 'openRouterApiKey') retireGoalDrafts();
     const what = key === 'openRouterApiKey' ? 'openrouter key' : 'api key';
     logInfo(value.trim() === '' ? `${what} cleared` : `${what} stored`);
+    return buildState();
+  });
+
+  // Recovery is intentionally a separate explicit action from setting/clearing one key. An
+  // unreadable blob may also contain the OpenRouter key and browser-pairing identity, so pretending
+  // one field can be replaced safely would either destroy unknown data or weaken the fail-closed
+  // rule. secrets.ts preserves the original ciphertext before this handler returns success.
+  handle('secret:resetUnreadable', async () => {
+    await archiveUnreadableSecrets();
+    logInfo('unreadable encrypted credential store archived; fresh secure store ready');
     return buildState();
   });
 

@@ -16,6 +16,7 @@ vi.mock('electron', () => ({
 }));
 
 const {
+  archiveUnreadableSecrets,
   deleteAllSecrets,
   getSecret,
   initSecretsPath,
@@ -23,6 +24,7 @@ const {
   secureStorageCiphertextIsProtected,
   secureStorageStatus,
   setSecret,
+  storedCredentialsUnreadable,
   SecretStorageError
 } = await import('../src/main/secrets.js');
 const { safeStorage } = await import('electron');
@@ -254,6 +256,41 @@ describe('secret store', () => {
     }));
     expect(await getSecret('bridgeToken')).toBe('bridge-token-survives-ambiguous-decrypt-error');
     expect(await getSecret('openaiApiKey')).toBe('sk-survives-ambiguous-decrypt-error');
+  });
+
+  it('archives an unreadable encrypted store before starting fresh under the current OS identity', async () => {
+    await Promise.all([
+      setSecret('bridgeToken', 'bridge-token-from-old-app-identity'),
+      setSecret('openaiApiKey', 'sk-from-old-app-identity')
+    ]);
+    const file = path.join(dir, 'secrets.bin');
+    const before = await fs.readFile(file);
+    resetSecretsCacheForTests();
+    vi.mocked(safeStorage.decryptStringAsync).mockRejectedValueOnce(new Error('key belongs to previous app identity'));
+
+    expect(await getSecret('openaiApiKey')).toBeNull();
+    expect(storedCredentialsUnreadable()).toBe(true);
+
+    const backup = await archiveUnreadableSecrets();
+    expect(path.dirname(backup)).toBe(dir);
+    expect(path.basename(backup)).toMatch(/^secrets\.bin\.unreadable-\d+\.bak$/);
+    expect(await fs.readFile(backup)).toEqual(before);
+    await expect(fs.access(file)).rejects.toBeDefined();
+    expect(storedCredentialsUnreadable()).toBe(false);
+
+    vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer) => ({
+      result: buffer.toString('utf8'),
+      shouldReEncrypt: false
+    }));
+    await setSecret('openaiApiKey', 'sk-new-current-identity');
+    resetSecretsCacheForTests();
+    expect(await getSecret('openaiApiKey')).toBe('sk-new-current-identity');
+  });
+
+  it('refuses credential-store recovery unless an unreadable encrypted blob was actually observed', async () => {
+    await setSecret('openaiApiKey', 'sk-readable');
+    await expect(archiveUnreadableSecrets()).rejects.toThrow(/not unreadable/i);
+    expect(await getSecret('openaiApiKey')).toBe('sk-readable');
   });
 
   it('preserves ciphertext when decrypt succeeds but the stored secret map is malformed', async () => {

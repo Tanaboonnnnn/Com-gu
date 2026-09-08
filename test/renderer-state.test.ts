@@ -395,6 +395,7 @@ async function mountChat(
     status: { state: 'disconnected', detail: '', publicUrl: null, localUrl: null, handshakeAt: null, lastRequestAt: null, lastToolCallAt: null, health: null, surfaces: [] },
     hasApiKey: false,
     hasGoalKey: false,
+    storedCredentialsUnreadable: false,
     resolvedBinary: null,
     bundledTunnelVersion: null,
     bridge: { running: true, port: 8765, paired: false, present: false, lastSeenAt: null },
@@ -1000,6 +1001,44 @@ it('keeps secret-key input on secure-storage failure', async () => {
   thaiApi.dispatchEvent(new failed.window.Event('blur'));
   await settle();
   expect(failed.window.document.querySelector('.toast')?.textContent).toBe(t('th', 'setup.secureStorageUnavailable'));
+});
+
+it('offers explicit recovery for an unreadable cross-platform credential store before accepting a replacement key', async () => {
+  let recoverCalls = 0;
+  const mounted = await mountChat(
+    {
+      secureStorage: { available: true, detail: null },
+      storedCredentialsUnreadable: true
+    },
+    [],
+    {
+      resetUnreadableSecrets: () => {
+        recoverCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          data: { ...mounted.state, storedCredentialsUnreadable: false, hasApiKey: false, hasGoalKey: false }
+        });
+      }
+    }
+  );
+  const doc = mounted.window.document;
+  const apiKey = doc.getElementById('apiKey') as HTMLInputElement;
+  const goalKey = doc.getElementById('goalKey') as HTMLInputElement;
+  const recover = doc.getElementById('recoverStoredCredentials') as HTMLButtonElement;
+
+  expect(apiKey.disabled).toBe(true);
+  expect(goalKey.disabled).toBe(true);
+  expect(doc.getElementById('goalKeyState')!.textContent).toBe(t('en', 'setup.secureStorageUnreadable'));
+  expect(recover.hidden).toBe(false);
+  expect(doc.getElementById('apiKeyState')!.textContent).toBe(t('en', 'setup.secureStorageUnreadable'));
+
+  recover.click();
+  await settle();
+  await settle();
+  expect(recoverCalls).toBe(1);
+  expect(apiKey.disabled).toBe(false);
+  expect(goalKey.disabled).toBe(false);
+  expect(recover.hidden).toBe(true);
 });
 
 it('never lets an older secret save erase a newer value typed while IPC is in flight', async () => {
