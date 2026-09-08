@@ -328,7 +328,7 @@ describe('cross-platform packaging targets', () => {
     expect(builder.deb.depends).toContain('libgtk-3-0 | libgtk-3-0t64');
     expect(builder.deb.depends).toContain('libatspi2.0-0 | libatspi2.0-0t64');
     expect(builder.linux.syncDesktopName).toBe(true);
-    expect(builder.linux.maintainer).toMatch(/^ComGu <[^>]+@users\.noreply\.github\.com>$/);
+    expect(builder.linux.maintainer).toBe('ComGu <noreply@comgu.local>');
     expect(pkg.desktopName).toBe('com.comgu.app.desktop');
     expect(pkg.homepage).toBe('https://github.com/Tanaboonnnnn/Com-gu');
     expect(iconScript).toContain("build', 'icon.png'), await pngFor(1024)");

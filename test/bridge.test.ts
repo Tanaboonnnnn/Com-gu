@@ -114,6 +114,7 @@ const {
 } = await import('../src/main/chat-workspace-scope.js');
 
 const EXTENSION_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+const OTHER_EXTENSION_ORIGIN = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba';
 /** The chat that spawns the swarm in these tests: only a proven conversation can. */
 const PRIME_CHAT = 'c-prime-bridge';
 
@@ -323,6 +324,7 @@ beforeEach(async () => {
   writeDurableSoon('bridge-commands', null);
   await flushDurable();
   await setSecret('bridgeToken', '');
+  await setSecret('approvedExtensionOrigin' as never, EXTENSION_ORIGIN);
   token = null;
 });
 
@@ -649,6 +651,32 @@ describe('prime inbox auto-wake', () => {
 // -------------------------------------------------------------- provisioning
 
 describe('provisioning', () => {
+  it('does not issue a bearer token to an unapproved extension origin', async () => {
+    await setSecret('approvedExtensionOrigin' as never, '');
+    const reply = await request('POST', '/pair', { origin: OTHER_EXTENSION_ORIGIN, auth: null });
+    expect(reply.status).toBe(403);
+    expect(reply.body).toEqual(expect.objectContaining({ error: 'pairing_required' }));
+    expect(reply.body).not.toHaveProperty('token');
+  });
+
+  it('issues a token only to the approved extension origin', async () => {
+    await setSecret('approvedExtensionOrigin' as never, EXTENSION_ORIGIN);
+    const approved = await request('POST', '/pair', { auth: null });
+    expect(approved.status).toBe(200);
+    expect(approved.body.token).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+
+    const other = await request('POST', '/pair', { origin: OTHER_EXTENSION_ORIGIN, auth: null });
+    expect(other.status).toBe(403);
+    expect(other.body).not.toHaveProperty('token');
+
+    const stolen = await request('GET', '/settings', {
+      origin: OTHER_EXTENSION_ORIGIN,
+      auth: approved.body.token
+    });
+    expect(stolen.status).toBe(401);
+    expect(stolen.body.error).toBe('unauthorised');
+  });
+
   it('issues a token to the extension with nothing for the user to type', async () => {
     const reply = await request('POST', '/pair', { auth: null });
     expect(reply.status).toBe(200);
@@ -699,6 +727,23 @@ describe('provisioning', () => {
     expect(second).not.toBe(first);
     expect((await request('GET', '/status', { auth: first })).status).toBe(401);
     expect((await request('GET', '/status', { auth: second })).status).toBe(200);
+  });
+
+  it('can invalidate only the live browser credential for identity recovery without revoking approval', async () => {
+    const first = await pair();
+    const bridge = await import('../src/main/bridge.js');
+    const resetCredential = (bridge as any).resetBrowserCredentialForRecovery;
+    expect(typeof resetCredential).toBe('function');
+
+    await resetCredential();
+
+    expect(await bridgeStatus()).toMatchObject({ paired: false, present: false });
+    expect((await request('GET', '/status', { auth: first })).status).toBe(401);
+    // This is recovery, not the user's Disconnect action. The already-approved extension may
+    // silently mint a fresh credential on its next local request.
+    const repaired = await request('POST', '/pair', { auth: null });
+    expect(repaired.status).toBe(200);
+    expect(repaired.body.token).not.toBe(first);
   });
 
   it('drops the token when the user disconnects the browser', async () => {

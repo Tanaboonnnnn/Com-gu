@@ -756,7 +756,7 @@
   }
 
   /** Talks to the service worker. Returns null once the extension is reloaded. */
-  async function ask(message) {
+  async function ask(message, retriedStaleDocument = false) {
     // A new/reloaded document claims its browser-supplied MessageSender.documentId before
     // any observation or mutation. This is what lets the worker retain a terminal tombstone
     // across external navigation and still admit the genuinely new page, without accepting
@@ -771,7 +771,29 @@
       return registered;
     }
     observed.blocked = null;
-    return sendToWorker({ ...message, navigationEpoch: epoch });
+    const reply = await sendToWorker({ ...message, navigationEpoch: epoch });
+    if (reply && reply.ok === false && reply.error === 'stale_document') {
+      // The MV3 worker owns the authoritative tab/document lease and can outlive this content
+      // script in a different lifecycle shape. If it has legitimately forgotten or tombstoned
+      // our prior registration, keeping this already-resolved promise makes every later bind,
+      // correlation and activity call repeat the same stale lease forever. That eventually
+      // removes the exact request-id evidence MCP needs and trips CALLER_IDENTITY_REQUIRED.
+      //
+      // A stale_document reply is issued before the worker applies the requested operation, so
+      // one re-registration followed by one exact retry is safe. Re-prove the browser-supplied
+      // document identity; never infer ownership from tab id, route, time or active-tab state.
+      documentReady = null;
+      observed.blocked = 'stale_document';
+      // Some worker handlers deliberately re-check document ownership *after* awaiting a
+      // bridge mutation. In that case stale_document means the mutation may already have
+      // committed, so replaying it here could duplicate user intent. Only the two read/evidence
+      // operations needed to restore caller identity are safe to replay immediately; every
+      // other operation fails closed but the cleared registration guarantees its next attempt
+      // starts by proving this document again.
+      const retryable = message && (message.type === 'activity' || message.type === 'correlate');
+      if (!retriedStaleDocument && retryable) return ask(message, true);
+    }
+    return reply;
   }
 
   // ------------------------------------------------------------- observing

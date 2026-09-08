@@ -7607,6 +7607,48 @@ describe('folding away the chat’s opening instruction', () => {
   });
 });
 
+describe('service-worker document lease recovery', () => {
+  it('re-registers once and retries the exact message when the worker says this document is stale', async () => {
+    const chat = 'abababab-cdcd-efef-1212-343434343434';
+    let registrations = 0;
+    let activities = 0;
+    let staleNextActivity = false;
+    live = await harness(`https://chatgpt.com/c/${chat}`, {
+      register_document: () => {
+        registrations += 1;
+        return { ok: true };
+      },
+      activity: () => {
+        activities += 1;
+        if (staleNextActivity) {
+          staleNextActivity = false;
+          return { ok: false, error: 'stale_document' };
+        }
+        return {
+          ok: true,
+          data: { entries: [], stream: [], nextSince: 0, pendingTools: 0, job: null }
+        };
+      }
+    });
+
+    // Ignore the document's initial registration. The regression is a lease that becomes stale
+    // later while the same long-lived ChatGPT document is still open.
+    await settle();
+    registrations = 0;
+    activities = 0;
+    staleNextActivity = true;
+    await live.hook.pullActivity();
+
+    expect(registrations).toBe(1);
+    expect(activities).toBe(2);
+    expect(live.sent.slice(-3).map((message) => message.type)).toEqual([
+      'activity',
+      'register_document',
+      'activity'
+    ]);
+  });
+});
+
 describe('the fresh chat the app opened', () => {
   it('delivers the bootstrap before unrelated status restoration can stall startup', async () => {
     let releaseStatus: () => void = () => undefined;

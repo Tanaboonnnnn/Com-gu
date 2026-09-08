@@ -29,7 +29,7 @@ import {
   DEFAULT_GOAL_SYSTEM_PROMPT,
   MAX_GOAL_SYSTEM_PROMPT_CHARS
 } from '../shared/goal.js';
-import { browserExtensionRequired, type AppState, type Config } from '../shared/types.js';
+import { browserExtensionRequired, type AppState, type Config, type ExtensionPairingView } from '../shared/types.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
 import type { PendingChatWorkspaceView } from '../preload/index.js';
 import { $, clockTime, compactNumber, el, icon, run, toast, type IpcFailure } from './dom.js';
@@ -943,6 +943,27 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad' } {
  * that cannot be followed. Asked once and cached, because the answer cannot change while
  * the app is running.
  */
+let extensionPairingGeneration = 0;
+let reviewedPendingExtensionOrigin: string | null = null;
+
+function extensionId(origin: string): string {
+  return origin.replace(/^chrome-extension:\/\//, '');
+}
+
+function paintExtensionPairing(view: ExtensionPairingView): void {
+  reviewedPendingExtensionOrigin = view.pendingOrigin;
+  const approval = $('extensionApproval');
+  approval.hidden = view.pendingOrigin === null;
+  $('pendingExtensionId').textContent = view.pendingOrigin ? extensionId(view.pendingOrigin) : '';
+  $<HTMLButtonElement>('revokeExtension').hidden = view.approvedOrigin === null;
+}
+
+async function refreshExtensionPairing(): Promise<void> {
+  const generation = ++extensionPairingGeneration;
+  const view = await run(api.getExtensionPairing());
+  if (view && generation === extensionPairingGeneration) paintExtensionPairing(view);
+}
+
 let extensionPathShown = false;
 async function showExtensionPath(): Promise<void> {
   if (extensionPathShown) return;
@@ -1360,6 +1381,8 @@ function applyChatChecked(input: HTMLInputElement, value: boolean, previous: boo
 function applyGoal(state: AppState, previous?: Config): void {
   const { config } = state;
   const secureStorageAvailable = state.secureStorage?.available ?? true;
+  const storedCredentialsUnreadable = state.storedCredentialsUnreadable === true;
+  const storedCredentialsAccessFailed = state.storedCredentialsAccessFailed === true;
   goalModel = config.goal.model;
   const goalToggle = $<HTMLInputElement>('goalEnabled');
   applyChatChecked(goalToggle, config.goal.enabled, previous?.goal.enabled);
@@ -1387,14 +1410,18 @@ function applyGoal(state: AppState, previous?: Config): void {
   $('goalModelName').textContent = config.goal.model;
   const goalKey = $<HTMLInputElement>('goalKey');
   goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-โ€ฆ';
-  goalKey.disabled = !secureStorageAvailable;
-  $('goalKeyState').textContent = !secureStorageAvailable
+  goalKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
+  $('goalKeyState').textContent = storedCredentialsAccessFailed
+    ? tr('setup.secureStorageUnavailable')
+    : storedCredentialsUnreadable
+    ? tr('setup.secureStorageUnreadable')
+    : !secureStorageAvailable
     ? (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : state.hasGoalKey
       ? tr('goal.keyStored')
       : tr('goal.keySafe');
-  $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable);
-  $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable;
+  $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed);
+  $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
   if (goalModels.length > 0) paintGoalModels();
 }
 
@@ -1544,6 +1571,7 @@ export function chatApply(state: AppState, previous?: Config): void {
           : tr('chat.bridgeListening', { port: bridge.port ?? '?' });
   $('bridgeState').classList.toggle('is-warn', browserRequired && (!bridge.present || !secureStorageAvailable));
   void showExtensionPath();
+  void refreshExtensionPairing();
 
   if (sessions.length > 0) paintSessions();
 }
@@ -1727,6 +1755,22 @@ export function initChat(next: Deps): void {
   $('bridgeUnpair').addEventListener('click', async () => {
     const state = await run(api.unpairExtension());
     if (state) toast(tr('chat.browserDisconnected'));
+  });
+  $('approveExtension').addEventListener('click', async () => {
+    const expectedOrigin = reviewedPendingExtensionOrigin;
+    if (!expectedOrigin) return;
+    const view = await run(api.approveExtensionPairing(expectedOrigin));
+    if (view) {
+      paintExtensionPairing(view);
+      toast(tr('setup.extensionApprovedToast'));
+    }
+  });
+  $('revokeExtension').addEventListener('click', async () => {
+    const view = await run(api.revokeExtensionPairing());
+    if (view) {
+      paintExtensionPairing(view);
+      toast(tr('setup.extensionRevokedToast'));
+    }
   });
   $('bridgeFolder').addEventListener('click', async () => {
     const dir = await run(api.openExtensionFolder());

@@ -81,6 +81,22 @@ describe('ComGu branding', () => {
     expect(issueConfig).not.toContain('totec448-spec/chat-on-steroids');
   });
 
+  it('keeps runtime and release metadata free of the previous upstream owner identity', async () => {
+    const files = [
+      'electron-builder.yml',
+      'package.json',
+      'src/main/version.ts',
+      'src/main/goal.ts',
+      '.github/workflows/ci.yml',
+      '.github/workflows/publish.yml'
+    ];
+    for (const file of files) {
+      const source = await text(file);
+      expect(source, file).not.toContain('totec448-spec');
+      expect(source, file).not.toContain('227782719+totec448-spec@users.noreply.github.com');
+    }
+  });
+
   it('generates shipped icons from the full-colour ComGu logo source', async () => {
     const iconScript = await text('scripts/make-icon.mjs');
     expect(iconScript).toContain("import sharp from 'sharp'");

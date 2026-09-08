@@ -1,8 +1,26 @@
 import { expect, it } from 'vitest';
 import { UnifiedExecProcessManager, applyUnifiedExecEnv } from '../src/main/codex/unified-exec.js';
+import { prefixPowershellScriptWithUtf8 } from '../src/main/codex/shell.js';
 import { DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS } from '../src/main/codex/unified-exec-constants.js';
 
 const truncationPolicy = { kind: 'tokens' as const, tokens: 10_000 };
+
+it('repairs built-in PowerShell module discovery from the selected shell home', () => {
+  const requested = "Start-Sleep -Milliseconds 10; Write-Output 'done'";
+  // Keep this parser contract platform-neutral. The production command carries an absolute
+  // Windows path on Windows, but node:path on POSIX deliberately does not parse backslashes as
+  // separators; a bare recognised shell token exercises the same PowerShell-prefix branch on
+  // every CI runner instead of making this pure test depend on the host path grammar.
+  const command = ['powershell', '-NoProfile', '-Command', requested];
+
+  const prepared = prefixPowershellScriptWithUtf8(command);
+  const script = prepared.at(-1) ?? '';
+
+  expect(script.indexOf('$PSHOME')).toBeGreaterThanOrEqual(0);
+  expect(script.indexOf('PSModulePath')).toBeGreaterThanOrEqual(0);
+  expect(script.indexOf('$PSHOME')).toBeLessThan(script.indexOf(requested));
+  expect(script).not.toContain('$env:USERPROFILE');
+});
 
 it('does not let capacity pruning steal an interaction lock from an already queued waiter', async () => {
   const manager = new UnifiedExecProcessManager(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS);

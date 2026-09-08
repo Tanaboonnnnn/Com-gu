@@ -16,6 +16,7 @@ vi.mock('electron', () => ({
 }));
 
 const {
+  archiveUnreadableSecrets,
   deleteAllSecrets,
   getSecret,
   initSecretsPath,
@@ -23,6 +24,7 @@ const {
   secureStorageCiphertextIsProtected,
   secureStorageStatus,
   setSecret,
+  storedCredentialsUnreadable,
   SecretStorageError
 } = await import('../src/main/secrets.js');
 const { safeStorage } = await import('electron');
@@ -245,7 +247,7 @@ describe('secret store', () => {
     expect(await getSecret('bridgeToken')).toBeNull();
     const failedWrite = setSecret('openRouterApiKey', 'must-not-replace-ambiguous-blob');
     await expect(failedWrite).rejects.toBeInstanceOf(SecretStorageError);
-    await expect(failedWrite).rejects.toMatchObject({ code: 'stored_credentials_unreadable' });
+    await expect(failedWrite).rejects.toMatchObject({ code: 'secure_storage_unavailable' });
     expect(await fs.readFile(file)).toEqual(before);
 
     vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer) => ({
@@ -254,6 +256,50 @@ describe('secret store', () => {
     }));
     expect(await getSecret('bridgeToken')).toBe('bridge-token-survives-ambiguous-decrypt-error');
     expect(await getSecret('openaiApiKey')).toBe('sk-survives-ambiguous-decrypt-error');
+  });
+
+  it('does not claim an app-identity decrypt rejection is confirmed unreadable without stronger evidence', async () => {
+    await Promise.all([
+      setSecret('bridgeToken', 'bridge-token-from-old-app-identity'),
+      setSecret('openaiApiKey', 'sk-from-old-app-identity')
+    ]);
+    const file = path.join(dir, 'secrets.bin');
+    const before = await fs.readFile(file);
+    resetSecretsCacheForTests();
+    vi.mocked(safeStorage.decryptStringAsync).mockRejectedValueOnce(new Error('key belongs to previous app identity'));
+
+    expect(await getSecret('openaiApiKey')).toBeNull();
+    expect(storedCredentialsUnreadable()).toBe(false);
+    await expect(archiveUnreadableSecrets()).rejects.toThrow(/not unreadable/i);
+    expect(await fs.readFile(file)).toEqual(before);
+
+    vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer) => ({
+      result: buffer.toString('utf8'),
+      shouldReEncrypt: false
+    }));
+    expect(await getSecret('openaiApiKey')).toBe('sk-from-old-app-identity');
+  });
+
+  it('keeps an ambiguous decrypt rejection retryable instead of claiming permanent unreadability', async () => {
+    await setSecret('openaiApiKey', 'sk-retryable');
+    resetSecretsCacheForTests();
+    vi.mocked(safeStorage.decryptStringAsync).mockRejectedValueOnce(new Error('provider temporarily unavailable'));
+
+    expect(await getSecret('openaiApiKey')).toBeNull();
+    expect(storedCredentialsUnreadable()).toBe(false);
+    await expect(archiveUnreadableSecrets()).rejects.toThrow(/not unreadable/i);
+
+    vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer) => ({
+      result: buffer.toString('utf8'),
+      shouldReEncrypt: false
+    }));
+    expect(await getSecret('openaiApiKey')).toBe('sk-retryable');
+  });
+
+  it('refuses credential-store recovery unless an unreadable encrypted blob was actually observed', async () => {
+    await setSecret('openaiApiKey', 'sk-readable');
+    await expect(archiveUnreadableSecrets()).rejects.toThrow(/not unreadable/i);
+    expect(await getSecret('openaiApiKey')).toBe('sk-readable');
   });
 
   it('preserves ciphertext when decrypt succeeds but the stored secret map is malformed', async () => {
@@ -271,7 +317,7 @@ describe('secret store', () => {
     expect(await getSecret('bridgeToken')).toBeNull();
     const malformedWrite = setSecret('openRouterApiKey', 'must-not-replace-malformed-blob');
     await expect(malformedWrite).rejects.toBeInstanceOf(SecretStorageError);
-    await expect(malformedWrite).rejects.toMatchObject({ code: 'stored_credentials_unreadable' });
+    await expect(malformedWrite).rejects.toMatchObject({ code: 'secure_storage_unavailable' });
     expect(await fs.readFile(file)).toEqual(before);
   });
 

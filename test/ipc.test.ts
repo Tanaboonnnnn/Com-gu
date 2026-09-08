@@ -51,7 +51,8 @@ vi.mock('../src/main/recovery.js', () => ({
 }));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
-const { initSecretsPath, resetSecretsCacheForTests } = await import('../src/main/secrets.js');
+const { deleteAllSecrets, getSecret, initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
+const { requestExtensionPairing } = await import('../src/main/bridge-pairing.js');
 const { appendEvent, createSession, initSessionStore, resetSessionStoreForTests } = await import('../src/main/session/store.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
 const { pendingCommands, resetBridgeForTests, setBrowserOpener, startBridge, stopBridge } = await import(
@@ -157,6 +158,11 @@ beforeEach(async () => {
   currentWindow = null;
   nativeTheme.themeSource = 'system';
   vi.mocked(safeStorage.isAsyncEncryptionAvailable).mockResolvedValue(true);
+  vi.mocked(safeStorage.encryptStringAsync).mockImplementation(async (value: string) => Buffer.from(value, 'utf8'));
+  vi.mocked(safeStorage.decryptStringAsync).mockImplementation(async (buffer: Buffer) => ({
+    result: buffer.toString('utf8'),
+    shouldReEncrypt: false
+  }));
   vi.mocked(shell.openPath).mockReset().mockResolvedValue('');
   vi.mocked(shell.openExternal).mockReset().mockResolvedValue(undefined);
   vi.mocked(app.getVersion).mockReset().mockReturnValue('0.0.0');
@@ -417,6 +423,26 @@ describe('turning multi-agent mode off', () => {
 });
 
 describe('bounded IPC identities and OS launch results', () => {
+  it('keeps an ambiguous credential decrypt failure retryable instead of exposing recovery as confirmed', async () => {
+    await deleteAllSecrets();
+    await setSecret('openaiApiKey', 'sk-before-app-identity-change');
+    resetSecretsCacheForTests();
+    // buildState also asks the bridge for its persisted bearer before projecting key booleans.
+    // An old application identity cannot decrypt any slot in the shared blob, so reproduce a
+    // persistent identity mismatch rather than a one-shot transient provider error.
+    vi.mocked(safeStorage.decryptStringAsync).mockRejectedValue(new Error('previous application identity'));
+
+    const before = await handlers.get('state:get')!(null, undefined) as any;
+    expect(before.ok, before.error).toBe(true);
+    expect(before.data.storedCredentialsUnreadable).toBe(false);
+    expect(before.data.storedCredentialsAccessFailed).toBe(true);
+
+    const recover = handlers.get('secret:resetUnreadable');
+    expect(recover, 'recovery channel was not registered').toBeTypeOf('function');
+    const recovered = await recover!(null, undefined) as any;
+    expect(recovered.ok).toBe(false);
+  });
+
   it('reports shell.openPath failure instead of claiming the extension folder opened', async () => {
     vi.mocked(shell.openPath).mockResolvedValueOnce('Access is denied');
     const reply = (await handlers.get('bridge:openExtensionFolder')!(null, undefined)) as {
@@ -425,6 +451,79 @@ describe('bounded IPC identities and OS launch results', () => {
     };
     expect(reply.ok).toBe(false);
     expect(reply.error).toMatch(/could not open.*access is denied/i);
+  });
+
+  it('exposes pending extension identity and approves it without exposing a bearer token', async () => {
+    const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    await setSecret('approvedExtensionOrigin', '');
+    await setSecret('bridgeToken', 'secret-that-must-stay-main-process-only');
+    await requestExtensionPairing(origin);
+
+    const pending = await handlers.get('bridge:getExtensionPairing')!(null, undefined);
+    expect(pending).toEqual({ ok: true, data: { approvedOrigin: null, pendingOrigin: origin } });
+    expect(JSON.stringify(pending)).not.toContain('secret-that-must-stay-main-process-only');
+
+    const approved = await handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: origin });
+    expect(approved).toEqual({ ok: true, data: { approvedOrigin: origin, pendingOrigin: null } });
+    expect(await getSecret('approvedExtensionOrigin')).toBe(origin);
+  });
+
+  it('rejects approval when the pending extension changed after the user reviewed it', async () => {
+    const reviewedOrigin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    const replacementOrigin = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba';
+    await setSecret('approvedExtensionOrigin', '');
+    await requestExtensionPairing(reviewedOrigin);
+    const reviewed = await handlers.get('bridge:getExtensionPairing')!(null, undefined) as any;
+    expect(reviewed.data.pendingOrigin).toBe(reviewedOrigin);
+
+    await requestExtensionPairing(replacementOrigin);
+    const approval = await handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: reviewedOrigin }) as any;
+
+    expect(approval.ok).toBe(false);
+    expect(await getSecret('approvedExtensionOrigin')).toBeNull();
+    const current = await handlers.get('bridge:getExtensionPairing')!(null, undefined) as any;
+    expect(current.data.pendingOrigin).toBe(replacementOrigin);
+  });
+
+  it('keeps a newer pending extension when it arrives while the reviewed origin is being persisted', async () => {
+    const reviewedOrigin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    const replacementOrigin = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba';
+    await setSecret('approvedExtensionOrigin', '');
+    await requestExtensionPairing(reviewedOrigin);
+
+    let releasePersist!: () => void;
+    const persistPaused = new Promise<void>((resolve) => { releasePersist = resolve; });
+    let persistenceStarted!: () => void;
+    const persistenceDidStart = new Promise<void>((resolve) => { persistenceStarted = resolve; });
+    const encrypt = vi.mocked(safeStorage.encryptStringAsync);
+    const originalEncrypt = encrypt.getMockImplementation()!;
+    encrypt.mockImplementationOnce(async (value: string) => {
+      persistenceStarted();
+      await persistPaused;
+      return originalEncrypt(value);
+    });
+
+    const approval = handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: reviewedOrigin }) as Promise<any>;
+    await persistenceDidStart;
+    await requestExtensionPairing(replacementOrigin);
+    releasePersist();
+
+    const approved = await approval;
+    expect(approved.ok, approved.error).toBe(true);
+    expect(approved.data.approvedOrigin).toBe(reviewedOrigin);
+    expect(approved.data.pendingOrigin).toBe(replacementOrigin);
+    expect(await getSecret('approvedExtensionOrigin')).toBe(reviewedOrigin);
+  });
+
+  it('revokes extension identity and its bearer token together', async () => {
+    const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    await setSecret('approvedExtensionOrigin', origin);
+    await setSecret('bridgeToken', 'old-token');
+
+    const revoked = await handlers.get('bridge:revokeExtensionPairing')!(null, undefined);
+    expect(revoked).toEqual({ ok: true, data: { approvedOrigin: null, pendingOrigin: null } });
+    expect(await getSecret('approvedExtensionOrigin')).toBeNull();
+    expect(await getSecret('bridgeToken')).toBeNull();
   });
 
   it('opens the extension recovery ZIP from the installed app version, never releases/latest', async () => {

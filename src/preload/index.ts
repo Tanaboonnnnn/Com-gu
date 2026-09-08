@@ -7,7 +7,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppState, BrowserFamily, Capabilities, Config, Diagnosis, LaunchAtLoginState, LogEntry } from '../shared/types.js';
+import type { AppState, BrowserFamily, Capabilities, Config, Diagnosis, ExtensionPairingView, LaunchAtLoginState, LogEntry } from '../shared/types.js';
 import type {
   Handoff,
   SessionEvent,
@@ -97,6 +97,7 @@ const api = {
   removeRoot: (name: string) => call<AppState>('roots:remove', { name }),
   renameRoot: (name: string, newName: string) => call<AppState>('roots:rename', { name, newName }),
   setApiKey: (value: string) => call<AppState>('secret:set', { value }),
+  resetUnreadableSecrets: () => call<AppState>('secret:resetUnreadable'),
   // The goal loop's own credential. Same channel, named slot; the value only ever goes in.
   setGoalKey: (value: string) => call<AppState>('secret:set', { value, key: 'openRouterApiKey' }),
   listGoalModels: (offset: number) => call<GoalModelPage>('goal:models', { offset }),
@@ -121,6 +122,9 @@ const api = {
   getHandoff: (id: string, handoffId?: string) => call<Handoff | null>('handoff:get', { id, handoffId }),
 
   unpairExtension: () => call<AppState>('bridge:unpair'),
+  getExtensionPairing: () => call<ExtensionPairingView>('bridge:getExtensionPairing'),
+  approveExtensionPairing: (expectedOrigin: string) => call<ExtensionPairingView>('bridge:approveExtensionPairing', { expectedOrigin }),
+  revokeExtensionPairing: () => call<ExtensionPairingView>('bridge:revokeExtensionPairing'),
   downloadExtension: () => call<boolean>('bridge:downloadExtension'),
   // The renderer can ask where the extension is and ask for it to be opened, but the
   // path it gets back is only ever displayed: the open happens in the main process

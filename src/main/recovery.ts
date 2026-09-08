@@ -131,6 +131,10 @@ function appRecoveryManager(): RecoveryManager {
     actions: {
       reconnectBridge: async () => {
         const bridge = await import('./bridge.js');
+        // A listening loopback port is not proof that the browser identity path survived.
+        // Force the already-approved extension to mint a fresh bearer on its next local
+        // request, without turning recovery into the user's durable Disconnect action.
+        await bridge.resetBrowserCredentialForRecovery();
         await bridge.stopBridge();
         const port = await bridge.startBridge();
         const state = await bridge.bridgeStatus();

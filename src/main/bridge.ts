@@ -28,6 +28,12 @@ import type { SessionOrigin } from '../shared/session.js';
 import { getConfig, updateConfig } from './config.js';
 import { getSecret, secureStorageStatus, setSecret } from './secrets.js';
 import {
+  extensionOriginApproved,
+  requestExtensionPairing,
+  resetExtensionPairingForTests,
+  validExtensionOrigin
+} from './bridge-pairing.js';
+import {
   ackGoalDraft,
   draftOpeningMessage,
   goalKeyPresent,
@@ -485,6 +491,27 @@ export async function unpair(): Promise<void> {
   changed();
 }
 
+/**
+ * Invalidates only the current browser bearer credential for bounded recovery.
+ *
+ * This is deliberately different from unpair(): the user did not revoke the extension and
+ * the approved extension origin remains authoritative. The next request from that exact
+ * approved origin may therefore provision a fresh token silently. Clearing process-local
+ * presence at the same time prevents the Desktop recovery UI from mistaking the old sighting
+ * for proof that the repaired identity path has actually returned.
+ */
+export async function resetBrowserCredentialForRecovery(): Promise<boolean> {
+  const stored = await getSecret('bridgeToken');
+  if (!stored || stored === BROWSER_DISCONNECTED) return false;
+  await setSecret('bridgeToken', '');
+  if (browserPresenceTimer) clearTimeout(browserPresenceTimer);
+  browserPresenceTimer = null;
+  lastSeenAt = null;
+  logInfo('bridge: browser credential reset for identity recovery');
+  changed();
+  return true;
+}
+
 // ------------------------------------------------------------------ helpers
 
 function json(res: http.ServerResponse, status: number, body: unknown, origin: string | null): void {
@@ -519,7 +546,7 @@ function json(res: http.ServerResponse, status: number, body: unknown, origin: s
 function originOf(req: http.IncomingMessage): { ok: boolean; origin: string | null } {
   const origin = req.headers.origin;
   if (typeof origin !== 'string' || origin === '') return { ok: true, origin: null };
-  if (origin.startsWith('chrome-extension://')) return { ok: true, origin };
+  if (validExtensionOrigin(origin)) return { ok: true, origin };
   return { ok: false, origin: null };
 }
 
@@ -562,7 +589,8 @@ function noteExtensionVersion(req: http.IncomingMessage): void {
   }
 }
 
-async function authorised(req: http.IncomingMessage): Promise<boolean> {
+async function authorised(req: http.IncomingMessage, origin: string | null): Promise<boolean> {
+  if (origin !== null && !(await extensionOriginApproved(origin))) return false;
   const header = req.headers.authorization;
   if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
   const token = await getSecret('bridgeToken');
@@ -977,6 +1005,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   if (route === '/pair' && req.method === 'POST') {
+    if (!origin) return json(res, 403, { error: 'extension_origin_required' }, null);
     if (!protocolCompatible(req)) {
       return json(res, 426, { error: 'incompatible_extension', bridge: BRIDGE_PROTOCOL, version: APP_VERSION }, origin);
     }
@@ -1001,19 +1030,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         origin
       );
     }
-    // Silent provisioning on loopback.
-    //
-    // There used to be a six-digit code here, so the user had to be looking at the app
-    // before a browser could attach. In practice both halves are the same person on the
-    // same machine, installed together, and the code was a step that failed far more
-    // often than it protected anything — the app was unreachable and the user was typing
-    // numbers. The bearer token is still real and still required on every other route; it
-    // is simply issued to whoever asks on 127.0.0.1 rather than to whoever can read the
-    // window. What that gives up is stated plainly: any program already running as this
-    // user can obtain the token, and with it read recorded ChatGPT activity and queue an
-    // "open a fresh chat" command. It can still not read a file, run anything, or change
-    // a permission — the bridge has no route that does. A web page cannot: originOf
-    // refuses anything that is not a chrome-extension:// origin, above.
+    const pairingState = await requestExtensionPairing(origin);
+    if (pairingState !== 'approved') {
+      changed();
+      return json(res, 403, { error: 'pairing_required' }, origin);
+    }
+    // Token issuance is loopback-only *and* bound to the extension origin the user approved
+    // in Desktop. The bearer token remains a second boundary on every protected route, and
+    // an authenticated request that carries a different extension Origin is rejected too.
+    // This keeps a random local extension from turning loopback reachability into bridge
+    // authority while preserving automatic reconnect for the already-approved companion.
     const token = randomBytes(32).toString('base64url');
     await setSecret('bridgeToken', token);
     noteBrowserSeen();
@@ -1026,7 +1052,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // normal 401 by silently provisioning once, so naming this state on the first protected
   // request is what prevents that repair path from undoing the user's Disconnect click.
   if (await browserDisconnected()) return json(res, 401, { error: 'browser_disconnected' }, origin);
-  if (!(await authorised(req))) return json(res, 401, { error: 'unauthorised' }, origin);
+  if (!(await authorised(req, origin))) return json(res, 401, { error: 'unauthorised' }, origin);
   if (!protocolCompatible(req)) {
     return json(res, 426, { error: 'incompatible_extension', bridge: BRIDGE_PROTOCOL, version: APP_VERSION }, origin);
   }
@@ -4375,6 +4401,7 @@ export function resetBridgeForTests(): void {
   bridgeRecovering = false;
   bridgeShutdownRequested = false;
   resetContinuationsForTests();
+  resetExtensionPairingForTests();
   sessionTokens.clear();
   openInBrowser = null;
   lastSeenAt = null;

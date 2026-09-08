@@ -1,6 +1,6 @@
 {
   "name": "comgu",
-  "version": "3.1.2",
+  "version": "3.1.3",
   "description": "ComGu: a controlled local MCP bridge for ChatGPT with files, commands, durable sessions and optional Windows desktop control.",
   "license": "MIT",
   "author": "ComGu",
@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run verify:ci",
-    "verify:ci": "npm run rg && npm run verify:privacy && npm run typecheck && vitest run --maxWorkers=2 --exclude test/mcp-shutdown.test.ts --exclude test/terminal-workspace-security.test.ts && vitest run test/terminal-workspace-security.test.ts && vitest run test/mcp-shutdown.test.ts",
+    "verify:ci": "npm run verify:security && npm run rg && npm run verify:privacy && npm run typecheck && vitest run --maxWorkers=2 --exclude test/agents.test.ts --exclude test/mcp-shutdown.test.ts --exclude test/terminal-workspace-security.test.ts && vitest run test/agents.test.ts && vitest run test/terminal-workspace-security.test.ts && vitest run test/mcp-shutdown.test.ts",
     "verify:privacy": "node scripts/verify-public-history.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "icon": "node scripts/make-icon.mjs",
@@ -41,7 +41,9 @@
     "dist:dir:linux:x64": "node scripts/package.mjs --platform linux --arch x64 --dir",
     "dist:dir:linux:arm64": "node scripts/package.mjs --platform linux --arch arm64 --dir",
     "dist:dir:linux": "node scripts/package.mjs --platform linux --arch x64,arm64 --dir",
-    "test:kill": "node scripts/kill-stray-vitest.mjs"
+    "test:kill": "node scripts/kill-stray-vitest.mjs",
+    "verify:security": "node scripts/verify-security-invariants.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
     "@microsoft/mxc-sdk": "0.8.0",

@@ -851,16 +851,23 @@ function apply(next: AppState): void {
   $('wizFolders').textContent =
     config.roots.length === 0 ? tr('home.noneYet') : config.roots.map((r) => `/${r.name}`).join('  ');
   const secureStorageAvailable = next.secureStorage?.available ?? true;
+  const storedCredentialsUnreadable = next.storedCredentialsUnreadable === true;
+  const storedCredentialsAccessFailed = next.storedCredentialsAccessFailed === true;
   const apiKey = $<HTMLInputElement>('apiKey');
   apiKey.placeholder = next.hasApiKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-…';
-  apiKey.disabled = !secureStorageAvailable;
-  $('apiKeyState').textContent = !secureStorageAvailable
+  apiKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
+  $('apiKeyState').textContent = storedCredentialsAccessFailed
+    ? tr('setup.secureStorageUnavailable')
+    : storedCredentialsUnreadable
+    ? tr('setup.secureStorageUnreadable')
+    : !secureStorageAvailable
     ? (next.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : next.hasApiKey
       ? tr('setup.apiKeyStored')
       : tr('setup.apiKeySafe');
-  $('apiKeyState').classList.toggle('is-warn', !secureStorageAvailable);
-  $<HTMLButtonElement>('removeApiKey').disabled = !next.hasApiKey || !secureStorageAvailable;
+  $('apiKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed);
+  $<HTMLButtonElement>('removeApiKey').disabled = !next.hasApiKey || !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
+  $<HTMLButtonElement>('recoverStoredCredentials').hidden = !storedCredentialsUnreadable;
 
   const wizConnect = $<HTMLButtonElement>('wizConnect');
   wizConnect.textContent = running ? tr('common.disconnect') : tr('common.connect');
@@ -1531,6 +1538,13 @@ $('removeApiKey').addEventListener('click', async () => {
     apply(next);
     toast(tr('home.apiKeyRemovedToast'));
   }
+});
+
+$('recoverStoredCredentials').addEventListener('click', async () => {
+  const next = await run(api.resetUnreadableSecrets(), secretFailureText);
+  if (!next) return;
+  apply(next);
+  toast(tr('setup.recoveredStoredCredentials'));
 });
 
 for (const id of [

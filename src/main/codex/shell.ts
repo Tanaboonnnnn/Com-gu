@@ -262,8 +262,21 @@ export function deriveExecArgs(shell: DetectedShell, command: string, useLoginSh
 
 const POWERSHELL_FLAGS = ['-nologo', '-noprofile', '-command', '-c'];
 
-/** Prefixed command for PowerShell calls to request UTF-8 console output. */
-export const UTF8_OUTPUT_PREFIX = 'try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n';
+/**
+ * Prefixed command for PowerShell calls to restore the shell's own built-in module root and
+ * request UTF-8 console output.
+ *
+ * The child-process security boundary deliberately does not inherit PSModulePath from the
+ * Desktop environment: it is an ambient code-search path and can contain arbitrary user or
+ * toolchain directories. Windows PowerShell normally reconstructs its defaults at startup,
+ * but a ProcessContainer launched with an explicit environment can omit the built-in root on
+ * some Windows hosts. In that state even standard commands such as Start-Sleep disappear.
+ * Prepending only `$PSHOME\Modules` is shell-local, deterministic, and does not reopen any
+ * host-controlled module search path that the environment allowlist intentionally removed.
+ */
+export const UTF8_OUTPUT_PREFIX =
+  "try { $env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules')+[IO.Path]::PathSeparator+$env:PSModulePath } catch {}\n" +
+  'try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n';
 
 /**
  * Splits a PowerShell invocation into (shell, script), or null when it is not one.

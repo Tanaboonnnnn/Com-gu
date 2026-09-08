@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pathEntries } from '../src/main/env.js';
+import { inheritedChildEnvironment } from '../src/main/child-env-policy.js';
 import {
   DEFAULT_TIMEOUT_MS,
   ExecError,
@@ -227,7 +228,70 @@ describe('runCommand', () => {
  * The unit-level rules live in test/env.test.ts; this is the one that would have caught the
  * live incident, because it asks the real `childEnv()` about the real inherited path.
  */
+describe('child environment inheritance policy', () => {
+  it('keeps ordinary POSIX runtime values and drops unrelated credentials', () => {
+    expect(
+      inheritedChildEnvironment(
+        {
+          PATH: '/usr/bin',
+          LANG: 'en_US.UTF-8',
+          HTTPS_PROXY: 'http://proxy.example',
+          NO_PROXY: 'localhost',
+          XDG_CONFIG_HOME: '/tmp/config',
+          GITHUB_TOKEN: 'secret',
+          AWS_ACCESS_KEY_ID: 'secret'
+        },
+        'linux'
+      )
+    ).toEqual({
+      PATH: '/usr/bin',
+      LANG: 'en_US.UTF-8',
+      HTTPS_PROXY: 'http://proxy.example',
+      NO_PROXY: 'localhost',
+      XDG_CONFIG_HOME: '/tmp/config'
+    });
+  });
+
+  it('keeps Windows runtime paths while dropping cloud credentials', () => {
+    expect(
+      inheritedChildEnvironment(
+        {
+          Path: 'C:\\Windows\\System32',
+          SystemRoot: 'C:\\Windows',
+          TEMP: 'C:\\Temp',
+          AWS_SECRET_ACCESS_KEY: 'secret',
+          NPM_TOKEN: 'secret'
+        },
+        'win32'
+      )
+    ).toEqual({ Path: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows', TEMP: 'C:\\Temp' });
+  });
+});
+
 describe('the environment prepared for a child process', () => {
+  it('does not inherit unrelated host credentials into model-launched children', () => {
+    const held = {
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      NPM_TOKEN: process.env.NPM_TOKEN,
+      AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY
+    };
+    process.env.GITHUB_TOKEN = 'ghp_test_should_not_escape';
+    process.env.NPM_TOKEN = 'npm_test_should_not_escape';
+    process.env.AWS_SECRET_ACCESS_KEY = 'aws_test_should_not_escape';
+    try {
+      const env = childEnv();
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.NPM_TOKEN).toBeUndefined();
+      expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(env.PATH ?? env.Path).toBeTruthy();
+    } finally {
+      for (const [key, value] of Object.entries(held)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('hands over one path variable that still contains the inherited directories', () => {
     const env = childEnv();
     const keys = Object.keys(env).filter((key) => key.toLowerCase() === 'path');

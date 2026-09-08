@@ -395,6 +395,8 @@ async function mountChat(
     status: { state: 'disconnected', detail: '', publicUrl: null, localUrl: null, handshakeAt: null, lastRequestAt: null, lastToolCallAt: null, health: null, surfaces: [] },
     hasApiKey: false,
     hasGoalKey: false,
+    storedCredentialsUnreadable: false,
+    storedCredentialsAccessFailed: false,
     resolvedBinary: null,
     bundledTunnelVersion: null,
     bridge: { running: true, port: 8765, paired: false, present: false, lastSeenAt: null },
@@ -852,6 +854,34 @@ it('guides rootless setup from the capabilities that actually need a filesystem 
   expect(connect.disabled).toBe(false);
 });
 
+it('shows the pending extension id and requires an explicit Desktop approval before pairing', async () => {
+  const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+  let pairing = { approvedOrigin: null as string | null, pendingOrigin: origin as string | null };
+  const mounted = await mountChat({}, [], {
+    getExtensionPairing: () => Promise.resolve({ ok: true, data: structuredClone(pairing) }),
+    approveExtensionPairing: () => {
+      pairing = { approvedOrigin: origin, pendingOrigin: null };
+      return Promise.resolve({ ok: true, data: structuredClone(pairing) });
+    },
+    revokeExtensionPairing: () => {
+      pairing = { approvedOrigin: null, pendingOrigin: null };
+      return Promise.resolve({ ok: true, data: structuredClone(pairing) });
+    }
+  });
+  const doc = mounted.window.document;
+  await settle();
+
+  const box = doc.getElementById('extensionApproval') as HTMLElement;
+  expect(box.hidden).toBe(false);
+  expect(box.textContent).toContain('abcdefghijklmnopabcdefghijklmnop');
+  expect(box.textContent).not.toContain('bridgeToken');
+
+  (doc.getElementById('approveExtension') as HTMLButtonElement).click();
+  await settle();
+  expect(box.hidden).toBe(true);
+  expect((doc.getElementById('revokeExtension') as HTMLButtonElement).hidden).toBe(false);
+});
+
 it('requires a live browser only when a browser-backed feature is actually enabled', async () => {
   const mounted = await mountChat({
     hasApiKey: true,
@@ -972,6 +1002,44 @@ it('keeps secret-key input on secure-storage failure', async () => {
   thaiApi.dispatchEvent(new failed.window.Event('blur'));
   await settle();
   expect(failed.window.document.querySelector('.toast')?.textContent).toBe(t('th', 'setup.secureStorageUnavailable'));
+});
+
+it('offers explicit recovery for an unreadable cross-platform credential store before accepting a replacement key', async () => {
+  let recoverCalls = 0;
+  const mounted = await mountChat(
+    {
+      secureStorage: { available: true, detail: null },
+      storedCredentialsUnreadable: true
+    },
+    [],
+    {
+      resetUnreadableSecrets: () => {
+        recoverCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          data: { ...mounted.state, storedCredentialsUnreadable: false, hasApiKey: false, hasGoalKey: false }
+        });
+      }
+    }
+  );
+  const doc = mounted.window.document;
+  const apiKey = doc.getElementById('apiKey') as HTMLInputElement;
+  const goalKey = doc.getElementById('goalKey') as HTMLInputElement;
+  const recover = doc.getElementById('recoverStoredCredentials') as HTMLButtonElement;
+
+  expect(apiKey.disabled).toBe(true);
+  expect(goalKey.disabled).toBe(true);
+  expect(doc.getElementById('goalKeyState')!.textContent).toBe(t('en', 'setup.secureStorageUnreadable'));
+  expect(recover.hidden).toBe(false);
+  expect(doc.getElementById('apiKeyState')!.textContent).toBe(t('en', 'setup.secureStorageUnreadable'));
+
+  recover.click();
+  await settle();
+  await settle();
+  expect(recoverCalls).toBe(1);
+  expect(apiKey.disabled).toBe(false);
+  expect(goalKey.disabled).toBe(false);
+  expect(recover.hidden).toBe(true);
 });
 
 it('never lets an older secret save erase a newer value typed while IPC is in flight', async () => {

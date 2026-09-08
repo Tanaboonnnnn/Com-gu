@@ -485,6 +485,8 @@ interface WorkerHarness {
   navigateTab(tabId: number, url: string): Promise<void>;
   /** Fires the extension install/update lifecycle event. */
   installed(reason?: string): Promise<void>;
+  /** Fires one Chrome alarm lifecycle event. */
+  fireAlarm(name: string): Promise<void>;
   /** Registers the browser document that owns subsequent tab-scoped messages. */
   registerTab(tabId: number, documentId?: string): Promise<any>;
   /** Fires Chrome's tab-created lifecycle event, the way opening a link in a new tab does. */
@@ -526,12 +528,14 @@ function loadWorker(options: {
   tabsSendMessage?: (tabId: number, message: Record<string, unknown>) => Promise<unknown>;
   extensionVersion?: string;
   diskExtensionVersion?: string;
+  now?: () => number;
 }): WorkerHarness {
   let listener: ((message: any, sender: any, sendResponse: (value: any) => void) => boolean) | null = null;
   const tabRemovedListeners: Array<(tabId: number) => void> = [];
   const tabCreatedListeners: Array<(tab: { id?: number; url?: string; pendingUrl?: string }) => void> = [];
   const tabUpdatedListeners: Array<(tabId: number, changeInfo: { url?: string; status?: string }) => void> = [];
   const installedListeners: Array<(details: { reason: string }) => void> = [];
+  const alarmListeners: Array<(alarm: { name: string }) => void> = [];
   const tabsCreate = vi.fn(async () => ({ id: 99 }));
   const tabsQuery = vi.fn(options.tabsQuery ?? (async () => []));
   const tabsUpdate = vi.fn(async (id: number) => ({ id, windowId: 7 }));
@@ -580,7 +584,11 @@ function loadWorker(options: {
     alarms: {
       create: alarmCreate,
       clear: alarmClear,
-      onAlarm: event()
+      onAlarm: {
+        addListener(fn: (alarm: { name: string }) => void) {
+          alarmListeners.push(fn);
+        }
+      }
     },
     tabs: {
       create: tabsCreate,
@@ -614,6 +622,12 @@ function loadWorker(options: {
     }
     return response(503, {});
   });
+  const HostDate = Date;
+  const WorkerDate = class extends HostDate {
+    static override now(): number {
+      return options.now ? options.now() : HostDate.now();
+    }
+  };
   vm.runInNewContext(backgroundSource, {
     chrome,
     fetch,
@@ -623,6 +637,7 @@ function loadWorker(options: {
     clearTimeout,
     URL,
     TextEncoder,
+    Date: WorkerDate,
     console
   }, { filename: 'background.js' });
   if (!listener) throw new Error('background.js did not register a message listener');
@@ -641,6 +656,11 @@ function loadWorker(options: {
     runtimeReload,
     async installed(reason = 'update') {
       for (const fn of installedListeners) fn({ reason });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    async fireAlarm(name: string) {
+      for (const fn of alarmListeners) fn({ name });
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
@@ -1069,6 +1089,59 @@ describe('extension command delivery', () => {
     expect(seen.find((call) => call.path === '/commands/redeem')?.auth).toBe('Bearer fresh-token');
     // Nothing anywhere asked for a code.
     expect(fetch.mock.calls.some(([, init]) => String((init as any)?.body ?? '').includes('code'))).toBe(false);
+  });
+
+  it('backs off when Desktop approval is required instead of hammering /pair', async () => {
+    const local = new FakeStorageArea({ port: 8765 });
+    const session = new FakeStorageArea();
+    let pairAttempts = 0;
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: false });
+      if (url.pathname === '/pair') {
+        pairAttempts++;
+        return response(403, { error: 'pairing_required' });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local, session, fetch });
+
+    const first = await worker.send({ type: 'status' });
+    const second = await worker.send({ type: 'status' });
+
+    expect(first).toMatchObject({ paired: false, pairingRequired: true });
+    expect(second).toMatchObject({ paired: false, pairingRequired: true });
+    expect(local.data.token ?? null).toBeNull();
+    expect(pairAttempts).toBe(1);
+  });
+
+  it('retries a pending Desktop approval after backoff and pairs automatically once approved', async () => {
+    const local = new FakeStorageArea({ port: 8765 });
+    const session = new FakeStorageArea();
+    let pairAttempts = 0;
+    let now = 10_000;
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: false });
+      if (url.pathname === '/pair') {
+        pairAttempts++;
+        return pairAttempts === 1
+          ? response(403, { error: 'pairing_required' })
+          : response(200, { token: 'approved-token' });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local, session, fetch, now: () => now });
+
+    const first = await worker.send({ type: 'status' });
+    expect(first).toMatchObject({ paired: false, pairingRequired: true });
+    expect(pairAttempts).toBe(1);
+
+    now += 31_000;
+    const recovered = await worker.send({ type: 'status' });
+    expect(recovered).toMatchObject({ paired: true, pairingRequired: false });
+    expect(local.data.token).toBe('approved-token');
+    expect(pairAttempts).toBe(2);
   });
 
   it('re-provisions once when the app no longer recognises the stored token', async () => {
@@ -1635,8 +1708,9 @@ describe('extension observation journal', () => {
 
     await worker.send({ type: 'events', conversationId, entries: [event('first')] });
     await worker.send({ type: 'events', conversationId, entries: [event('second')] });
-    expect(worker.alarmCreate).toHaveBeenCalledTimes(1);
-    expect(worker.alarmCreate).toHaveBeenCalledWith('clf-bridge-drain', { delayInMinutes: 0.25, periodInMinutes: 1 });
+    const drainAlarms = worker.alarmCreate.mock.calls.filter(([name]) => name === 'clf-bridge-drain');
+    expect(drainAlarms).toHaveLength(1);
+    expect(drainAlarms[0]).toEqual(['clf-bridge-drain', { delayInMinutes: 0.25, periodInMinutes: 1 }]);
     expect(journalOf(session)).toHaveLength(2);
 
     healthy = true;
@@ -2804,6 +2878,70 @@ describe('extension connection', () => {
     expect(status.disconnected).toBe(false);
     expect(local.data.disconnected).toBe(false);
     expect(pairBodies).toEqual([{}, { reconnect: true }]);
+  });
+
+  it('repairs open ChatGPT identity helpers when an explicit reconnect succeeds', async () => {
+    const server = app();
+    const local = new FakeStorageArea({ port: 8765, token: 'old-token', disconnected: true });
+    const worker = loadWorker({
+      local,
+      session: new FakeStorageArea(),
+      fetch: server.fetch,
+      tabsQuery: async () => [{ id: 41, url: 'https://chatgpt.com/c/abababab-cdcd-efef-1212-343434343434' }],
+      tabsSendMessage: async (_tabId, message) =>
+        message.type === 'clf-recorder-ping' ? { ok: true, recorderVersion: 10 } : { ok: true }
+    });
+
+    // Ignore the service-worker boot repair. This assertion is specifically about the user's
+    // explicit reconnect after a long-lived document has lost its identity helper.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    worker.tabsQuery.mockClear();
+    worker.scriptingExecuteScript.mockClear();
+
+    expect(await worker.send({ type: 'pair' })).toMatchObject({ ok: true });
+
+    expect(worker.tabsQuery).toHaveBeenCalledWith({
+      url: ['https://chatgpt.com/*', 'https://chat.openai.com/*']
+    });
+    expect(worker.scriptingExecuteScript).toHaveBeenCalledWith({
+      target: { tabId: 41 },
+      world: 'MAIN',
+      files: ['fiber.js']
+    });
+  });
+
+  it('periodically repairs open ChatGPT identity helpers while paired', async () => {
+    const server = app();
+    const worker = loadWorker({
+      local: new FakeStorageArea({ port: 8765, token: 'paired-token' }),
+      session: new FakeStorageArea(),
+      fetch: server.fetch,
+      tabsQuery: async () => [{ id: 42, url: 'https://chatgpt.com/c/abababab-cdcd-efef-1212-343434343434' }],
+      tabsSendMessage: async (_tabId, message) =>
+        message.type === 'clf-recorder-ping' ? { ok: true, recorderVersion: 10 } : { ok: true }
+    });
+
+    await worker.send({ type: 'status' });
+    expect(worker.alarmCreate).toHaveBeenCalledWith('clf-identity-health', {
+      delayInMinutes: 0.5,
+      periodInMinutes: 0.5
+    });
+
+    // Ignore startup recovery and prove the periodic alarm independently repairs a helper that
+    // can disappear later during a long-running ChatGPT task.
+    worker.tabsQuery.mockClear();
+    worker.scriptingExecuteScript.mockClear();
+    await worker.fireAlarm('clf-identity-health');
+
+    expect(worker.tabsQuery).toHaveBeenCalledWith({
+      url: ['https://chatgpt.com/*', 'https://chat.openai.com/*']
+    });
+    expect(worker.scriptingExecuteScript).toHaveBeenCalledWith({
+      target: { tabId: 42 },
+      world: 'MAIN',
+      files: ['fiber.js']
+    });
   });
 
   it('forces an immediate overwrite in known and newly discovered ChatGPT tabs', async () => {

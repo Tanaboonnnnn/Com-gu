@@ -15,7 +15,6 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   applyEnvOverrides,
-  deleteEnvValue,
   ensureUsablePath,
   envValue,
   normalizeEnvironment,
@@ -23,6 +22,7 @@ import {
   prependPath
 } from './env.js';
 import { locateRipgrep } from './ripgrep.js';
+import { inheritedChildEnvironment } from './child-env-policy.js';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const MAX_TIMEOUT_MS = 300_000;
@@ -62,15 +62,6 @@ export interface ExecResult {
   durationMs: number;
 }
 
-/** Environment variables we never hand to a child process. */
-const SECRET_ENV_KEYS = [
-  'CONTROL_PLANE_API_KEY',
-  'OPENAI_API_KEY',
-  'OPENAI_ADMIN_KEY',
-  'CLOUDFLARED_TOKEN',
-  'CLOUDFLARED_TUNNEL_TOKEN'
-];
-
 function validateEnvironment(overrides: CommandEnvironment | undefined): void {
   if (!overrides) return;
   const entries = Object.entries(overrides);
@@ -99,12 +90,9 @@ function validateEnvironment(overrides: CommandEnvironment | undefined): void {
  */
 export function childEnv(overrides?: CommandEnvironment): NodeJS.ProcessEnv {
   validateEnvironment(overrides);
-  const env = normalizeEnvironment(process.env);
+  const env = normalizeEnvironment(inheritedChildEnvironment(process.env));
   const ripgrep = locateRipgrep();
   if (ripgrep) prependPath(env, path.dirname(ripgrep));
-  // Windows environment keys are case-insensitive. Remove every inherited spelling of
-  // connector/control-plane secrets before applying values explicitly supplied by the caller.
-  for (const secret of SECRET_ENV_KEYS) deleteEnvValue(env, secret);
   if (overrides) applyEnvOverrides(env, overrides);
   ensureUsablePath(env);
   return env as NodeJS.ProcessEnv;

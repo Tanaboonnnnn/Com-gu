@@ -9,6 +9,25 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
+## [3.1.3] — 2026-09-07
+
+3.1.3 hardens child-process credential isolation, browser-extension pairing, outbound-destination review and release security gates without changing ComGu's workspace or exact-search model.
+
+### Security
+- Model-launched child processes now inherit only a narrow OS/runtime environment allowlist; unrelated host provider, cloud, CI and package-manager credentials no longer flow into child environments by default.
+- First-time browser companion pairing requires explicit Desktop approval, authenticated requests remain bound to the approved extension origin, and revocation clears both origin approval and bearer token.
+- Security CI now scans tracked source for high-confidence committed secrets, unexpected runtime destinations, upstream-owner runtime residue and floating GitHub Action refs, and audits production dependencies.
+
+### Privacy
+- Expected app-managed egress is documented and backed by a Windows x64 runtime observation. ComGu has no product analytics/telemetry, advertising, crash-reporting, webhook or maintainer-owned telemetry endpoint.
+- Goal Mode remains OFF by default and continues to send its documented authored-user/final-assistant conversation subset to OpenRouter only when Goal is used.
+- Previous upstream maintainer identity was removed from current Linux package metadata.
+
+### Changed
+- Existing approved extension refresh/reload remains automatic after the one-time trust decision.
+- OpenAI and Cloudflare tunnel adapters retain their existing behavior while receiving only explicitly required subprocess environment values.
+- WorkspaceScope, Windows MXC confinement, permission gates and exact-search behavior are unchanged; there is no zvec/search behavior change in this release.
+- macOS artifacts remain unsigned and unnotarized.
 ## [3.1.2] â€” 2026-09-06
 
 3.1.2 focuses on ChatGPT companion reliability, Overwrite interoperability and a smaller cross-platform package while keeping the original exact-search stack and existing security boundaries.
