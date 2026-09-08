@@ -123,7 +123,7 @@ const api = {
 
   unpairExtension: () => call<AppState>('bridge:unpair'),
   getExtensionPairing: () => call<ExtensionPairingView>('bridge:getExtensionPairing'),
-  approveExtensionPairing: () => call<ExtensionPairingView>('bridge:approveExtensionPairing'),
+  approveExtensionPairing: (expectedOrigin: string) => call<ExtensionPairingView>('bridge:approveExtensionPairing', { expectedOrigin }),
   revokeExtensionPairing: () => call<ExtensionPairingView>('bridge:revokeExtensionPairing'),
   downloadExtension: () => call<boolean>('bridge:downloadExtension'),
   // The renderer can ask where the extension is and ask for it to be opened, but the

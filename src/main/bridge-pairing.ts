@@ -29,8 +29,11 @@ export async function requestExtensionPairing(origin: string): Promise<'approved
   return 'pending';
 }
 
-export async function approvePendingExtensionOrigin(): Promise<void> {
+export async function approvePendingExtensionOrigin(expectedOrigin: string): Promise<void> {
   if (!pendingOrigin) throw new Error('No extension is waiting for approval');
+  if (pendingOrigin !== expectedOrigin) {
+    throw new Error('The extension waiting for approval changed; review the current extension before approving it');
+  }
   await setSecret('approvedExtensionOrigin', pendingOrigin);
   pendingOrigin = null;
 }

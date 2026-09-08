@@ -29,6 +29,8 @@ let cache: Record<string, string> | null = null;
  * on the other hand, needs an explicit user decision before ComGu may start a fresh store.
  */
 let unreadableObserved = false;
+/** A decrypt rejection is ambiguous unless the format itself proves an unsupported store. */
+let ambiguousDecryptFailure = false;
 /** A successful decrypt asked us to reseal the blob with the current async key. */
 let rotationPending = false;
 /** Invalidates a decrypt that started before an explicit store reset/delete boundary. */
@@ -189,6 +191,7 @@ async function loadAll(): Promise<Record<string, string>> {
       // there is no supported secure Linux v10 format to migrate here.
       logWarn('Stored Linux credentials use Electron’s insecure hard-coded-key fallback; the file was left untouched');
       unreadableObserved = true;
+      ambiguousDecryptFailure = false;
       rotationPending = false;
       return {};
     }
@@ -200,6 +203,7 @@ async function loadAll(): Promise<Record<string, string>> {
     if (generation !== loadGeneration) return cache ?? {};
     cache = parsed;
     unreadableObserved = false;
+    ambiguousDecryptFailure = false;
     rotationPending = decrypted.shouldReEncrypt;
   } catch (err) {
     if (generation !== loadGeneration) return cache ?? {};
@@ -207,6 +211,7 @@ async function loadAll(): Promise<Record<string, string>> {
     if (code === 'ENOENT') {
       cache = {};
       unreadableObserved = false;
+      ambiguousDecryptFailure = false;
       rotationPending = false;
     } else {
       // Electron's async API can reject while a key provider is temporarily unavailable, but
@@ -217,7 +222,8 @@ async function loadAll(): Promise<Record<string, string>> {
       // Reads still degrade to "no credential" so startup/bridge/UI remain usable and a later
       // call can retry after Keychain/Secret Service becomes available again.
       const available = await isEncryptionAvailable();
-      unreadableObserved = available;
+      unreadableObserved = false;
+      ambiguousDecryptFailure = true;
       logWarn(
         available
           ? 'Stored credentials could not be decrypted; the encrypted file was left untouched'
@@ -302,6 +308,11 @@ export function storedCredentialsUnreadable(): boolean {
   return unreadableObserved;
 }
 
+/** Renderer-safe uncertainty bit: retry/unlock first; existing ciphertext remains authoritative. */
+export function storedCredentialsAccessFailed(): boolean {
+  return ambiguousDecryptFailure;
+}
+
 export function setSecret(key: SecretKey, value: string): Promise<void> {
   return enqueue(async () => {
     if (!(await isEncryptionAvailable())) {
@@ -318,6 +329,7 @@ export function setSecret(key: SecretKey, value: string): Promise<void> {
       // Availability and readability are different states. A live DPAPI/Keychain provider can
       // still be unable to open ciphertext whose Local State/key material belongs to another
       // userData directory. Keep the blob intact and report the actionable distinction.
+      if (ambiguousDecryptFailure) throw unavailableError();
       if ((await secureStorageStatus()).available) throw unreadableError();
       throw unavailableError();
     }
@@ -366,6 +378,7 @@ export function archiveUnreadableSecrets(): Promise<string> {
     await fs.rename(secretsPath, backup);
     cache = {};
     unreadableObserved = false;
+    ambiguousDecryptFailure = false;
     return backup;
   });
 }
@@ -378,6 +391,7 @@ export function deleteAllSecrets(): Promise<void> {
     loadGeneration += 1;
     rotationPending = false;
     unreadableObserved = false;
+    ambiguousDecryptFailure = false;
     cache = null;
     try {
       await fs.rm(secretsPath, { force: true });
@@ -395,5 +409,6 @@ export function resetSecretsCacheForTests(): void {
   cache = null;
   rotationPending = false;
   unreadableObserved = false;
+  ambiguousDecryptFailure = false;
   loadInFlight = null;
 }

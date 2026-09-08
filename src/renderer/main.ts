@@ -852,18 +852,21 @@ function apply(next: AppState): void {
     config.roots.length === 0 ? tr('home.noneYet') : config.roots.map((r) => `/${r.name}`).join('  ');
   const secureStorageAvailable = next.secureStorage?.available ?? true;
   const storedCredentialsUnreadable = next.storedCredentialsUnreadable === true;
+  const storedCredentialsAccessFailed = next.storedCredentialsAccessFailed === true;
   const apiKey = $<HTMLInputElement>('apiKey');
   apiKey.placeholder = next.hasApiKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-…';
-  apiKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable;
-  $('apiKeyState').textContent = storedCredentialsUnreadable
+  apiKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
+  $('apiKeyState').textContent = storedCredentialsAccessFailed
+    ? tr('setup.secureStorageUnavailable')
+    : storedCredentialsUnreadable
     ? tr('setup.secureStorageUnreadable')
     : !secureStorageAvailable
     ? (next.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : next.hasApiKey
       ? tr('setup.apiKeyStored')
       : tr('setup.apiKeySafe');
-  $('apiKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable);
-  $<HTMLButtonElement>('removeApiKey').disabled = !next.hasApiKey || !secureStorageAvailable || storedCredentialsUnreadable;
+  $('apiKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed);
+  $<HTMLButtonElement>('removeApiKey').disabled = !next.hasApiKey || !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
   $<HTMLButtonElement>('recoverStoredCredentials').hidden = !storedCredentialsUnreadable;
 
   const wizConnect = $<HTMLButtonElement>('wizConnect');

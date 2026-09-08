@@ -944,12 +944,14 @@ function stateLine(): { text: string; tone: '' | 'is-live' | 'is-bad' } {
  * the app is running.
  */
 let extensionPairingGeneration = 0;
+let reviewedPendingExtensionOrigin: string | null = null;
 
 function extensionId(origin: string): string {
   return origin.replace(/^chrome-extension:\/\//, '');
 }
 
 function paintExtensionPairing(view: ExtensionPairingView): void {
+  reviewedPendingExtensionOrigin = view.pendingOrigin;
   const approval = $('extensionApproval');
   approval.hidden = view.pendingOrigin === null;
   $('pendingExtensionId').textContent = view.pendingOrigin ? extensionId(view.pendingOrigin) : '';
@@ -1380,6 +1382,7 @@ function applyGoal(state: AppState, previous?: Config): void {
   const { config } = state;
   const secureStorageAvailable = state.secureStorage?.available ?? true;
   const storedCredentialsUnreadable = state.storedCredentialsUnreadable === true;
+  const storedCredentialsAccessFailed = state.storedCredentialsAccessFailed === true;
   goalModel = config.goal.model;
   const goalToggle = $<HTMLInputElement>('goalEnabled');
   applyChatChecked(goalToggle, config.goal.enabled, previous?.goal.enabled);
@@ -1407,16 +1410,18 @@ function applyGoal(state: AppState, previous?: Config): void {
   $('goalModelName').textContent = config.goal.model;
   const goalKey = $<HTMLInputElement>('goalKey');
   goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-โ€ฆ';
-  goalKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable;
-  $('goalKeyState').textContent = storedCredentialsUnreadable
+  goalKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
+  $('goalKeyState').textContent = storedCredentialsAccessFailed
+    ? tr('setup.secureStorageUnavailable')
+    : storedCredentialsUnreadable
     ? tr('setup.secureStorageUnreadable')
     : !secureStorageAvailable
     ? (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : state.hasGoalKey
       ? tr('goal.keyStored')
       : tr('goal.keySafe');
-  $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable);
-  $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable || storedCredentialsUnreadable;
+  $('goalKeyState').classList.toggle('is-warn', !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed);
+  $<HTMLButtonElement>('goalKeyRemove').disabled = !state.hasGoalKey || !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
   if (goalModels.length > 0) paintGoalModels();
 }
 
@@ -1752,7 +1757,9 @@ export function initChat(next: Deps): void {
     if (state) toast(tr('chat.browserDisconnected'));
   });
   $('approveExtension').addEventListener('click', async () => {
-    const view = await run(api.approveExtensionPairing());
+    const expectedOrigin = reviewedPendingExtensionOrigin;
+    if (!expectedOrigin) return;
+    const view = await run(api.approveExtensionPairing(expectedOrigin));
     if (view) {
       paintExtensionPairing(view);
       toast(tr('setup.extensionApprovedToast'));

@@ -169,7 +169,10 @@ Do not "restore" these from an older document:
 - `session` has exactly two actions, `search` and `read`. Search discovers recordings; read
   requires an explicit local session id and returns lossless cursor pages. Compact & Resume is
   app/browser orchestration — there is no model-visible `save_handoff`.
-- Extension pairing is silent loopback `/pair` bearer provisioning. The six-digit flow is gone.
+- Extension pairing uses loopback `/pair` bearer provisioning, but a previously unknown
+  `chrome-extension://` identity requires explicit Desktop approval first. Approval is bound to
+  the exact origin the user reviewed. An already-approved identity may reconnect and receive a
+  fresh live bearer automatically; revocation removes that durable approval. The six-digit flow is gone.
 - Canonical messages live in `messages/*.json`, one replaceable shard per logical id; legacy
   `messages.json` is read during lazy migration. They are not appended forever to `events.jsonl`.
 - `computer` carries **13** action variants, not 11.
@@ -556,7 +559,8 @@ after the successor owns the document.
 ## 14. The browser bridge — `bridge.ts`
 
 A second loopback HTTP service on the first free port of **8765–8769**. The extension finds
-it with `/hello`, silently provisions a bearer token with `/pair`, then uses authenticated
+it with `/hello`, requests `/pair`, waits for explicit Desktop approval when the extension identity
+is new, then provisions a bearer token and uses authenticated
 routes: `/status`, `/events`, `/closed`, `/activity`, `/compact/claim-auto`, `/compact`,
 `/goal/draft`, `/goal/ack`, `/goal/objective`, `/goal/open`, `/settings` (GET and POST),
 `/commands/redeem`, `/commands/ack`. `/settings` is the only pair the page may write, and

@@ -27,6 +27,7 @@ import {
   SecretStorageError,
   secureStorageStatus,
   setSecret,
+  storedCredentialsAccessFailed,
   storedCredentialsUnreadable
 } from './secrets.js';
 import { bundledVersion, locateBinary } from './tunnel/locate.js';
@@ -320,6 +321,7 @@ async function buildState(): Promise<AppState> {
     status,
     platform: hostPlatformInfo(),
     secureStorage,
+    storedCredentialsAccessFailed: storedCredentialsAccessFailed(),
     storedCredentialsUnreadable: storedCredentialsUnreadable(),
     hasApiKey,
     hasGoalKey,
@@ -760,8 +762,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle('bridge:getExtensionPairing', async () => extensionPairingView());
 
-  handle('bridge:approveExtensionPairing', async () => {
-    await approvePendingExtensionOrigin();
+  handle('bridge:approveExtensionPairing', async (payload) => {
+    const { expectedOrigin } = z.object({ expectedOrigin: z.string() }).parse(payload);
+    await approvePendingExtensionOrigin(expectedOrigin);
     return extensionPairingView();
   });
 

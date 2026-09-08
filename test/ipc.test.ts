@@ -423,7 +423,7 @@ describe('turning multi-agent mode off', () => {
 });
 
 describe('bounded IPC identities and OS launch results', () => {
-  it('exposes an explicit unreadable-credential recovery channel that preserves the encrypted backup', async () => {
+  it('keeps an ambiguous credential decrypt failure retryable instead of exposing recovery as confirmed', async () => {
     await deleteAllSecrets();
     await setSecret('openaiApiKey', 'sk-before-app-identity-change');
     resetSecretsCacheForTests();
@@ -434,14 +434,13 @@ describe('bounded IPC identities and OS launch results', () => {
 
     const before = await handlers.get('state:get')!(null, undefined) as any;
     expect(before.ok, before.error).toBe(true);
-    expect(before.data.storedCredentialsUnreadable).toBe(true);
+    expect(before.data.storedCredentialsUnreadable).toBe(false);
+    expect(before.data.storedCredentialsAccessFailed).toBe(true);
 
     const recover = handlers.get('secret:resetUnreadable');
     expect(recover, 'recovery channel was not registered').toBeTypeOf('function');
     const recovered = await recover!(null, undefined) as any;
-    expect(recovered.ok, recovered.error).toBe(true);
-    expect(recovered.data.storedCredentialsUnreadable).toBe(false);
-    expect(recovered.data.hasApiKey).toBe(false);
+    expect(recovered.ok).toBe(false);
   });
 
   it('reports shell.openPath failure instead of claiming the extension folder opened', async () => {
@@ -464,9 +463,26 @@ describe('bounded IPC identities and OS launch results', () => {
     expect(pending).toEqual({ ok: true, data: { approvedOrigin: null, pendingOrigin: origin } });
     expect(JSON.stringify(pending)).not.toContain('secret-that-must-stay-main-process-only');
 
-    const approved = await handlers.get('bridge:approveExtensionPairing')!(null, undefined);
+    const approved = await handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: origin });
     expect(approved).toEqual({ ok: true, data: { approvedOrigin: origin, pendingOrigin: null } });
     expect(await getSecret('approvedExtensionOrigin')).toBe(origin);
+  });
+
+  it('rejects approval when the pending extension changed after the user reviewed it', async () => {
+    const reviewedOrigin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    const replacementOrigin = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba';
+    await setSecret('approvedExtensionOrigin', '');
+    await requestExtensionPairing(reviewedOrigin);
+    const reviewed = await handlers.get('bridge:getExtensionPairing')!(null, undefined) as any;
+    expect(reviewed.data.pendingOrigin).toBe(reviewedOrigin);
+
+    await requestExtensionPairing(replacementOrigin);
+    const approval = await handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: reviewedOrigin }) as any;
+
+    expect(approval.ok).toBe(false);
+    expect(await getSecret('approvedExtensionOrigin')).toBeNull();
+    const current = await handlers.get('bridge:getExtensionPairing')!(null, undefined) as any;
+    expect(current.data.pendingOrigin).toBe(replacementOrigin);
   });
 
   it('revokes extension identity and its bearer token together', async () => {

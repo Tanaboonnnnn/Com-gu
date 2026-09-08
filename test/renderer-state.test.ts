@@ -396,6 +396,7 @@ async function mountChat(
     hasApiKey: false,
     hasGoalKey: false,
     storedCredentialsUnreadable: false,
+    storedCredentialsAccessFailed: false,
     resolvedBinary: null,
     bundledTunnelVersion: null,
     bridge: { running: true, port: 8765, paired: false, present: false, lastSeenAt: null },
