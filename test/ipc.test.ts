@@ -485,6 +485,36 @@ describe('bounded IPC identities and OS launch results', () => {
     expect(current.data.pendingOrigin).toBe(replacementOrigin);
   });
 
+  it('keeps a newer pending extension when it arrives while the reviewed origin is being persisted', async () => {
+    const reviewedOrigin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+    const replacementOrigin = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba';
+    await setSecret('approvedExtensionOrigin', '');
+    await requestExtensionPairing(reviewedOrigin);
+
+    let releasePersist!: () => void;
+    const persistPaused = new Promise<void>((resolve) => { releasePersist = resolve; });
+    let persistenceStarted!: () => void;
+    const persistenceDidStart = new Promise<void>((resolve) => { persistenceStarted = resolve; });
+    const encrypt = vi.mocked(safeStorage.encryptStringAsync);
+    const originalEncrypt = encrypt.getMockImplementation()!;
+    encrypt.mockImplementationOnce(async (value: string) => {
+      persistenceStarted();
+      await persistPaused;
+      return originalEncrypt(value);
+    });
+
+    const approval = handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: reviewedOrigin }) as Promise<any>;
+    await persistenceDidStart;
+    await requestExtensionPairing(replacementOrigin);
+    releasePersist();
+
+    const approved = await approval;
+    expect(approved.ok, approved.error).toBe(true);
+    expect(approved.data.approvedOrigin).toBe(reviewedOrigin);
+    expect(approved.data.pendingOrigin).toBe(replacementOrigin);
+    expect(await getSecret('approvedExtensionOrigin')).toBe(reviewedOrigin);
+  });
+
   it('revokes extension identity and its bearer token together', async () => {
     const origin = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
     await setSecret('approvedExtensionOrigin', origin);

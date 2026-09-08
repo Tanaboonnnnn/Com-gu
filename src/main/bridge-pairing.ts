@@ -30,12 +30,15 @@ export async function requestExtensionPairing(origin: string): Promise<'approved
 }
 
 export async function approvePendingExtensionOrigin(expectedOrigin: string): Promise<void> {
-  if (!pendingOrigin) throw new Error('No extension is waiting for approval');
-  if (pendingOrigin !== expectedOrigin) {
+  const approvedOrigin = pendingOrigin;
+  if (!approvedOrigin) throw new Error('No extension is waiting for approval');
+  if (approvedOrigin !== expectedOrigin) {
     throw new Error('The extension waiting for approval changed; review the current extension before approving it');
   }
-  await setSecret('approvedExtensionOrigin', pendingOrigin);
-  pendingOrigin = null;
+  await setSecret('approvedExtensionOrigin', approvedOrigin);
+  // A different extension may have requested pairing while persistence yielded. Do not erase
+  // a pending identity that arrived after the user approved this exact reviewed origin.
+  if (pendingOrigin === approvedOrigin) pendingOrigin = null;
 }
 
 export async function revokeExtensionOrigin(): Promise<void> {
