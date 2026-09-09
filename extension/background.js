@@ -1753,6 +1753,19 @@ const HANDLERS = {
         .then(() => drainCloses())
         .catch(() => undefined);
     }
+    const reachability = !found
+      ? 'app_absent'
+      : found.compatible === false
+        ? 'protocol_mismatch'
+        : disconnected
+          ? 'disconnected'
+          : token
+            ? 'ready'
+            : pairingRequired
+              ? 'approval_required'
+              : pairingError && pairingError.error === 'secure_storage_unavailable'
+                ? 'secure_storage_unavailable'
+                : 'pairing_retry';
     return {
       connected: found !== null,
       port: found ? found.port : null,
@@ -1766,6 +1779,7 @@ const HANDLERS = {
       appProtocol: found ? found.bridge : null,
       extensionVersion: chrome.runtime.getManifest().version,
       extensionProtocol: BRIDGE_PROTOCOL,
+      reachability,
       ...(pairingError ? { pairError: pairingError } : {})
     };
   },

@@ -1091,6 +1091,77 @@ describe('extension command delivery', () => {
     expect(fetch.mock.calls.some(([, init]) => String((init as any)?.body ?? '').includes('code'))).toBe(false);
   });
 
+  it('drains held observations when Desktop becomes reachable again without reloading the worker', async () => {
+    const local = new FakeStorageArea({ port: 8765, token: 'paired-token' });
+    const session = new FakeStorageArea();
+    let desktopUp = false;
+    const posted: Array<{ conversationId: string; events: Array<{ text?: string }> }> = [];
+    const fetch = vi.fn(async (input: string, init: Record<string, unknown> = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') {
+        return desktopUp
+          ? response(200, { app: 'chat-on-steroids', paired: true, version: APP_VERSION, bridge: BRIDGE_PROTOCOL })
+          : response(503, {});
+      }
+      if (url.pathname === '/events' && desktopUp) {
+        posted.push(JSON.parse(String(init.body)));
+        return response(200, { sessionId: 'session-1', stored: 1 });
+      }
+      return response(503, {});
+    });
+    const worker = loadWorker({ local, session, fetch });
+    const conversationId = '11111111-2222-4333-8444-555555555555';
+
+    await worker.send({
+      type: 'events',
+      entries: [{ conversationId, event: { kind: 'progress', time: 1, text: 'held while desktop is down' } }]
+    });
+    expect(journalOf(session)).toHaveLength(1);
+
+    desktopUp = true;
+    const status = await worker.send({ type: 'status' }) as any;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(status.connected).toBe(true);
+    expect(posted).toEqual([
+      {
+        conversationId,
+        browserFamily: 'chrome',
+        events: [expect.objectContaining({ text: 'held while desktop is down' })]
+      }
+    ]);
+    expect(journalOf(session)).toEqual([]);
+  });
+
+  it('invalidates a dead cached port and rediscovers Desktop on another supported loopback port', async () => {
+    const local = new FakeStorageArea({ port: 8765, token: 'paired-token' });
+    const session = new FakeStorageArea();
+    let livePort = 8765;
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') {
+        return Number(url.port) === livePort
+          ? response(200, { app: 'chat-on-steroids', paired: true, version: APP_VERSION, bridge: BRIDGE_PROTOCOL })
+          : response(503, {});
+      }
+      if (url.pathname === '/activity') {
+        if (Number(url.port) !== livePort) throw new Error('connection refused');
+        return response(200, { rows: [] });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local, session, fetch });
+
+    expect(await worker.send({ type: 'status' })).toMatchObject({ connected: true, port: 8765 });
+    livePort = 8767;
+    await worker.send({ type: 'activity', conversationId: '11111111-2222-4333-8444-555555555555', since: 0 });
+    const recovered = await worker.send({ type: 'status' });
+
+    expect(recovered).toMatchObject({ connected: true, port: 8767, paired: true });
+    expect(local.data.port).toBe(8767);
+  });
+
   it('backs off when Desktop approval is required instead of hammering /pair', async () => {
     const local = new FakeStorageArea({ port: 8765 });
     const session = new FakeStorageArea();
@@ -1113,6 +1184,32 @@ describe('extension command delivery', () => {
     expect(second).toMatchObject({ paired: false, pairingRequired: true });
     expect(local.data.token ?? null).toBeNull();
     expect(pairAttempts).toBe(1);
+  });
+
+  it('reports secure-storage pairing failure as reachable-but-blocked instead of app absent', async () => {
+    const local = new FakeStorageArea({ port: 8765 });
+    const session = new FakeStorageArea();
+    const fetch = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') {
+        return response(200, { app: 'chat-on-steroids', paired: false, version: APP_VERSION, bridge: BRIDGE_PROTOCOL });
+      }
+      if (url.pathname === '/pair') {
+        return response(503, {
+          error: 'secure_storage_unavailable',
+          message: 'Secure credential storage is unavailable.'
+        });
+      }
+      return response(404, {});
+    });
+    const worker = loadWorker({ local, session, fetch });
+
+    expect(await worker.send({ type: 'status' })).toMatchObject({
+      connected: true,
+      paired: false,
+      reachability: 'secure_storage_unavailable',
+      pairError: { error: 'secure_storage_unavailable' }
+    });
   });
 
   it('retries a pending Desktop approval after backoff and pairs automatically once approved', async () => {

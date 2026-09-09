@@ -156,7 +156,7 @@ describe('cross-platform packaging targets', () => {
     expect(workflow).toContain('name: comgu-candidate-${{ github.run_id }}');
     expect(workflow).toContain('Install generated DEB on target distro');
     expect(workflow).toContain('Launch installed DEB normally under Xvfb');
-    expect(workflow).toContain('CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a /usr/bin/comgu');
+    expect(workflow).toContain('node scripts/smoke-linux-gui.mjs --label deb --executable /usr/bin/comgu');
     expect(workflow).toContain('Execute generated static-runtime AppImage');
     expect(workflow).toContain('Verify generated macOS archives');
     expect(workflow).toContain('hdiutil verify "$dmg"');
@@ -201,46 +201,38 @@ describe('cross-platform packaging targets', () => {
     expect(workflow).toContain('sudo apt-get install -y --no-install-recommends xvfb xauth');
     expect(workflow).toContain("grep -Fxq 'Name=ComGu' \"$desktop\"");
     expect(workflow).toContain("grep -Fxq 'Icon=comgu' \"$desktop\"");
-    expect(debGui).toContain('deb_smoke_root="$(mktemp -d)"');
-    expect(debGui).toContain("trap 'rm -rf \"$deb_smoke_root\" || true' EXIT");
-    expect(debGui).toContain('HOME="$deb_smoke_root/home"');
-    expect(debGui).toContain('XDG_CONFIG_HOME="$deb_smoke_root/config"');
-    expect(debGui).toContain('XDG_CACHE_HOME="$deb_smoke_root/cache"');
-    expect(debGui).toContain('XDG_DATA_HOME="$deb_smoke_root/data"');
-    expect(debGui).toContain('XDG_STATE_HOME="$deb_smoke_root/state"');
-    expect(debGui).toContain('xvfb-run -a /usr/bin/comgu');
-    expect(debGui).toContain('--kill-after=5s 12s');
-    expect(debGui).toContain("grep -Fq '[info] app started' deb-gui.log");
-    expect(debGui).toContain("grep -Fq '[info] window loaded' deb-gui.log");
-    expect(debGui).toContain("grep -Fq '[info] renderer state ready' deb-gui.log");
-    expect(debGui).toContain("grep -Fq '[error] window failed to load' deb-gui.log");
-    expect(debGui).toContain("grep -Fq '[error] renderer:' deb-gui.log");
+    expect(debGui).toContain('node scripts/smoke-linux-gui.mjs --label deb --executable /usr/bin/comgu');
     expect(debGui).not.toContain('ELECTRON_RUN_AS_NODE');
 
     const appImageGui = workflow.slice(
       workflow.indexOf('      - name: Execute generated static-runtime AppImage'),
       workflow.indexOf('      - name: Upload package artifacts')
     );
-    expect(appImageGui).toContain('xvfb-run -a "$appimage"');
+    expect(appImageGui).toContain('node scripts/smoke-linux-gui.mjs');
     expect(appImageGui).toContain('normal_smoke_root="$(mktemp -d)"');
     expect(appImageGui).toContain('fallback_smoke_root="$(mktemp -d)"');
     expect(appImageGui).toContain('rm -rf "$fake_bin" "$normal_smoke_root" "$fallback_smoke_root"');
-    expect(appImageGui).toContain('HOME="$smoke_root/home"');
-    expect(appImageGui).toContain('XDG_CONFIG_HOME="$smoke_root/config"');
-    expect(appImageGui).toContain('XDG_CACHE_HOME="$smoke_root/cache"');
-    expect(appImageGui).toContain('XDG_DATA_HOME="$smoke_root/data"');
-    expect(appImageGui).toContain('XDG_STATE_HOME="$smoke_root/state"');
     expect(appImageGui).toContain("printf '#!/bin/sh\\nexit 1\\n' > \"$fake_bin/unshare\"");
-    expect(appImageGui).toContain('PATH="$launch_path"');
-    expect(appImageGui).toContain('CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a "$appimage" >"$log"');
-    expect(appImageGui).toContain("grep -Fq '[info] app started' \"$log\"");
-    expect(appImageGui).toContain("grep -Fq '[info] window loaded' \"$log\"");
-    expect(appImageGui).toContain("grep -Fq '[info] renderer state ready' \"$log\"");
-    expect(appImageGui).toContain("grep -Fq '[error] window failed to load' \"$log\"");
-    expect(appImageGui).toContain("grep -Fq '[error] renderer:' \"$log\"");
-    expect(appImageGui).toContain('run_appimage_smoke normal "$normal_smoke_root" "$PATH" appimage-normal-gui.log');
-    expect(appImageGui).toContain('run_appimage_smoke forced-fallback "$fallback_smoke_root" "$fake_bin:$PATH" appimage-fallback-gui.log');
+    expect(appImageGui).toContain('--label "$label" --executable "$appimage" --path "$launch_path" --smoke-root "$smoke_root"');
+    expect(appImageGui).toContain('run_appimage_smoke normal "$normal_smoke_root" "$PATH"');
+    expect(appImageGui).toContain('run_appimage_smoke forced-fallback "$fallback_smoke_root" "$fake_bin:$PATH"');
     expect(appImageGui.replace(/^\s*#.*$/gm, '')).not.toContain('ELECTRON_RUN_AS_NODE');
+
+    const linuxGuiScript = readFileSync(path.join(root, 'scripts', 'smoke-linux-gui.mjs'), 'utf8');
+    expect(linuxGuiScript).toContain("output.includes('[info] app started')");
+    expect(linuxGuiScript).toContain("output.includes('[info] window loaded')");
+    expect(linuxGuiScript).toContain("output.includes('[info] renderer state ready')");
+    expect(linuxGuiScript).toContain("output.includes('[error] window failed to load')");
+    expect(linuxGuiScript).toContain("output.includes('[error] renderer:')");
+    expect(linuxGuiScript).toContain('startupDeadlineMs = 30_000');
+    expect(linuxGuiScript).toContain('minimumSurvivalMs = 5_000');
+    expect(linuxGuiScript).toContain("HOME: path.join(smokeRoot, 'home')");
+    expect(linuxGuiScript).toContain("XDG_CONFIG_HOME: path.join(smokeRoot, 'config')");
+    expect(linuxGuiScript).toContain("XDG_CACHE_HOME: path.join(smokeRoot, 'cache')");
+    expect(linuxGuiScript).toContain("XDG_DATA_HOME: path.join(smokeRoot, 'data')");
+    expect(linuxGuiScript).toContain("XDG_STATE_HOME: path.join(smokeRoot, 'state')");
+    expect(linuxGuiScript).toContain("child.kill('SIGTERM')");
+    expect(linuxGuiScript).toContain("child.kill('SIGKILL')");
   });
 
   it('only reports renderer readiness after the initial state snapshot has completed', () => {
@@ -336,15 +328,15 @@ describe('cross-platform packaging targets', () => {
     const packageScript = readFileSync(path.join(root, 'scripts', 'package.mjs'), 'utf8');
     expect(packageScript).toContain('COS_PACKAGE_ARCH: arch');
     const releaseWorkflow = readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
-    expect(releaseWorkflow).toContain('HOME="$deb_smoke_root/home"');
-    expect(releaseWorkflow).toContain('HOME="$smoke_root/home"');
-    expect(releaseWorkflow).toContain('PATH="$launch_path"');
-    expect(releaseWorkflow).toContain('run_appimage_smoke normal "$normal_smoke_root" "$PATH" appimage-normal-gui.log');
-    expect(releaseWorkflow).toContain('run_appimage_smoke forced-fallback "$fallback_smoke_root" "$fake_bin:$PATH" appimage-fallback-gui.log');
-    expect(releaseWorkflow).toContain('CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a "$appimage" >"$log"');
-    expect(releaseWorkflow).toContain('CLF_DEBUG=1 timeout --signal=TERM --kill-after=5s 12s xvfb-run -a /usr/bin/comgu');
-    expect(releaseWorkflow).toContain("grep -Fq '[info] app started' \"$log\"");
-    expect(releaseWorkflow).toContain("grep -Fq '[info] window loaded' \"$log\"");
+    expect(releaseWorkflow).toContain('node scripts/smoke-linux-gui.mjs --label deb --executable /usr/bin/comgu');
+    expect(releaseWorkflow).toContain('run_appimage_smoke normal "$normal_smoke_root" "$PATH"');
+    expect(releaseWorkflow).toContain('run_appimage_smoke forced-fallback "$fallback_smoke_root" "$fake_bin:$PATH"');
+    expect(releaseWorkflow).toContain('--label "$label" --executable "$appimage" --path "$launch_path" --smoke-root "$smoke_root"');
+    const linuxGuiScript = readFileSync(path.join(root, 'scripts', 'smoke-linux-gui.mjs'), 'utf8');
+    expect(linuxGuiScript).toContain("HOME: path.join(smokeRoot, 'home')");
+    expect(linuxGuiScript).toContain("XDG_CONFIG_HOME: path.join(smokeRoot, 'config')");
+    expect(linuxGuiScript).toContain("output.includes('[info] app started')");
+    expect(linuxGuiScript).toContain("output.includes('[info] window loaded')");
     expect(releaseWorkflow).toContain("test \"$(dpkg-deb --field \"$deb\" Package)\" = comgu");
     expect(releaseWorkflow).toContain("dpkg-query -W -f='${Status}\\n' comgu | grep -Fxq 'install ok installed'");
     expect(releaseWorkflow).toContain('desktop=/usr/share/applications/com.comgu.app.desktop');

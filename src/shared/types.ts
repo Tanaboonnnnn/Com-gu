@@ -81,6 +81,12 @@ export interface PlatformInfo {
 /** Whether this host can protect the credentials/tokens the app persists. */
 export interface SecureStorageInfo {
   available: boolean;
+  reason:
+    | 'available'
+    | 'provider_unavailable'
+    | 'insecure_linux_fallback'
+    | 'credential_access_retryable'
+    | 'stored_credentials_unreadable';
   /** Actionable explanation when unavailable; null when the backend is safe to use. */
   detail: string | null;
 }

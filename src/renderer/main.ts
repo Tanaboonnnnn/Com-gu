@@ -853,15 +853,20 @@ function apply(next: AppState): void {
   const secureStorageAvailable = next.secureStorage?.available ?? true;
   const storedCredentialsUnreadable = next.storedCredentialsUnreadable === true;
   const storedCredentialsAccessFailed = next.storedCredentialsAccessFailed === true;
+  const secureStorageReason = next.secureStorage?.reason;
   const apiKey = $<HTMLInputElement>('apiKey');
   apiKey.placeholder = next.hasApiKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-…';
   apiKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
   $('apiKeyState').textContent = storedCredentialsAccessFailed
-    ? tr('setup.secureStorageUnavailable')
+    ? tr('setup.secureStorageRetryable')
     : storedCredentialsUnreadable
     ? tr('setup.secureStorageUnreadable')
     : !secureStorageAvailable
-    ? (next.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
+    ? secureStorageReason === 'insecure_linux_fallback'
+      ? tr('setup.secureStorageInsecureFallback')
+      : secureStorageReason === 'provider_unavailable'
+        ? tr('setup.secureStorageProviderUnavailable')
+        : (next.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : next.hasApiKey
       ? tr('setup.apiKeyStored')
       : tr('setup.apiKeySafe');
