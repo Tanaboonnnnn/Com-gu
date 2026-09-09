@@ -231,8 +231,8 @@ describe('cross-platform packaging targets', () => {
     expect(linuxGuiScript).toContain("XDG_CACHE_HOME: path.join(smokeRoot, 'cache')");
     expect(linuxGuiScript).toContain("XDG_DATA_HOME: path.join(smokeRoot, 'data')");
     expect(linuxGuiScript).toContain("XDG_STATE_HOME: path.join(smokeRoot, 'state')");
-    expect(linuxGuiScript).toContain("child.kill('SIGTERM')");
-    expect(linuxGuiScript).toContain("child.kill('SIGKILL')");
+    expect(linuxGuiScript).toContain("signalGroup('SIGTERM')");
+    expect(linuxGuiScript).toContain("signalGroup('SIGKILL')");
   });
 
   it('only reports renderer readiness after the initial state snapshot has completed', () => {
@@ -329,6 +329,12 @@ describe('cross-platform packaging targets', () => {
     expect(packageScript).toContain('COS_PACKAGE_ARCH: arch');
     const releaseWorkflow = readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
     expect(releaseWorkflow).toContain('node scripts/smoke-linux-gui.mjs --label deb --executable /usr/bin/comgu');
+    const linuxGuiSmoke = readFileSync(path.join(root, 'scripts', 'smoke-linux-gui.mjs'), 'utf8');
+    expect(linuxGuiSmoke).toContain('detached: true');
+    expect(linuxGuiSmoke).toContain('process.kill(-child.pid, signal)');
+    expect(linuxGuiSmoke).toContain("signalGroup('SIGTERM')");
+    expect(linuxGuiSmoke).toContain("signalGroup('SIGKILL')");
+    expect(linuxGuiSmoke).toContain('closePromise.then(() => true)');
     expect(releaseWorkflow).toContain('run_appimage_smoke normal "$normal_smoke_root" "$PATH"');
     expect(releaseWorkflow).toContain('run_appimage_smoke forced-fallback "$fallback_smoke_root" "$fake_bin:$PATH"');
     expect(releaseWorkflow).toContain('--label "$label" --executable "$appimage" --path "$launch_path" --smoke-root "$smoke_root"');

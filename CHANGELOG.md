@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.1.5] ? 2026-09-09
+
+3.1.5 supersedes the unreleased 3.1.4 candidate and carries its Linux secure-storage and extension-reachability fixes, plus bounded process-group cleanup for Linux GUI release smoke jobs.
+
+### Fixed
+- GNOME/Ubuntu secure-storage startup explicitly selects gnome-libsecret before OSCrypt initialization while preserving fail-closed rejection of insecure Linux v10 fallback.
+- Browser companion status distinguishes an absent Desktop app from secure-storage, approval, disconnect, protocol-mismatch and retryable pairing states without dropping held observations.
+- Linux DEB/AppImage GUI release smoke terminates the full Xvfb/Electron process group and waits for closed stdio, preventing orphan descendants from hanging release jobs after startup proof.
+- Production dependency patches include sharp 0.35.4 and Hono 4.13.7; the production dependency audit is clean.
+
+### Compatibility and security
+- Windows x64/ARM64, macOS ARM64, Linux x64/ARM64 remain supported release targets.
+- macOS artifacts remain unsigned and unnotarized.
+- CALLER_IDENTITY_REQUIRED, WorkspaceScope, MXC confinement, exact search, permission gates and plaintext-secret prohibitions are unchanged.
+
+
 All notable changes to this project are documented here.
 
 This project is in **beta** despite its version number. Behavior may still change between

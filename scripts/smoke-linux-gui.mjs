@@ -30,6 +30,9 @@ for (const dir of ['home', 'config', 'cache', 'data', 'state']) {
 }
 
 const child = spawn('xvfb-run', ['-a', executable], {
+  // Keep Xvfb, xvfb-run and Electron in one process group so cleanup can terminate the whole
+  // launch tree. Killing only the wrapper can leave Electron holding stdout/stderr open forever.
+  detached: true,
   stdio: ['ignore', 'pipe', 'pipe'],
   env: {
     ...process.env,
@@ -53,6 +56,9 @@ const exitPromise = new Promise((resolve) => {
     exitResult = { code, signal };
     resolve(exitResult);
   });
+});
+const closePromise = new Promise((resolve) => {
+  child.once('close', (code, signal) => resolve({ code, signal }));
 });
 
 const startedAt = Date.now();
@@ -105,16 +111,24 @@ try {
 }
 
 async function terminateChild() {
-  if (exitResult) return true;
-  child.kill('SIGTERM');
+  const signalGroup = (signal) => {
+    if (!child.pid) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+    }
+  };
+
+  signalGroup('SIGTERM');
   let exited = await Promise.race([
-    exitPromise.then(() => true),
+    closePromise.then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), 5_000))
   ]);
   if (!exited) {
-    child.kill('SIGKILL');
+    signalGroup('SIGKILL');
     exited = await Promise.race([
-      exitPromise.then(() => true),
+      closePromise.then(() => true),
       new Promise((resolve) => setTimeout(() => resolve(false), 3_000))
     ]);
   }
