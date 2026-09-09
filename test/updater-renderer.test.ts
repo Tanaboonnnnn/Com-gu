@@ -48,7 +48,7 @@ it('shows background availability but waits for manual panel confirmation before
     config,
     status: { state: 'disconnected', detail: '', publicUrl: null, localUrl: null, handshakeAt: null, lastRequestAt: null, lastToolCallAt: null, health: null, surfaces: [] },
     platform: { family: 'windows', name: 'Windows', desktopAutomation: true },
-    secureStorage: { available: true, detail: null },
+    secureStorage: { available: true, reason: 'available', detail: null },
     hasApiKey: false, hasGoalKey: false, resolvedBinary: null, bundledTunnelVersion: null,
     bridge: { running: true, port: 8765, paired: false, present: false, lastSeenAt: null }
   };

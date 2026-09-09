@@ -9,6 +9,22 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
+## [3.1.4] ? 2026-09-09
+
+3.1.4 is a cross-platform reliability hotfix for Linux secure credential storage, extension-to-Desktop reachability diagnostics, and Linux GUI release validation.
+
+### Fixed
+- GNOME/Ubuntu sessions now request Electron's `gnome-libsecret` password store before safeStorage initializes, while preserving an explicit user `--password-store` choice and leaving KDE backend selection to Electron.
+- Linux credential-provider diagnostics distinguish provider unavailable, rejected insecure `v10` fallback, retryable credential access failures, and positively unreadable stores without logging secret or ciphertext data.
+- The browser companion reports when Desktop is reachable but pairing is blocked by secure credential storage or approval instead of collapsing every non-ready state into "app not reachable". Held observations remain queued until Desktop accepts them.
+- Linux release GUI smoke is readiness-driven instead of relying on a fixed 12-second intentional timeout, reducing false failures on slower hosted x64 runners.
+
+### Security and compatibility
+- Linux `v10` hard-coded-key ciphertext remains rejected. ComGu does not add a plaintext/basic-text fallback.
+- Ambiguous decrypt failures preserve the encrypted credential blob and remain fail-closed for writes.
+- Explicit browser Disconnect, exact extension-origin approval, `CALLER_IDENTITY_REQUIRED`, WorkspaceScope, MXC confinement, permission gates, and exact-search behavior are unchanged.
+- Release targets remain Windows x64/ARM64, macOS ARM64, Linux x64/ARM64. macOS artifacts remain unsigned and unnotarized.
+
 ## [3.1.3] — 2026-09-07
 
 3.1.3 hardens child-process credential isolation, browser-extension pairing, outbound-destination review and release security gates without changing ComGu's workspace or exact-search model.

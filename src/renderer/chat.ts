@@ -1411,12 +1411,17 @@ function applyGoal(state: AppState, previous?: Config): void {
   const goalKey = $<HTMLInputElement>('goalKey');
   goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-โ€ฆ';
   goalKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
+  const secureStorageReason = state.secureStorage?.reason;
   $('goalKeyState').textContent = storedCredentialsAccessFailed
-    ? tr('setup.secureStorageUnavailable')
+    ? tr('setup.secureStorageRetryable')
     : storedCredentialsUnreadable
     ? tr('setup.secureStorageUnreadable')
     : !secureStorageAvailable
-    ? (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
+    ? secureStorageReason === 'insecure_linux_fallback'
+      ? tr('setup.secureStorageInsecureFallback')
+      : secureStorageReason === 'provider_unavailable'
+        ? tr('setup.secureStorageProviderUnavailable')
+        : (state.secureStorage?.detail ?? tr('setup.secureStorageUnavailable'))
     : state.hasGoalKey
       ? tr('goal.keyStored')
       : tr('goal.keySafe');

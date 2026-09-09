@@ -128,7 +128,7 @@ if (targetPlatform === 'win32') {
 } else {
   required(`THIRD-PARTY-NOTICES-sharp-libvips-${targetPlatform}-${targetArch}.md`);
   requiredAsar(`node_modules/@img/sharp-${targetPlatform}-${targetArch}/LICENSE`);
-  // The pinned sharp-libvips 1.3.2 npm packages declare LGPL-3.0-or-later in package.json
+  // The pinned sharp-libvips 1.3.3 npm packages declare LGPL-3.0-or-later in package.json
   // but do not ship a LICENSE file. Require the metadata + version manifest they actually
   // publish instead of making every macOS/Linux smoke test fail on an invented file.
   required(`app.asar.unpacked/node_modules/@img/sharp-libvips-${targetPlatform}-${targetArch}/package.json`);

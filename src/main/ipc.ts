@@ -311,18 +311,25 @@ async function buildState(): Promise<AppState> {
   // The two reads share loadAll()'s single-flight promise. That matters on Keychain/Secret
   // Service: an unreadable blob must not cause two sequential unlock/decrypt attempts merely
   // because the renderer needs two booleans.
-  const [secureStorage, hasApiKey, hasGoalKey] = await Promise.all([
+  const [rawSecureStorage, hasApiKey, hasGoalKey] = await Promise.all([
     secureStorageStatus(),
     hasSecret('openaiApiKey'),
     hasSecret('openRouterApiKey')
   ]);
+  const accessFailed = storedCredentialsAccessFailed();
+  const unreadable = storedCredentialsUnreadable();
+  const secureStorage = unreadable
+    ? { ...rawSecureStorage, available: false, reason: 'stored_credentials_unreadable' as const }
+    : accessFailed
+      ? { ...rawSecureStorage, available: false, reason: 'credential_access_retryable' as const }
+      : rawSecureStorage;
   return {
     config,
     status,
     platform: hostPlatformInfo(),
     secureStorage,
-    storedCredentialsAccessFailed: storedCredentialsAccessFailed(),
-    storedCredentialsUnreadable: storedCredentialsUnreadable(),
+    storedCredentialsAccessFailed: accessFailed,
+    storedCredentialsUnreadable: unreadable,
     hasApiKey,
     hasGoalKey,
     resolvedBinary: resolvedBinary(config),

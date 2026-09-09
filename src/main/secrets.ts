@@ -13,10 +13,10 @@ import path from 'node:path';
 import { safeStorage } from 'electron';
 import type { SecureStorageInfo } from '../shared/types.js';
 import { logError, logWarn } from './logger.js';
+import { probeSecureStorage } from './secure-storage-probe.js';
 
 const FILE_NAME = 'secrets.bin';
 const LINUX_BASIC_TEXT_PREFIX = Buffer.from('v10', 'ascii');
-const LINUX_STORAGE_PROBE = 'chat-on-steroids-safe-storage-probe';
 
 let secretsPath = '';
 let cache: Record<string, string> | null = null;
@@ -121,9 +121,11 @@ export function secureStorageCiphertextIsProtected(
 
 export async function secureStorageStatus(platform: NodeJS.Platform = process.platform): Promise<SecureStorageInfo> {
   try {
-    if (!(await safeStorage.isAsyncEncryptionAvailable())) {
+    const probe = await probeSecureStorage(platform);
+    if (!probe.asyncAvailable || probe.error === 'availability') {
       return {
         available: false,
+        reason: 'provider_unavailable',
         detail:
           platform === 'linux'
             ? 'Secure credential storage is unavailable. Start or unlock a Linux desktop keyring/Secret Service (for example GNOME Keyring or KWallet), then try again.'
@@ -133,20 +135,29 @@ export async function secureStorageStatus(platform: NodeJS.Platform = process.pl
       };
     }
     if (platform === 'linux') {
-      // Probe the provider Electron actually chose, not only the desktop/backend label above.
-      // The probe contains no credential and is never persisted.
-      const probe = await safeStorage.encryptStringAsync(LINUX_STORAGE_PROBE);
-      if (!secureStorageCiphertextIsProtected(probe, platform)) {
+      if (probe.error === 'encrypt') {
         return {
           available: false,
+          reason: 'provider_unavailable',
+          detail: 'Secure operating-system credential storage could not be initialized.'
+        };
+      }
+      if (!probe.protected) {
+        return {
+          available: false,
+          reason: 'insecure_linux_fallback',
           detail:
             'Linux secure storage fell back to Electron’s insecure hard-coded-key provider. Start or unlock a desktop keyring/Secret Service (for example GNOME Keyring or KWallet), then restart ComGu.'
         };
       }
     }
-    return { available: true, detail: null };
+    return { available: true, reason: 'available', detail: null };
   } catch {
-    return { available: false, detail: 'Secure operating-system credential storage could not be initialized.' };
+    return {
+      available: false,
+      reason: 'provider_unavailable',
+      detail: 'Secure operating-system credential storage could not be initialized.'
+    };
   }
 }
 

@@ -90,7 +90,7 @@ function attribution(value) {
  * naming a session for this chat on the feed the page polls. A stage is only green when
  * the layer that owns it said so.
  */
-function pipeline(info, ready) {
+function pipeline(info, ready, status) {
   const page = info && info.page;
   const sent = info && info.delivery;
   const pending = info ? info.pending : 0;
@@ -106,11 +106,20 @@ function pipeline(info, ready) {
 
   const readStage = ['done', String(read)];
   if (!ready) {
+    const blockedReason = status && status.reachability === 'secure_storage_unavailable'
+      ? tr('popup.secureStorageUnavailable')
+      : status && status.reachability === 'approval_required'
+        ? tr('popup.approvalRequired')
+        : status && status.reachability === 'disconnected'
+          ? tr('popup.browserDisconnected')
+          : status && status.reachability === 'protocol_mismatch'
+            ? tr('popup.protocolMismatch')
+            : tr('popup.appUnreachable');
     return {
       read: readStage,
       sent: ['failed', pending ? tr('popup.held', { count: pending }) : ''],
       proc: ['off'],
-      why: ['bad', tr('popup.appUnreachable')]
+      why: ['bad', blockedReason]
     };
   }
   if (sent && sent.ok === false) {
@@ -338,7 +347,7 @@ async function refresh() {
   const requestId = page && page.requestId;
   idRow('req', !isChat ? 'off' : requestId ? 'ok' : 'wait', !isChat ? '' : requestId ? shorten(requestId, 9) : tr('popup.noneYet'), requestId);
 
-  const state = pipeline(info, ready);
+  const state = pipeline(info, ready, status);
   stage('read', ...state.read);
   stage('sent', ...state.sent);
   stage('proc', ...state.proc);

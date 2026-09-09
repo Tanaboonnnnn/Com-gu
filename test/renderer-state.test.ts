@@ -1004,11 +1004,49 @@ it('keeps secret-key input on secure-storage failure', async () => {
   expect(failed.window.document.querySelector('.toast')?.textContent).toBe(t('th', 'setup.secureStorageUnavailable'));
 });
 
+it('explains provider, insecure-fallback, and retryable credential failures precisely', async () => {
+  const provider = await mountChat({
+    secureStorage: { available: false, reason: 'provider_unavailable', detail: 'provider unavailable' }
+  });
+  const doc = provider.window.document;
+  expect(doc.getElementById('apiKeyState')!.textContent).toBe(
+    t('en', 'setup.secureStorageProviderUnavailable')
+  );
+  expect(doc.getElementById('goalKeyState')!.textContent).toBe(
+    t('en', 'setup.secureStorageProviderUnavailable')
+  );
+
+  provider.push({
+    ...provider.state,
+    secureStorage: { available: false, reason: 'insecure_linux_fallback', detail: 'fallback' }
+  });
+  await settle();
+  expect(doc.getElementById('apiKeyState')!.textContent).toBe(
+    t('en', 'setup.secureStorageInsecureFallback')
+  );
+  expect(doc.getElementById('goalKeyState')!.textContent).toBe(
+    t('en', 'setup.secureStorageInsecureFallback')
+  );
+
+  provider.push({
+    ...provider.state,
+    secureStorage: { available: true, reason: 'available', detail: null },
+    storedCredentialsAccessFailed: true
+  });
+  await settle();
+  expect(doc.getElementById('apiKeyState')!.textContent).toBe(
+    t('en', 'setup.secureStorageRetryable')
+  );
+  expect(doc.getElementById('goalKeyState')!.textContent).toBe(
+    t('en', 'setup.secureStorageRetryable')
+  );
+});
+
 it('offers explicit recovery for an unreadable cross-platform credential store before accepting a replacement key', async () => {
   let recoverCalls = 0;
   const mounted = await mountChat(
     {
-      secureStorage: { available: true, detail: null },
+      secureStorage: { available: true, reason: 'available', detail: null },
       storedCredentialsUnreadable: true
     },
     [],

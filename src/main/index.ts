@@ -66,6 +66,7 @@ import {
   type ChatWorkspaceScopesSnapshot
 } from './chat-workspace-scope.js';
 import { extensionDir } from './extension-path.js';
+import { passwordStoreForDesktop } from './linux-password-store.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -77,6 +78,14 @@ let quitting = false;
 let shutdownStarted = false;
 let shutdownComplete = false;
 let stopSessionRetention: (() => void) | null = null;
+
+// Ask Electron for GNOME Secret Service explicitly before safeStorage/OSCrypt initialises. A
+// user-supplied --password-store remains authoritative, and KDE stays on Electron's native
+// KWallet generation detection. ComGu still rejects any resulting v10 ciphertext later.
+if (process.platform === 'linux' && !app.commandLine.hasSwitch('password-store')) {
+  const store = passwordStoreForDesktop(process.env['XDG_CURRENT_DESKTOP']);
+  if (store) app.commandLine.appendSwitch('password-store', store);
+}
 
 // Preserve the original Electron userData for upgraded users before Chromium/safeStorage
 // initialize. The old directory contains Local State, which owns the OS-encrypted key used to

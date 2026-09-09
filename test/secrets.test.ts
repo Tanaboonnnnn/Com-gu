@@ -28,6 +28,7 @@ const {
   SecretStorageError
 } = await import('../src/main/secrets.js');
 const { safeStorage } = await import('electron');
+const { probeSecureStorage, resetSecureStorageProbeForTests } = await import('../src/main/secure-storage-probe.js');
 const { formatLogAsJson, getLog, logInfo } = await import('../src/main/logger.js');
 const { makeTempDir, removeTempDir } = await import('./helpers.js');
 
@@ -38,6 +39,7 @@ beforeEach(async () => {
   dir = await makeTempDir('clf-secrets-');
   initSecretsPath(dir);
   resetSecretsCacheForTests();
+  resetSecureStorageProbeForTests();
   vi.mocked(safeStorage.isAsyncEncryptionAvailable).mockResolvedValue(true);
   vi.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue('gnome_libsecret');
   vi.mocked(safeStorage.encryptStringAsync).mockImplementation(async (value) => Buffer.from(value, 'utf8'));
@@ -52,11 +54,38 @@ afterEach(async () => {
 });
 
 describe('secret store', () => {
+  it('reports Linux v10 provider evidence without exposing ciphertext', async () => {
+    vi.mocked(safeStorage.isAsyncEncryptionAvailable).mockResolvedValue(true);
+    vi.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue('gnome_libsecret');
+    vi.mocked(safeStorage.encryptStringAsync).mockResolvedValueOnce(Buffer.from('v10opaque', 'ascii'));
+
+    expect(await probeSecureStorage('linux')).toEqual({
+      platform: 'linux',
+      asyncAvailable: true,
+      selectedBackend: 'gnome_libsecret',
+      probeFormat: 'v10',
+      protected: false,
+      error: null
+    });
+  });
+
+  it('reports Linux v11 provider evidence as protected', async () => {
+    vi.mocked(safeStorage.encryptStringAsync).mockResolvedValueOnce(Buffer.from('v11opaque', 'ascii'));
+    expect(await probeSecureStorage('linux')).toMatchObject({
+      asyncAvailable: true,
+      selectedBackend: 'gnome_libsecret',
+      probeFormat: 'v11',
+      protected: true,
+      error: null
+    });
+  });
+
   it('refuses Linux v10 hard-coded-key ciphertext instead of trusting the legacy backend label', async () => {
     vi.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue('basic_text');
     vi.mocked(safeStorage.encryptStringAsync).mockResolvedValueOnce(Buffer.from('v10fallback-ciphertext', 'ascii'));
     expect(await secureStorageStatus('linux')).toEqual({
       available: false,
+      reason: 'insecure_linux_fallback',
       detail: expect.stringMatching(/hard-coded-key|fallback/i)
     });
     expect(safeStorage.isAsyncEncryptionAvailable).toHaveBeenCalledTimes(1);
@@ -66,7 +95,7 @@ describe('secret store', () => {
     vi.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue('basic_text');
     vi.mocked(safeStorage.encryptStringAsync).mockResolvedValueOnce(Buffer.from('v11protected-ciphertext', 'ascii'));
 
-    expect(await secureStorageStatus('linux')).toEqual({ available: true, detail: null });
+    expect(await secureStorageStatus('linux')).toEqual({ available: true, reason: 'available', detail: null });
   });
 
   it('refuses the async Linux v10 fallback even when the selected backend label looks secure', async () => {
@@ -75,6 +104,7 @@ describe('secret store', () => {
 
     expect(await secureStorageStatus('linux')).toEqual({
       available: false,
+      reason: 'insecure_linux_fallback',
       detail: expect.stringMatching(/hard-coded-key|fallback/i)
     });
     expect(safeStorage.isAsyncEncryptionAvailable).toHaveBeenCalledTimes(1);
