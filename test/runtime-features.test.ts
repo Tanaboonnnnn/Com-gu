@@ -89,3 +89,23 @@ it('keeps Desktop startup, IPC, bridge and continuation free of runtime Goal/age
     expect(runtimeImports, `${file.pathname} must lazy-load Goal/agents implementations`).toEqual([]);
   }
 });
+
+it('keeps CLI owner and status paths free of browser, Goal, session, agents and Electron runtime imports', async () => {
+  const files = [
+    new URL('../src/cli/index.ts', import.meta.url),
+    new URL('../src/cli/owner.ts', import.meta.url),
+    new URL('../src/cli/commands/status.ts', import.meta.url)
+  ];
+  const forbidden = /(?:^|\/)(?:bridge|goal|agents)\.js$|(?:^|\/)session(?:\/|\.js$)|^electron$/;
+
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
+    const runtimeImports = ast.program.body
+      .filter((statement) => statement.type === 'ImportDeclaration')
+      .filter((statement) => statement.importKind !== 'type')
+      .map((statement) => statement.source.value)
+      .filter((specifier) => forbidden.test(specifier));
+    expect(runtimeImports, `${file.pathname} must keep the CLI baseline graph lightweight`).toEqual([]);
+  }
+});

@@ -27,6 +27,7 @@ interface RunCliOwnerOptions {
   profileDir: string;
   machine: MachineIdentity;
   runtime: CliOwnerRuntime;
+  durableRunStatus?: () => Promise<unknown[]>;
   reload?: () => Promise<void>;
   autoConnect?: boolean;
   installSignalHandlers?: boolean;
@@ -48,11 +49,12 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
   const server = createRuntimeControlServer({
     profileDir: options.profileDir,
     handlers: {
-      status: () => ({
+      status: async () => ({
         runtime: 'running',
         mode: 'cli',
         machine: options.machine,
-        connection: options.runtime.status()
+        connection: options.runtime.status(),
+        durableRuns: await options.durableRunStatus?.() ?? []
       }),
       connect: () => options.runtime.connect(),
       disconnect: () => options.runtime.disconnect(),
@@ -129,10 +131,35 @@ export async function startCliOwner(options: { profileDir: string }): Promise<vo
     shutdown: shutdownConnection
   });
 
+  let durableRunStore: import('../main/run/durable-run.js').DurableRunStore | null = null;
+  const durableRunStatus = async () => {
+    if (!durableRunStore) {
+      const [{ initDurableStore }, { createDurableRunStore }] = await Promise.all([
+        import('../main/durable.js'),
+        import('../main/run/durable-run.js')
+      ]);
+      initDurableStore(options.profileDir);
+      durableRunStore = createDurableRunStore();
+    }
+    const recovered = await durableRunStore.recover();
+    return recovered.map(({ run, action }) => ({
+      id: run.id,
+      objective: run.objective,
+      state: run.state,
+      checkpoint: run.checkpoint,
+      reason: run.reason,
+      updatedAt: run.updatedAt,
+      leaseExpiresAt: run.leaseExpiresAt,
+      operation: run.operation,
+      action
+    }));
+  };
+
   await runCliOwner({
     profileDir: options.profileDir,
     machine,
     runtime,
+    durableRunStatus,
     autoConnect: getConfig().ui.autoConnect,
     reload: async () => {
       await loadConfig();

@@ -33,11 +33,22 @@ describe('ComGu CLI', () => {
       runtime: 'running',
       mode: 'cli',
       machine: { id: 'machine-id', name: 'home-server' },
-      connection: { state: 'connected', detail: '', surfaces: [] }
+      connection: { state: 'connected', detail: '', surfaces: [] },
+      durableRuns: [{ id: 'run-1', state: 'suspended' }]
     }));
     expect(await runCli(['status', '--json'], { profileDir: 'ignored', request, startOwner }, output.value)).toBe(0);
     expect(JSON.parse(output.stdout.join(''))).toMatchObject({ machine: { name: 'home-server' }, connection: { state: 'connected' } });
     expect(startOwner).not.toHaveBeenCalled();
+  });
+
+  it('shows only a compact Durable Run count in plain status', async () => {
+    const output = io();
+    const request = vi.fn(async () => ({
+      runtime: 'running', mode: 'cli', machine: { name: 'server' }, connection: { state: 'connected' },
+      durableRuns: [{ state: 'waiting' }, { state: 'needs-reconciliation' }]
+    }));
+    expect(await runCli(['status'], { profileDir: 'ignored', request, startOwner: async () => undefined }, output.value)).toBe(0);
+    expect(output.stdout.join('')).toContain('Durable runs: 2');
   });
 
   it('renders a compact non-TTY status without ANSI control codes', async () => {

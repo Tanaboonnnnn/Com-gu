@@ -37,7 +37,8 @@ describe('CLI runtime owner', () => {
         runtime: 'running',
         mode: 'cli',
         machine: { id: 'machine-1', name: 'server-one' },
-        connection: { state: 'disconnected' }
+        connection: { state: 'disconnected' },
+        durableRuns: []
       });
     });
 
@@ -49,6 +50,28 @@ describe('CLI runtime owner', () => {
 
     expect(events).toEqual(['start', 'connect', 'disconnect', 'reload', 'shutdown']);
     await expect(sendRuntimeControlRequest(dir, 'status')).rejects.toThrow(/No ComGu runtime owns|authentication/i);
+  });
+
+  it('exposes compact Durable Run status only through an injected lazy owner dependency', async () => {
+    const events: string[] = [];
+    const durableRunStatus = vi.fn(async () => [
+      { id: 'run-1', objective: 'finish release', state: 'suspended', action: 'resume' }
+    ]);
+    const owner = runCliOwner({
+      profileDir: dir,
+      machine: { id: 'm1', name: 'one', createdAt: '2026-09-10T00:00:00.000Z', confirmed: true },
+      runtime: fakeRuntime(events),
+      durableRunStatus,
+      installSignalHandlers: false
+    });
+    await vi.waitFor(async () => {
+      expect(await sendRuntimeControlRequest(dir, 'status')).toMatchObject({
+        durableRuns: [{ id: 'run-1', state: 'suspended', action: 'resume' }]
+      });
+    });
+    expect(durableRunStatus).toHaveBeenCalled();
+    await sendRuntimeControlRequest(dir, 'shutdown');
+    await owner;
   });
 
   it('refuses a competing owner without shutting down the existing runtime', async () => {
