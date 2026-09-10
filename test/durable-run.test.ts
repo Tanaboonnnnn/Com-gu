@@ -61,3 +61,56 @@ it('bounds persisted control strings instead of duplicating arbitrarily large pa
   expect(store.observe(run.id)?.objective.length).toBeLessThanOrEqual(4_000);
   expect(store.observe(run.id)?.checkpoint.length).toBeLessThanOrEqual(4_000);
 });
+
+it('suspends an expired lease on recovery and allows the same proven owner to renew it', async () => {
+  let clock = 10_000;
+  const memory = memoryPersistence();
+  const store = createDurableRunStore(memory.persistence, { now: () => clock, leaseMs: 1_000 });
+  const run = await store.open('keep working', 'conversation:a');
+  clock = 12_000;
+
+  const recovered = await store.recover(clock);
+  expect(recovered).toHaveLength(1);
+  expect(recovered[0]?.run.state).toBe('suspended');
+
+  const renewed = await store.advance(run.id, { type: 'renew', owner: 'conversation:a' });
+  expect(renewed.state).toBe('running');
+  expect(renewed.leaseExpiresAt).toBe(13_000);
+  await expect(store.advance(run.id, { type: 'renew', owner: 'conversation:b' })).rejects.toThrow(/owner/i);
+});
+
+it('recovers safe work but requires reconciliation for ambiguous mutations', async () => {
+  let clock = 20_000;
+  const memory = memoryPersistence();
+  const store = createDurableRunStore(memory.persistence, { now: () => clock, leaseMs: 1_000 });
+  const safe = await store.open('inspect state', 'conversation:a');
+  await store.advance(safe.id, {
+    type: 'operation',
+    owner: 'conversation:a',
+    operation: { id: 'read-1', retry: 'read-only', outcome: 'unknown' }
+  });
+
+  const mutation = await store.open('edit state', 'conversation:b');
+  await store.advance(mutation.id, {
+    type: 'operation',
+    owner: 'conversation:b',
+    operation: { id: 'patch-1', retry: 'mutation', outcome: 'unknown' }
+  });
+  expect(store.observe(mutation.id)?.state).toBe('needs-reconciliation');
+
+  clock = 22_000;
+  const recovered = await store.recover(clock);
+  expect(recovered.find((entry) => entry.run.id === safe.id)?.action).toBe('resume');
+  expect(recovered.find((entry) => entry.run.id === mutation.id)?.action).toBe('reconcile');
+});
+
+it('does not resurrect a terminal run from a stale recovery snapshot', async () => {
+  const memory = memoryPersistence();
+  const first = createDurableRunStore(memory.persistence, { now: () => 30_000 });
+  const run = await first.open('finish once', 'conversation:a');
+  await first.advance(run.id, { type: 'complete', owner: 'conversation:a' });
+
+  const restored = createDurableRunStore(memory.persistence, { now: () => 40_000 });
+  expect(await restored.recover()).toEqual([]);
+  expect(restored.observe(run.id)?.state).toBe('completed');
+});

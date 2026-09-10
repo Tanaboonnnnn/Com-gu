@@ -21,12 +21,21 @@ export interface DurableRunView {
   openedAt: number;
   updatedAt: number;
   leaseExpiresAt: number;
+  operation: DurableRunOperation | null;
+}
+
+export interface DurableRunOperation {
+  id: string;
+  retry: 'read-only' | 'receipt' | 'mutation';
+  outcome: 'committed' | 'unknown' | 'already-applied' | 'safe-to-retry';
 }
 
 export type DurableRunEvent =
   | { type: 'checkpoint'; owner: string; checkpoint: string }
   | { type: 'complete'; owner: string; checkpoint?: string }
-  | { type: 'cancel'; owner: string; reason?: string };
+  | { type: 'cancel'; owner: string; reason?: string }
+  | { type: 'renew'; owner: string }
+  | { type: 'operation'; owner: string; operation: DurableRunOperation };
 
 export interface DurableRunRecovery {
   run: DurableRunView;
@@ -130,7 +139,8 @@ export function createDurableRunStore(
         reason: '',
         openedAt: at,
         updatedAt: at,
-        leaseExpiresAt: at + leaseMs
+        leaseExpiresAt: at + leaseMs,
+        operation: null
       };
       await persistReplacement(run);
       return cloneRun(run);
@@ -156,16 +166,49 @@ export function createDurableRunStore(
       } else if (event.type === 'complete') {
         next.state = 'completed';
         if (event.checkpoint !== undefined) next.checkpoint = bounded(event.checkpoint);
-      } else {
+      } else if (event.type === 'cancel') {
         next.state = 'cancelled';
         next.reason = bounded(event.reason ?? '');
+      } else if (event.type === 'renew') {
+        next.state = 'running';
+        next.reason = '';
+      } else {
+        next.operation = {
+          id: bounded(event.operation.id),
+          retry: event.operation.retry,
+          outcome: event.operation.outcome
+        };
+        if (event.operation.retry === 'mutation' && event.operation.outcome === 'unknown') {
+          next.state = 'needs-reconciliation';
+          next.reason = 'The previous mutation may have completed, but its outcome is not proven.';
+        }
       }
       await persistReplacement(next);
       return cloneRun(next);
     },
 
-    async recover() {
+    async recover(recoverAt = now()) {
       await ensureLoaded();
+      const expired = [...runs.values()].filter(
+        (run) => !terminal(run.state) && run.state !== 'needs-reconciliation' && run.leaseExpiresAt <= recoverAt
+      );
+      if (expired.length > 0) {
+        const previous = new Map(expired.map((run) => [run.id, run]));
+        for (const run of expired) {
+          runs.set(run.id, {
+            ...run,
+            state: 'suspended',
+            reason: 'The active lease expired; the run is recoverable.',
+            updatedAt: recoverAt
+          });
+        }
+        try {
+          await persistence.write(snapshot(recoverAt));
+        } catch (error) {
+          for (const [id, run] of previous) runs.set(id, run);
+          throw error;
+        }
+      }
       return [...runs.values()]
         .filter((run) => !terminal(run.state))
         .map((run) => ({ run: cloneRun(run), action: run.state === 'needs-reconciliation' ? 'reconcile' : 'resume' }));
