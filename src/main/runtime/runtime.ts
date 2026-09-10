@@ -1,5 +1,6 @@
 import type { ConnectionStatus } from '../../shared/types.js';
 import type { RuntimeProfile } from './profile.js';
+import type { RuntimeFeatureLoader } from './features.js';
 
 export interface RuntimeLifecycle {
   connect(): Promise<void>;
@@ -26,7 +27,8 @@ export interface ComGuRuntime {
 export function createComGuRuntime(
   profile: RuntimeProfile,
   lifecycle: RuntimeLifecycle,
-  prepare: () => Promise<void> = async () => {}
+  prepare: () => Promise<void> = async () => {},
+  features?: RuntimeFeatureLoader
 ): ComGuRuntime {
   let startInFlight: Promise<void> | null = null;
   let started = false;
@@ -63,7 +65,12 @@ export function createComGuRuntime(
       // Terminal intent is visible synchronously. A connect suspended in `prepare` therefore
       // observes this after its await and cannot publish a fresh endpoint while teardown runs.
       shutdownRequested = true;
-      if (!shutdownInFlight) shutdownInFlight = lifecycle.shutdown();
+      if (!shutdownInFlight) {
+        shutdownInFlight = (async () => {
+          await features?.stopAll();
+          await lifecycle.shutdown();
+        })();
+      }
       return shutdownInFlight;
     }
   };

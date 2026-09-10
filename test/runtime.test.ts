@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createComGuRuntime, type RuntimeLifecycle } from '../src/main/runtime/runtime.js';
 import { runtimeProfile } from '../src/main/runtime/profile.js';
+import type { RuntimeFeatureLoader } from '../src/main/runtime/features.js';
 
 function fakeLifecycle(events: string[]): RuntimeLifecycle {
   return {
@@ -73,5 +74,19 @@ describe('ComGuRuntime', () => {
     expect(subscribed).toBe(true);
     unsubscribe();
     expect(subscribed).toBe(false);
+  });
+
+  it('stops loaded runtime features before the shared lifecycle shuts down', async () => {
+    const events: string[] = [];
+    const features: RuntimeFeatureLoader = {
+      ensure: async () => null,
+      stopAll: async () => {
+        events.push('features:stop');
+      }
+    };
+    const runtime = createComGuRuntime(runtimeProfile('desktop-app'), fakeLifecycle(events), undefined, features);
+    await runtime.start();
+    await runtime.shutdown();
+    expect(events).toEqual(['features:stop', 'shutdown']);
   });
 });
