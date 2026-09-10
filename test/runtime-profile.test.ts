@@ -10,6 +10,7 @@ describe('runtime profiles', () => {
       goal: true,
       agents: true,
       desktop: true,
+      durableRuns: true,
       electronFrontend: true
     });
   });
@@ -22,6 +23,7 @@ describe('runtime profiles', () => {
       goal: false,
       agents: false,
       desktop: true,
+      durableRuns: true,
       electronFrontend: false
     });
   });
