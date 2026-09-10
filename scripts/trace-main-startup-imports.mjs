@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { parse } from '@babel/parser';
 
 function slash(value) {
   return value.replaceAll('\\', '/');
@@ -22,12 +23,19 @@ async function resolveRelative(fromFile, specifier) {
 }
 
 function staticSpecifiers(sourceText) {
-  // Startup source uses ordinary ESM import/export declarations. Dynamic import() is
-  // intentionally excluded because this audit asks what is evaluated before app-ready.
-  const specifiers = [];
-  const pattern = /(?:^|\n)\s*(?:import\s+(?:[^'"\n]+?\s+from\s+)?|export\s+[^'"\n]+?\s+from\s+)["']([^"']+)["']/g;
-  for (const match of sourceText.matchAll(pattern)) specifiers.push(match[1]);
-  return specifiers;
+  // Dynamic imports and type-only imports are intentionally excluded: neither is evaluated as
+  // part of the eager startup dependency graph. Parse syntax rather than regex so multiline
+  // imports and TypeScript `import type` declarations cannot distort the performance audit.
+  const ast = parse(sourceText, { sourceType: 'module', plugins: ['typescript'] });
+  return ast.program.body.flatMap((statement) => {
+    if (statement.type === 'ImportDeclaration') {
+      return statement.importKind === 'type' ? [] : [statement.source.value];
+    }
+    if (statement.type === 'ExportNamedDeclaration' || statement.type === 'ExportAllDeclaration') {
+      return statement.exportKind === 'type' || !statement.source ? [] : [statement.source.value];
+    }
+    return [];
+  });
 }
 
 export async function traceMainStartupImports(repositoryRoot) {
@@ -65,7 +73,8 @@ export async function traceMainStartupImports(repositoryRoot) {
       updater: matchingModules(['src/main/ipc.ts', 'updat']),
       mxc: [...matchingModules(['command-sandbox']), ...matchingExternals(['@microsoft/mxc-sdk'])],
       sharp: [...matchingModules(['/image', 'image-']), ...matchingExternals(['sharp'])],
-      sessionAgent: matchingModules(['/session/', 'src/main/agents.ts', 'src/main/bridge.ts'])
+      sessionAgent: matchingModules(['/session/', 'src/main/agents.ts', 'src/main/bridge.ts']),
+      goalAgents: matchingModules(['src/main/goal.ts', 'src/main/agents.ts'])
     }
   };
 }

@@ -67,6 +67,8 @@ export const draftOpeningMessage = (async (...args: Parameters<GoalModule['draft
 export const PRIME_ID = 'prime';
 export const swarmState = (() => agents?.swarmState() ?? emptySwarm()) as AgentsModule['swarmState'];
 export const currentRunId = (() => agents?.currentRunId() ?? null) as AgentsModule['currentRunId'];
+export const currentRunAuthorityGuard = (() =>
+  agents?.currentRunAuthorityGuard() ?? { runId: null, scopeFingerprint: null }) as AgentsModule['currentRunAuthorityGuard'];
 export const swarmTransferActive = (() => agents?.swarmTransferActive() ?? false) as AgentsModule['swarmTransferActive'];
 export const agentForConversation = ((...args: Parameters<AgentsModule['agentForConversation']>) =>
   agents?.agentForConversation(...args) ?? null) as AgentsModule['agentForConversation'];
