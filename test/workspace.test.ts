@@ -13,6 +13,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { emptyEvidence, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 import {
+  execCallerPrincipal,
   execOwner,
   execOwnershipDenied,
   moveExecConversationOwners,
@@ -97,6 +98,12 @@ beforeEach(() => {
 });
 
 describe('live process ownership across chat replacement', () => {
+  it('uses a proven conversation first and otherwise isolates a transport session without calling it a conversation', () => {
+    expect(execCallerPrincipal('chat-a', 'transport-a')).toBe('chat-a');
+    expect(execCallerPrincipal(null, 'transport-a')).toBe('\u0000transport:transport-a');
+    expect(execCallerPrincipal(null, null)).toBeNull();
+  });
+
   it('moves only the exact proven A owner to B and leaves anonymous or unrelated sessions unchanged', () => {
     noteExecOwner(101, 'chat-a');
     noteExecOwner(102, null);

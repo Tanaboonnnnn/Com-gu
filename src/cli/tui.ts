@@ -130,11 +130,17 @@ export async function runDashboard(options: DashboardOptions): Promise<void> {
     removeKey();
     removeSignal();
     options.terminal.setRawMode(false);
+    options.terminal.write('\u001b[?1049l');
     resolveClosed();
   };
 
+  options.terminal.write('\u001b[?1049h');
   options.terminal.setRawMode(true);
   removeKey = options.terminal.onKey((key) => {
+    if (key === '\u0003') {
+      cleanup();
+      return;
+    }
     const normalized = key.toLowerCase();
     if (normalized === 'q') {
       cleanup();

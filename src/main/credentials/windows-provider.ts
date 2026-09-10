@@ -106,7 +106,21 @@ export function createWindowsCredentialProvider(options: {
     async unprotect(data) {
       assertWindows();
       try {
-        return { data: await run('unprotect', data), shouldReprotect: false };
+        const unprotected = await run('unprotect', data);
+        // Electron safeStorage encrypted the vault master key as a base64 *string*, while the
+        // CLI DPAPI adapter protects the raw 32 bytes. Accept that one historical payload shape
+        // only when it decodes canonically to a 32-byte key, then ask CredentialVault to reseal
+        // it in the CLI-native representation after the successful read.
+        if (unprotected.length !== 32) {
+          const text = unprotected.toString('ascii').trim();
+          if (/^[A-Za-z0-9+/]{43}=$/.test(text)) {
+            const decoded = Buffer.from(text, 'base64');
+            if (decoded.length === 32 && decoded.toString('base64') === text) {
+              return { data: decoded, shouldReprotect: true };
+            }
+          }
+        }
+        return { data: unprotected, shouldReprotect: false };
       } catch {
         throw new Error('Windows credential protection failed');
       }

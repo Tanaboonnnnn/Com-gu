@@ -28,6 +28,19 @@ describe('Windows CLI credential provider', () => {
     expect(calls[0]!.data).toEqual(key);
   });
 
+  it('adopts an Electron safeStorage master key payload and requests one-time resealing', async () => {
+    const key = Buffer.alloc(32, 11);
+    const provider = createWindowsCredentialProvider({
+      platform: 'win32',
+      run: async (mode, data) => mode === 'protect' ? data : Buffer.from(key.toString('base64'), 'utf8')
+    });
+
+    expect(await provider.unprotect(Buffer.from('legacy-electron-dpapi'))).toEqual({
+      data: key,
+      shouldReprotect: true
+    });
+  });
+
   it('fails closed off Windows rather than emulating DPAPI', async () => {
     const provider = createWindowsCredentialProvider({ platform: 'linux', run: async () => Buffer.alloc(0) });
     expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });

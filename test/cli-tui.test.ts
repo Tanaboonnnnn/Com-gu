@@ -79,6 +79,8 @@ describe('CLI terminal dashboard', () => {
     expect(commands).toEqual(['status', 'connect', 'status', 'disconnect', 'status', 'status']);
     expect(raw).toBe(false);
     expect(keyHandler).toBeNull();
+    expect(frames[0]).toContain('\u001b[?1049h');
+    expect(frames.at(-1)).toContain('\u001b[?1049l');
   });
 
   it('restores terminal state when an interrupt signal closes the dashboard', async () => {
