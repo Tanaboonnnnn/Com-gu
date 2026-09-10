@@ -805,7 +805,15 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
                 });
                 if (owner) call.caller.conversationId = owner;
               }
-              noteExecOwner(output.processId, execCallerPrincipal(owner, call?.caller.transportKey ?? caller.transportKey));
+              const principal = execCallerPrincipal(owner, call?.caller.transportKey ?? caller.transportKey);
+              if (ctx.runtimeProfile === 'cli' && principal === null) {
+                await unifiedExecManager.terminateProcess(output.processId);
+                forgetExecOwner(output.processId);
+                return fail(
+                  'CALLER_IDENTITY_REQUIRED: ComGu CLI will not expose a long-running terminal session without a proven caller identity. Use a one-shot command or reconnect through a transport that provides a stable caller principal.'
+                );
+              }
+              noteExecOwner(output.processId, principal);
             }
             const responseText = execCommandResponseText(output);
             // A search that found nothing exits 1 and has not failed. Recording it as an
@@ -893,6 +901,11 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             if (asking) call.caller.conversationId = asking;
           }
           const principal = execCallerPrincipal(asking, call?.caller.transportKey ?? caller.transportKey);
+          if (ctx.runtimeProfile === 'cli' && principal === null) {
+            return fail(
+              'CALLER_IDENTITY_REQUIRED: ComGu CLI cannot continue a terminal session without a proven caller identity. Reconnect through a transport that provides a stable caller principal.'
+            );
+          }
           if (execOwnershipDenied(input.session_id, principal)) {
             return fail(
               `write_stdin failed: session ${input.session_id} is not proven to belong to this ChatGPT conversation. Start your own with exec_command or retry after the extension reconnects.`

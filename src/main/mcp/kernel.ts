@@ -69,6 +69,7 @@ import { effectiveWorkspaceRoots } from '../run/scope.js';
 import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
 import type { MachineIdentity } from '../machine/profile.js';
+import type { RuntimeProfileName } from '../runtime/profile.js';
 import {
   currentCall,
   emptyEvidence,
@@ -120,6 +121,8 @@ export interface ToolContext {
   exposedFind?: boolean;
   /** Stable identity of the local machine that will execute this call. */
   machine?: MachineIdentity | null;
+  /** Frontend/runtime policy that owns this MCP endpoint. */
+  runtimeProfile?: RuntimeProfileName;
 }
 
 export type ToolContent =

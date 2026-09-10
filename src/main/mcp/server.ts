@@ -322,6 +322,7 @@ export async function startMcpServer(
     return {
       ...live,
       machine,
+      runtimeProfile: profile,
       sessionTools,
       agentTools,
       exposedCaps: { ...exposed.caps },
