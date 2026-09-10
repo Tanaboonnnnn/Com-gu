@@ -20,6 +20,9 @@ export interface MachineProfileDependencies {
   now?: () => Date;
 }
 
+let activeProfile: MachineIdentity | null = null;
+let activeDataDir: string | null = null;
+
 function machinePath(dataDir: string): string {
   return path.join(dataDir, MACHINE_FILE);
 }
@@ -105,10 +108,26 @@ export async function loadMachineProfile(
   return identity;
 }
 
+/** Initializes the process-local machine identity before model-facing metadata is built. */
+export async function initMachineProfile(
+  dataDir: string,
+  dependencies: MachineProfileDependencies = {}
+): Promise<MachineIdentity> {
+  const loaded = await loadMachineProfile(dataDir, dependencies);
+  activeProfile = loaded;
+  activeDataDir = path.resolve(dataDir);
+  return loaded;
+}
+
+export function currentMachineProfile(): MachineIdentity | null {
+  return activeProfile ? { ...activeProfile } : null;
+}
+
 export async function renameMachine(dataDir: string, name: string): Promise<MachineIdentity> {
   const current = await loadMachineProfile(dataDir);
   const next: MachineIdentity = { ...current, name: validateExplicitName(name), confirmed: true };
   await writeMachineIdentity(dataDir, next);
+  if (activeDataDir === path.resolve(dataDir)) activeProfile = next;
   return next;
 }
 
@@ -121,5 +140,8 @@ export async function prepareMachineClone(dataDir: string, scrubCloneUnsafeState
   await loadMachineProfile(dataDir);
   await scrubCloneUnsafeState();
   await fs.rm(machinePath(dataDir), { force: true });
+  if (activeDataDir === path.resolve(dataDir)) {
+    activeProfile = null;
+    activeDataDir = null;
+  }
 }
-

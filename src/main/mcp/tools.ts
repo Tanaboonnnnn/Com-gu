@@ -22,12 +22,13 @@ import { serverInstructions } from './instructions.js';
 import { APP_VERSION } from './../version.js';
 import { toVirtualPath } from '../sandbox.js';
 import { logWarn } from '../logger.js';
+import type { MachineIdentity } from '../machine/profile.js';
 
-export function buildServer(ctx: ToolContext, surface: SurfaceId): McpServer {
-  const definition = surfaceDefinition(surface);
+export function buildServer(ctx: ToolContext, surface: SurfaceId, machine?: MachineIdentity | null): McpServer {
+  const definition = surfaceDefinition(surface, machine);
   const server = new McpServer(
     { name: definition.serverName, version: APP_VERSION },
-    { capabilities: { tools: {} }, instructions: serverInstructions(ctx, surface) }
+    { capabilities: { tools: {} }, instructions: serverInstructions(ctx, surface, process.platform, machine) }
   );
 
   const registrar = createRegistrar(server, ctx, surface);

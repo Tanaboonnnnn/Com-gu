@@ -68,6 +68,7 @@ import {
 import { extensionDir } from './extension-path.js';
 import { passwordStoreForDesktop } from './linux-password-store.js';
 import { runtimeProfile } from './runtime/profile.js';
+import { initMachineProfile } from './machine/profile.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -252,6 +253,10 @@ void app.whenReady().then(async () => {
   // primary that was told to quit before ready, must never touch the primary's shared userData.
   if (!shouldBeginAppBootstrap(hasSingleInstanceLock, quitting)) return;
   const userData = app.getPath('userData');
+  // Machine identity is non-secret and must exist before any connector metadata is constructed.
+  // New/upgraded installs remain on legacy connector names until the user confirms an alias.
+  await initMachineProfile(userData);
+  if (windowActivation.isDisabled()) return;
   // Changing package/app identity changes Electron's default userData directory. Copy only the
   // two bootstrap files that must exist before their owners initialize; never delete the legacy
   // directory and never decrypt secrets as part of this compatibility migration.

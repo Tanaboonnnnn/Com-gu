@@ -26,6 +26,7 @@ import { getConfig } from '../config.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 import { buildServer, resetToolClock, type ToolContext } from './tools.js';
 import { SURFACE_IDS, surfaceDefinition, type SurfaceId } from './surfaces.js';
+import type { MachineIdentity } from '../machine/profile.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -255,7 +256,7 @@ export function forgetExposedSurface(): void {
   surfaceExposure.clear();
 }
 
-export async function startMcpServer(getContext: () => ToolContext): Promise<McpEndpoint> {
+export async function startMcpServer(getContext: () => ToolContext, machine?: MachineIdentity | null): Promise<McpEndpoint> {
   // A per-session token in the path is what authorises callers. It is regenerated on
   // every app start, so a URL that leaks stops working when the app restarts.
   requestSeenAt = null;
@@ -318,7 +319,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     prmPath: `${PRM_PREFIX}${surface.basePath}`,
     url: '',
     handler: toNodeHandler(
-      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id)),
+      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id, machine)),
       { onerror: (error) => logError(`MCP handler error (${surface.id}): ${error.message}`) }
     )
   }));
@@ -364,7 +365,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     if (prmRoute) {
       if (!checkHost(req, res)) return;
       if (!checkOrigin(req, res)) return;
-      const body = protectedResourceMetadata(prmRoute.url, surfaceDefinition(prmRoute.id).connectorName);
+      const body = protectedResourceMetadata(prmRoute.url, surfaceDefinition(prmRoute.id, machine).connectorName);
       res.writeHead(200, {
         'content-type': 'application/json',
         'cache-control': 'no-store',

@@ -17,10 +17,11 @@ import { logError, logInfo, logWarn } from './logger.js';
 import { writePerfMcpEndpointMarker } from './perf-marker.js';
 import { lastRequestAt, startMcpServer, tunnelProbeHeaders, type McpEndpoint } from './mcp/server.js';
 import { lastToolCallAt } from './mcp/tools.js';
-import { SURFACE_LIST, surfaceIsUseful, type SurfaceId } from './mcp/surfaces.js';
+import { surfaceList, surfaceIsUseful, type SurfaceId } from './mcp/surfaces.js';
 import { getSecret } from './secrets.js';
 import { startTunnel, TunnelError, type TunnelHandle } from './tunnel/index.js';
 import { desktopAutomationSupported } from './platform.js';
+import { currentMachineProfile } from './machine/profile.js';
 
 let endpoint: McpEndpoint | null = null;
 /** The Core tunnel. Also the only tunnel on the cloudflared and manual paths. */
@@ -107,7 +108,7 @@ function describeSurfaces(): SurfaceStatus[] {
   // still say live and expose the dead tunnel URL. Preserve reports only while there is an
   // endpoint for them to describe; a fresh connect will populate its own generation again.
   const running = endpoint !== null;
-  return SURFACE_LIST.map((surface) => {
+  return surfaceList(currentMachineProfile()).map((surface) => {
     const available = surfaceIsUseful(surface.id, caps);
     const previous = status.surfaces.find((entry) => entry.id === surface.id);
     return {
@@ -251,7 +252,7 @@ async function connectImpl(): Promise<void> {
         readOnly: live.readOnly,
         privacyScreenshots: live.ui.privacyScreenshots
       };
-    });
+    }, currentMachineProfile());
     if (shutdownRequested || generation !== connectionGeneration) {
       await startedEndpoint.stop({ forceAfterMs: 30_000 }).catch(() => {});
       return;
