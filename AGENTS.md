@@ -190,6 +190,8 @@ src/preload/index.ts          the complete renderer-facing API allowlist
 src/main/secrets.ts           Electron safeStorage-backed secret storage
 src/main/logger.ts            redacted RAM-only operational log (not the session store)
 src/main/durable.ts           small named JSON state files under userData/state
+src/main/run/durable-run.ts   bounded long-run checkpoint/lease/reconciliation authority
+src/main/runtime/features.ts  Runtime Feature loading seam; optional adapters stay lazy
 src/main/diagnostics.ts       the UI self-test chain, hop by hop
 
 ── MCP ────────────────────────────────────────────────────────────────────
