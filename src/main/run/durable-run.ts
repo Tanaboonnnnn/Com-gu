@@ -32,6 +32,8 @@ export interface DurableRunOperation {
 
 export type DurableRunEvent =
   | { type: 'checkpoint'; owner: string; checkpoint: string }
+  | { type: 'wait'; owner: string; checkpoint: string }
+  | { type: 'suspend'; owner: string; reason: string }
   | { type: 'complete'; owner: string; checkpoint?: string }
   | { type: 'cancel'; owner: string; reason?: string }
   | { type: 'renew'; owner: string }
@@ -157,12 +159,24 @@ export function createDurableRunStore(
       if (!current) throw new Error(`Unknown Durable Run: ${runId}`);
       if (terminal(current.state)) throw new Error(`Durable Run ${runId} is terminal`);
       if (event.owner !== current.owner) throw new Error('Durable Run owner does not match');
+      if (current.state === 'needs-reconciliation' && event.type !== 'operation' && event.type !== 'cancel') {
+        throw new Error('Durable Run requires reconciliation before it can advance');
+      }
       const at = now();
       const next = cloneRun(current);
       next.updatedAt = at;
       next.leaseExpiresAt = at + leaseMs;
       if (event.type === 'checkpoint') {
+        next.state = 'running';
+        next.reason = '';
         next.checkpoint = bounded(event.checkpoint);
+      } else if (event.type === 'wait') {
+        next.state = 'waiting';
+        next.reason = '';
+        next.checkpoint = bounded(event.checkpoint);
+      } else if (event.type === 'suspend') {
+        next.state = 'suspended';
+        next.reason = bounded(event.reason);
       } else if (event.type === 'complete') {
         next.state = 'completed';
         if (event.checkpoint !== undefined) next.checkpoint = bounded(event.checkpoint);
@@ -181,6 +195,12 @@ export function createDurableRunStore(
         if (event.operation.retry === 'mutation' && event.operation.outcome === 'unknown') {
           next.state = 'needs-reconciliation';
           next.reason = 'The previous mutation may have completed, but its outcome is not proven.';
+        } else if (event.operation.outcome === 'committed' || event.operation.outcome === 'already-applied') {
+          next.state = 'waiting';
+          next.reason = '';
+        } else if (event.operation.outcome === 'safe-to-retry') {
+          next.state = 'suspended';
+          next.reason = 'The previous operation was not applied and is safe to retry.';
         }
       }
       await persistReplacement(next);

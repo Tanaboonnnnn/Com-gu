@@ -2156,7 +2156,8 @@ const HANDLERS = {
       body: JSON.stringify({
         conversationId: message.conversationId,
         token: String(message.token || ''),
-        clientId: String(source.tab)
+        clientId: String(source.tab),
+        receipt: message.receipt === 'sent' || message.receipt === 'retired' ? message.receipt : 'unknown'
       })
     });
     return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };

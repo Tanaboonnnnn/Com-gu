@@ -104,6 +104,42 @@ it('recovers safe work but requires reconciliation for ambiguous mutations', asy
   expect(recovered.find((entry) => entry.run.id === mutation.id)?.action).toBe('reconcile');
 });
 
+it('tracks waiting and suspended work explicitly and only exits reconciliation through an operation receipt', async () => {
+  let clock = 25_000;
+  const memory = memoryPersistence();
+  const store = createDurableRunStore(memory.persistence, { now: () => clock, leaseMs: 1_000 });
+  const run = await store.open('continue safely', 'conversation:a');
+
+  clock = 25_100;
+  expect(
+    await store.advance(run.id, { type: 'wait', owner: 'conversation:a', checkpoint: 'waiting for the next ChatGPT turn' })
+  ).toMatchObject({ state: 'waiting', checkpoint: 'waiting for the next ChatGPT turn' });
+
+  clock = 25_200;
+  await store.advance(run.id, {
+    type: 'operation',
+    owner: 'conversation:a',
+    operation: { id: 'goal-token-1', retry: 'mutation', outcome: 'unknown' }
+  });
+  expect(store.observe(run.id)?.state).toBe('needs-reconciliation');
+  await expect(store.advance(run.id, { type: 'renew', owner: 'conversation:a' })).rejects.toThrow(/reconciliation/i);
+
+  clock = 25_300;
+  expect(
+    await store.advance(run.id, {
+      type: 'operation',
+      owner: 'conversation:a',
+      operation: { id: 'goal-token-1', retry: 'mutation', outcome: 'committed' }
+    })
+  ).toMatchObject({ state: 'waiting', reason: '' });
+
+  clock = 25_400;
+  expect(await store.advance(run.id, { type: 'suspend', owner: 'conversation:a', reason: 'provider unavailable' })).toMatchObject({
+    state: 'suspended',
+    reason: 'provider unavailable'
+  });
+});
+
 it('does not resurrect a terminal run from a stale recovery snapshot', async () => {
   const memory = memoryPersistence();
   const first = createDurableRunStore(memory.persistence, { now: () => 30_000 });
