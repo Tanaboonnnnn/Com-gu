@@ -6,10 +6,59 @@ type GoalModule = typeof import('./goal.js');
 let agents: AgentsModule | null = null;
 let goal: GoalModule | null = null;
 
+interface ListenerSlot<T> {
+  handler: T | null;
+  detach: (() => void) | null;
+}
+
+const spawnListener: ListenerSlot<Parameters<AgentsModule['onSpawnRequest']>[0]> = { handler: null, detach: null };
+const reviveListener: ListenerSlot<Parameters<AgentsModule['onReviveRequest']>[0]> = { handler: null, detach: null };
+const primeWakeListener: ListenerSlot<Parameters<AgentsModule['onPrimeWakeRequest']>[0]> = { handler: null, detach: null };
+const swarmEndListener: ListenerSlot<Parameters<AgentsModule['onSwarmEnd']>[0]> = { handler: null, detach: null };
+
 export type WorkerRevival = import('./agents.js').WorkerRevival;
 
+function rebindListener<T>(
+  slot: ListenerSlot<T>,
+  register: (module: AgentsModule, handler: T) => () => void
+): void {
+  slot.detach?.();
+  slot.detach = null;
+  if (agents && slot.handler) slot.detach = register(agents, slot.handler);
+}
+
+function detachListener<T>(slot: ListenerSlot<T>): void {
+  slot.detach?.();
+  slot.detach = null;
+}
+
+function bindListener<T>(
+  slot: ListenerSlot<T>,
+  handler: T,
+  register: (module: AgentsModule, handler: T) => () => void
+): (() => void) {
+  slot.detach?.();
+  slot.handler = handler;
+  slot.detach = agents ? register(agents, handler) : null;
+  return () => {
+    if (slot.handler !== handler) return;
+    slot.detach?.();
+    slot.detach = null;
+    slot.handler = null;
+  };
+}
+
 export function installBridgeAgentsRuntime(module: AgentsModule | null): void {
+  if (agents === module) return;
+  detachListener(spawnListener);
+  detachListener(reviveListener);
+  detachListener(primeWakeListener);
+  detachListener(swarmEndListener);
   agents = module;
+  rebindListener(spawnListener, (runtime, handler) => runtime.onSpawnRequest(handler));
+  rebindListener(reviveListener, (runtime, handler) => runtime.onReviveRequest(handler));
+  rebindListener(primeWakeListener, (runtime, handler) => runtime.onPrimeWakeRequest(handler));
+  rebindListener(swarmEndListener, (runtime, handler) => runtime.onSwarmEnd(handler));
 }
 
 export function installBridgeGoalRuntime(module: GoalModule | null): void {
@@ -17,7 +66,7 @@ export function installBridgeGoalRuntime(module: GoalModule | null): void {
 }
 
 export function resetBridgeOptionalRuntime(): void {
-  agents = null;
+  installBridgeAgentsRuntime(null);
   goal = null;
 }
 
@@ -131,12 +180,11 @@ export const sleepWorker = ((...args: Parameters<AgentsModule['sleepWorker']>) =
 export const requestWorkerRevivals = ((...args: Parameters<AgentsModule['requestWorkerRevivals']>) =>
   agents?.requestWorkerRevivals(...args) ?? 0) as AgentsModule['requestWorkerRevivals'];
 
-const noListener = (): (() => void) => () => {};
-export const onSpawnRequest = ((...args: Parameters<AgentsModule['onSpawnRequest']>) =>
-  agents ? agents.onSpawnRequest(...args) : noListener()) as AgentsModule['onSpawnRequest'];
-export const onReviveRequest = ((...args: Parameters<AgentsModule['onReviveRequest']>) =>
-  agents ? agents.onReviveRequest(...args) : noListener()) as AgentsModule['onReviveRequest'];
-export const onPrimeWakeRequest = ((...args: Parameters<AgentsModule['onPrimeWakeRequest']>) =>
-  agents ? agents.onPrimeWakeRequest(...args) : noListener()) as AgentsModule['onPrimeWakeRequest'];
-export const onSwarmEnd = ((...args: Parameters<AgentsModule['onSwarmEnd']>) =>
-  agents ? agents.onSwarmEnd(...args) : noListener()) as AgentsModule['onSwarmEnd'];
+export const onSpawnRequest = ((handler: Parameters<AgentsModule['onSpawnRequest']>[0]) =>
+  bindListener(spawnListener, handler, (runtime, listener) => runtime.onSpawnRequest(listener))) as AgentsModule['onSpawnRequest'];
+export const onReviveRequest = ((handler: Parameters<AgentsModule['onReviveRequest']>[0]) =>
+  bindListener(reviveListener, handler, (runtime, listener) => runtime.onReviveRequest(listener))) as AgentsModule['onReviveRequest'];
+export const onPrimeWakeRequest = ((handler: Parameters<AgentsModule['onPrimeWakeRequest']>[0]) =>
+  bindListener(primeWakeListener, handler, (runtime, listener) => runtime.onPrimeWakeRequest(listener))) as AgentsModule['onPrimeWakeRequest'];
+export const onSwarmEnd = ((handler: Parameters<AgentsModule['onSwarmEnd']>[0]) =>
+  bindListener(swarmEndListener, handler, (runtime, listener) => runtime.onSwarmEnd(listener))) as AgentsModule['onSwarmEnd'];

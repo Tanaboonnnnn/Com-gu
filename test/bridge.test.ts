@@ -3796,6 +3796,42 @@ describe('restarting the bridge', () => {
     expect(pendingCommands().map((command) => command.what)).toEqual(['worker:worker-1']);
   });
 
+  it('activates agent bridge hooks when multi-agent is enabled after the bridge is already running', async () => {
+    await stopBridge();
+    installBridgeAgentsRuntime(null);
+    const port = await startBridge();
+    expect(port).not.toBeNull();
+    base = `http://127.0.0.1:${port}`;
+
+    try {
+      installBridgeAgentsRuntime(agentsModule);
+      spawn({ workers: [{ task: 'hot enabled worker' }], caller: { conversationId: PRIME_CHAT } });
+      expect(pendingCommands().map((command) => command.what)).toEqual(['worker:worker-1']);
+      await waitForOpened(1);
+
+      resetSwarm();
+      resetBridgeForTests();
+      opened.length = 0;
+      setBrowserOpener(async (url, family) => {
+        opened.push(url);
+        openedFamilies.push(family);
+      });
+      installBridgeAgentsRuntime(null);
+      installBridgeAgentsRuntime(agentsModule);
+      spawn({ workers: [{ task: 'enabled again without duplicate hooks' }], caller: { conversationId: PRIME_CHAT } });
+      expect(pendingCommands().map((command) => command.what)).toEqual(['worker:worker-1']);
+      await waitForOpened(1);
+      expect(opened).toHaveLength(1);
+    } finally {
+      resetSwarm();
+      await stopBridge();
+      installBridgeAgentsRuntime(agentsModule);
+      const restoredPort = await startBridge();
+      expect(restoredPort).not.toBeNull();
+      base = `http://127.0.0.1:${restoredPort}`;
+    }
+  });
+
   it('does not queue or reopen a sleeping worker through a stale revival callback while stopped', async () => {
     await pair();
     spawn({ workers: [{ task: 'be reusable across a bridge restart' }], caller: { conversationId: PRIME_CHAT } });
