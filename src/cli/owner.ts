@@ -1,7 +1,4 @@
 import { getConfig, initConfigPath, loadConfig } from '../main/config.js';
-import { createCredentialVault } from '../main/credentials/vault.js';
-import { createLinuxCredentialProvider } from '../main/credentials/linux-provider.js';
-import { createWindowsCredentialProvider } from '../main/credentials/windows-provider.js';
 import {
   applySettings,
   configureConnectionRuntime,
@@ -16,6 +13,7 @@ import { createRuntimeControlServer } from '../main/runtime/control.js';
 import { runtimeProfile } from '../main/runtime/profile.js';
 import { createComGuRuntime } from '../main/runtime/runtime.js';
 import type { ConnectionStatus } from '../shared/types.js';
+import { createCliCredentialVault } from './credentials.js';
 
 export interface CliOwnerRuntime {
   start(): Promise<void>;
@@ -99,19 +97,6 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
   await finishedPromise;
 }
 
-async function cliCredentialVault(profileDir: string, machine: MachineIdentity) {
-  if (process.platform === 'win32') {
-    return createCredentialVault({ directory: profileDir, provider: createWindowsCredentialProvider() });
-  }
-  if (process.platform === 'linux') {
-    return createCredentialVault({
-      directory: profileDir,
-      provider: createLinuxCredentialProvider({ scope: machine.id })
-    });
-  }
-  throw new Error('ComGu CLI V1 supports Windows and Linux only');
-}
-
 /**
  * Production CLI bootstrap. Kept in its own dynamically imported module so status/json/admin
  * clients do not load the MCP/tunnel/native dependency graph merely to inspect an owner.
@@ -123,7 +108,7 @@ export async function startCliOwner(options: { profileDir: string }): Promise<vo
 
   initConfigPath(options.profileDir);
   await loadConfig();
-  const vault = await cliCredentialVault(options.profileDir, machine);
+  const vault = createCliCredentialVault(options.profileDir, machine);
   configureConnectionRuntime({
     profile: 'cli',
     getApiKey: () => vault.get('openaiApiKey')

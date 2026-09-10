@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runCli } from '../src/cli/index.js';
+import { parseCliInvocation, runCli } from '../src/cli/index.js';
 
 function io() {
   const stdout: string[] = [];
@@ -17,6 +17,15 @@ function io() {
 }
 
 describe('ComGu CLI', () => {
+  it('parses a profile override as a global option instead of passing it to the command', () => {
+    expect(parseCliInvocation(['start', '--profile', 'C:\\profiles\\server', '--json'])).toEqual({
+      command: 'start',
+      args: [],
+      json: true,
+      profileDir: 'C:\\profiles\\server'
+    });
+    expect(() => parseCliInvocation(['start', '--profile'])).toThrow(/--profile <path>/);
+  });
   it('prints machine-attributed status as JSON without starting a runtime', async () => {
     const output = io();
     const startOwner = vi.fn(async () => undefined);

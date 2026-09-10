@@ -28,8 +28,37 @@ function defaultIo(): CliIo {
   };
 }
 
-async function defaultDependencies(): Promise<CliDependencies> {
-  const profileDir = defaultComGuProfileDir();
+export interface ParsedCliInvocation {
+  command: string | null;
+  args: string[];
+  json: boolean;
+  profileDir: string | null;
+}
+
+export function parseCliInvocation(argv: string[]): ParsedCliInvocation {
+  const positional: string[] = [];
+  let json = false;
+  let profileDir: string | null = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === '--json') {
+      json = true;
+      continue;
+    }
+    if (arg === '--profile') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) throw new Error('Usage: --profile <path>');
+      profileDir = value;
+      index += 1;
+      continue;
+    }
+    positional.push(arg);
+  }
+  const [command, ...args] = positional;
+  return { command: command ?? null, args, json, profileDir };
+}
+
+async function defaultDependencies(profileDir: string = defaultComGuProfileDir()): Promise<CliDependencies> {
   const client = createControlClient(profileDir);
   return {
     profileDir,
@@ -65,12 +94,12 @@ export async function runCli(
   dependencies?: CliDependencies,
   io: CliIo = defaultIo()
 ): Promise<number> {
-  const deps = dependencies ?? (await defaultDependencies());
-  const [rawCommand, ...args] = argv;
-  const command = rawCommand ?? (io.isTTY ? 'dashboard' : 'help');
-  const json = args.includes('--json');
-
   try {
+    const parsed = parseCliInvocation(argv);
+    const deps = dependencies ?? (await defaultDependencies(parsed.profileDir ?? defaultComGuProfileDir()));
+    const command = parsed.command ?? (io.isTTY ? 'dashboard' : 'help');
+    const args = parsed.args;
+    const json = parsed.json;
     switch (command) {
       case 'status': {
         const status = await deps.request('status');
@@ -116,10 +145,30 @@ export async function runCli(
         if (result) io.writeOut(`${result}\n`);
         return 0;
       }
+      case 'setup':
+      case 'doctor':
+      case 'roots':
+      case 'permissions':
+      case 'machine': {
+        const { runAdminCommand } = await import('./commands/admin.js');
+        const result = await runAdminCommand(command, args, {
+          profileDir: deps.profileDir,
+          ownerStatus: () => deps.request('status')
+        });
+        io.writeOut(json ? `${JSON.stringify(result.json)}\n` : `${result.text}\n`);
+        return 0;
+      }
+      case 'logs': {
+        // Operational logs intentionally live only in the owner process's RAM. The local control
+        // protocol must stay administrative and must not grow a log/data export surface merely
+        // for this convenience command.
+        io.writeOut('ComGu operational logs are RAM-only. Use the Desktop diagnostics panel or run the owner with CLF_DEBUG=1 for redacted console logs.\n');
+        return 0;
+      }
       case 'help':
       case '--help':
       case '-h':
-        io.writeOut('Usage: comgu <start|stop|connect|disconnect|status|dashboard|service> [--json]\n');
+        io.writeOut('Usage: comgu <setup|start|stop|connect|disconnect|status|doctor|logs|roots|permissions|machine|dashboard|service> [--profile <path>] [--json]\n');
         return 0;
       default:
         io.writeErr(`Unknown command: ${command}\n`);
