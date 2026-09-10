@@ -148,6 +148,29 @@ describe('secret store', () => {
     expect(await getSecret('openRouterApiKey')).toBe('new-secret');
   });
 
+  it('accepts a non-Electron credential provider without touching Electron safeStorage', async () => {
+    const provider = {
+      async status() {
+        return { available: true as const, reason: 'available' as const, detail: 'test-native' };
+      },
+      async protect(data: Buffer) {
+        return Buffer.concat([Buffer.from('native:'), data]);
+      },
+      async unprotect(data: Buffer) {
+        return { data: data.subarray(Buffer.byteLength('native:')), shouldReprotect: false };
+      }
+    };
+    vi.mocked(safeStorage.encryptStringAsync).mockClear();
+    vi.mocked(safeStorage.decryptStringAsync).mockClear();
+    initSecretsPath(dir, { provider });
+
+    await setSecret('openaiApiKey', 'native-provider-secret');
+    resetSecretsCacheForTests();
+    expect(await getSecret('openaiApiKey')).toBe('native-provider-secret');
+    expect(safeStorage.encryptStringAsync).not.toHaveBeenCalled();
+    expect(safeStorage.decryptStringAsync).not.toHaveBeenCalled();
+  });
+
   it('serializes concurrent writes so one credential cannot erase another', async () => {
     await Promise.all([
       setSecret('bridgeToken', 'bridge-token-456'),

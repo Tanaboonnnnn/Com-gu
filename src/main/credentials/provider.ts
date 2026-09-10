@@ -1,5 +1,5 @@
 export type CredentialProviderStatus =
-  | { available: true; reason: 'available' }
+  | { available: true; reason: 'available'; detail?: string }
   | { available: false; reason: 'provider_unavailable'; detail?: string };
 
 /**

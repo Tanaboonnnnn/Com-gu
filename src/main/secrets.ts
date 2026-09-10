@@ -20,6 +20,7 @@ import {
   type VaultSecretKey
 } from './credentials/vault.js';
 import { createElectronCredentialProvider } from './credentials/electron-provider.js';
+import type { CredentialProvider } from './credentials/provider.js';
 
 const LEGACY_FILE_NAME = 'secrets.bin';
 const MIGRATION_MARKER = 'credentials.migrated';
@@ -219,7 +220,7 @@ function translateVaultError(error: unknown): never {
   throw error;
 }
 
-export function initSecretsPath(directory: string): void {
+export function initSecretsPath(directory: string, options: { provider?: CredentialProvider } = {}): void {
   userDataDir = directory;
   legacySecretsPath = path.join(directory, LEGACY_FILE_NAME);
   migrationMarkerPath = path.join(directory, MIGRATION_MARKER);
@@ -229,7 +230,7 @@ export function initSecretsPath(directory: string): void {
   vaultAccessFailed = false;
   vault = createCredentialVault({
     directory,
-    provider: createElectronCredentialProvider(process.platform),
+    provider: options.provider ?? createElectronCredentialProvider(process.platform),
     legacy: {
       read: readLegacyStore,
       markMigrated: markLegacyMigrated
