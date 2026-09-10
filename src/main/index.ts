@@ -18,26 +18,11 @@ import {
   setAgentBinder,
   setAgentConversationLookup
 } from './session/recorder.js';
-import {
-  agentConversation,
-  bindConversation,
-  onRetiredWorkersPersist,
-  onRetiredWorkersPersistNow,
-  onSwarmPersist,
-  onSwarmPersistNow,
-  pauseSwarmForDisable,
-  repairPrimeConversationAfterRecovery,
-  restoreRetiredWorkers,
-  restoreSwarm,
-  snapshotRetiredWorkers,
-  snapshotSwarm,
-  type RetiredWorkersSnapshot,
-  type SwarmSnapshot
-} from './agents.js';
-import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
+import type { RetiredWorkersSnapshot, SwarmSnapshot } from './agents.js';
+import { flushDurable, initDurableStore, readDurable, writeDurableNow } from './durable.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
 import { configureComputerClipboard, stopComputerHelper } from './computer/index.js';
-import { GOAL_OBJECTIVES_STATE, restoreGoalObjectives, type GoalObjectivesSnapshot } from './goal.js';
+import type { GoalObjectivesSnapshot } from './goal.js';
 import {
   CONTINUATIONS_STATE,
   restoreContinuations,
@@ -68,6 +53,12 @@ import { extensionDir } from './extension-path.js';
 import { passwordStoreForDesktop } from './linux-password-store.js';
 import { runtimeProfile } from './runtime/profile.js';
 import { createComGuRuntime } from './runtime/runtime.js';
+import { createRuntimeFeatureLoader } from './runtime/features.js';
+import {
+  desktopFeatureFactories,
+  loadedDesktopAgentsModule,
+  loadedDesktopGoalModule
+} from './runtime/desktop-features.js';
 import { initMachineProfile } from './machine/profile.js';
 import {
   connect as connectConnection,
@@ -80,14 +71,16 @@ import {
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
 const RETIRED_WORKERS_STATE = 'retired-workers';
+const GOAL_OBJECTIVES_STATE = 'goal-objectives';
 const ACTIVE_RUNTIME_PROFILE = runtimeProfile('desktop-app');
+const desktopFeatures = createRuntimeFeatureLoader(ACTIVE_RUNTIME_PROFILE, desktopFeatureFactories());
 const desktopRuntime = createComGuRuntime(ACTIVE_RUNTIME_PROFILE, {
   connect: connectConnection,
   disconnect: disconnectConnection,
   status: connectionStatus,
   subscribe: onConnectionStatusChange,
   shutdown: shutdownConnection
-});
+}, undefined, desktopFeatures);
 configureComputerClipboard({
   readText: () => clipboard.readText(),
   writeText: (text) => clipboard.writeText(text)
@@ -310,15 +303,20 @@ void app.whenReady().then(async () => {
   restoreChatWorkspaceScopes(savedChatWorkspaceScopes);
   const savedGoalObjectives = await readDurable<GoalObjectivesSnapshot>(GOAL_OBJECTIVES_STATE);
   if (windowActivation.isDisabled()) return;
-  restoreGoalObjectives(savedGoalObjectives);
+  if (getConfig().goal.enabled || (savedGoalObjectives?.objectives.length ?? 0) > 0) {
+    await desktopFeatures.ensure('goal');
+    loadedDesktopGoalModule()?.restoreGoalObjectives(savedGoalObjectives);
+  }
   // Request ownership must exist before either side of the bridge can race in. A request id
   // that was proved yesterday remains the same workflow today even if its ChatGPT tab closed.
   await restoreRequestCorrelations();
   if (windowActivation.isDisabled()) return;
-  setAgentConversationLookup(agentConversation);
+  setAgentConversationLookup((agent) => loadedDesktopAgentsModule()?.agentConversation(agent) ?? null);
   // The prime's chat is the user's own, so no extension report can name it. It is bound
   // when the recorder manages to place the prime's first call. See recordToolCall.
-  setAgentBinder(bindConversation);
+  setAgentBinder((agent, conversationId) => {
+    loadedDesktopAgentsModule()?.bindConversation(agent, conversationId);
+  });
   // Before anything can call an agent tool, and before a run is restored: the broker
   // decides whether a previous run has been abandoned partly from which ChatGPT tabs are
   // open, and without this it can only answer "I cannot see" — which it treats, on
@@ -343,33 +341,30 @@ void app.whenReady().then(async () => {
   // dependency. Multi-agent can be enabled from Settings without restarting the process;
   // keeping both sinks wired from startup guarantees the first spawn can cross its durable
   // acceptance barrier even when this launch began with multi-agent disabled.
-  onSwarmPersist(() => writeDurableSoon(SWARM_STATE, snapshotSwarm()));
-  onSwarmPersistNow((snapshot) => writeDurableNow(SWARM_STATE, snapshot));
-
-  // A multi-agent run outlives this process. Restoring it before the bridge starts
-  // means a worker that never joined gets its chat re-requested through the same queue
-  // as a fresh one, rather than being stranded with a key nobody has.
-  onRetiredWorkersPersist(() => writeDurableSoon(RETIRED_WORKERS_STATE, snapshotRetiredWorkers()));
-  onRetiredWorkersPersistNow((snapshot) => writeDurableNow(RETIRED_WORKERS_STATE, snapshot));
   const retiredWorkers = await readDurable<RetiredWorkersSnapshot>(RETIRED_WORKERS_STATE);
   if (windowActivation.isDisabled()) return;
-  restoreRetiredWorkers(retiredWorkers);
   const savedSwarm = await readDurable<SwarmSnapshot>(SWARM_STATE);
   if (windowActivation.isDisabled()) return;
-  restoreSwarm(savedSwarm);
-  if (!getConfig().multiAgent.enabled) {
-    // A feature toggle is a pause, not Clear swarm. Canonicalize any active incarnation left by
-    // a crash into stopped prime-owned history before the bridge exists, then make that safer
-    // projection durable. Re-enabling later in this process or after another restart recovers the
-    // same exact worker conversations without letting disabled workers consume execution slots.
-    pauseSwarmForDisable('multi-agent mode is disabled');
-    await writeDurableNow(SWARM_STATE, snapshotSwarm());
-    if (windowActivation.isDisabled()) return;
+  const hasAgentRecoveryState =
+    (retiredWorkers?.workers.length ?? 0) > 0 ||
+    Boolean(savedSwarm && (savedSwarm as { agents?: unknown[] }).agents?.length);
+  if (getConfig().multiAgent.enabled || hasAgentRecoveryState) {
+    await desktopFeatures.ensure('agents');
+    const agents = loadedDesktopAgentsModule();
+    if (agents) {
+      agents.restoreRetiredWorkers(retiredWorkers);
+      agents.restoreSwarm(savedSwarm);
+      if (!getConfig().multiAgent.enabled) {
+        agents.pauseSwarmForDisable('multi-agent mode is disabled');
+        await writeDurableNow(SWARM_STATE, agents.snapshotSwarm());
+        if (windowActivation.isDisabled()) return;
+      }
+    }
   }
   // Continuation recovery is after swarm restore because an interrupted durable rebind may
   // have to finish publishing the prime transfer that was frozen in that snapshot.
   setContinuationRecoveryHooks({
-    repairPrimeTransfer: repairPrimeConversationAfterRecovery
+    repairPrimeTransfer: (from, to) => loadedDesktopAgentsModule()?.repairPrimeConversationAfterRecovery(from, to) ?? false
   });
   const savedContinuations = await readDurable<ContinuationSnapshot>(CONTINUATIONS_STATE);
   if (windowActivation.isDisabled()) return;

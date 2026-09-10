@@ -43,7 +43,7 @@ import {
   retireGoalDraftsFor,
   setGoalObjectiveNow,
   startGoalDraft
-} from './goal.js';
+} from './bridge-optional-runtime.js';
 import { logInfo, logWarn } from './logger.js';
 import {
   closeConversation,
@@ -101,7 +101,7 @@ import {
   workerConversationGone,
   workerRevivalDeliveredSince,
   type WorkerRevival
-} from './agents.js';
+} from './bridge-optional-runtime.js';
 import {
   abortContinuation,
   abortContinuationNow,

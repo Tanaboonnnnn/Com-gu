@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest';
 import { createRuntimeFeatureLoader } from '../src/main/runtime/features.js';
 import { runtimeProfile } from '../src/main/runtime/profile.js';
+import { readFile } from 'node:fs/promises';
+import { parse } from '@babel/parser';
 
 it('loads an allowed feature once and stops loaded features in reverse order', async () => {
   const events: string[] = [];
@@ -57,4 +59,33 @@ it('allows the Durable Run core in both profiles without implying browser or Goa
 
   expect(await loader.ensure('durable-run')).not.toBeNull();
   expect(loads).toBe(1);
+});
+
+it('keeps the Desktop feature adapter free of static Goal and agents imports', async () => {
+  const source = await readFile(new URL('../src/main/runtime/desktop-features.ts', import.meta.url), 'utf8');
+  expect(source).not.toMatch(/^import .*['"]\.\.\/goal\.js['"]/m);
+  expect(source).not.toMatch(/^import .*['"]\.\.\/agents\.js['"]/m);
+  expect(source).toContain("import('../goal.js')");
+  expect(source).toContain("import('../agents.js')");
+});
+
+it('keeps Desktop startup, IPC, bridge and continuation free of runtime Goal/agents imports', async () => {
+  const files = [
+    new URL('../src/main/index.ts', import.meta.url),
+    new URL('../src/main/ipc.ts', import.meta.url),
+    new URL('../src/main/bridge.ts', import.meta.url),
+    new URL('../src/main/session/continuation.ts', import.meta.url)
+  ];
+
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
+    const runtimeImports = ast.program.body
+      .filter((statement) => statement.type === 'ImportDeclaration')
+      .filter((statement) => statement.importKind !== 'type')
+      .map((statement) => statement.source.value)
+      .filter((specifier) => /(?:^|\/)\b(?:goal|agents)\.js$/.test(specifier) && !specifier.includes('/shared/'));
+
+    expect(runtimeImports, `${file.pathname} must lazy-load Goal/agents implementations`).toEqual([]);
+  }
 });

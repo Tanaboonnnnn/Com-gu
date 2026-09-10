@@ -85,6 +85,7 @@ const {
   swarmStateForCaller
 } = await import('../src/main/agents.js');
 const { registerIpc } = await import('../src/main/ipc.js');
+const { ensureDesktopAgentsModule } = await import('../src/main/runtime/desktop-features.js');
 const { app, nativeTheme, safeStorage, shell } = await import('electron');
 const { extensionDownloadUrl } = await import('../src/main/version.js');
 const { resetWorkspaces, setWorkspaceFor, workspaceEntries } = await import('../src/main/workspace.js');
@@ -143,6 +144,9 @@ beforeAll(async () => {
   initSecretsPath(dir);
   initSessionStore(dir);
   initDurableStore(dir);
+  // IPC normally runs after Desktop bootstrap has loaded the broker whenever multi-agent is
+  // enabled. Reproduce that public startup seam here instead of relying on the old static import.
+  await ensureDesktopAgentsModule();
   onSwarmPersist(() => writeDurableSoon('ipc-swarm', snapshotSwarm()));
   onSwarmPersistNow((snapshot) => writeDurableNow('ipc-swarm', snapshot));
   onRetiredWorkersPersist(() => writeDurableSoon('ipc-retired-workers', snapshotRetiredWorkers()));
