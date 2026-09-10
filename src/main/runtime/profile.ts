@@ -7,6 +7,7 @@ export interface RuntimeProfile {
   goal: boolean;
   agents: boolean;
   desktop: boolean;
+  durableRuns: boolean;
   electronFrontend: boolean;
 }
 
@@ -17,6 +18,7 @@ const DESKTOP_APP_PROFILE: RuntimeProfile = {
   goal: true,
   agents: true,
   desktop: true,
+  durableRuns: true,
   electronFrontend: true
 };
 
@@ -27,6 +29,7 @@ const CLI_PROFILE: RuntimeProfile = {
   goal: false,
   agents: false,
   desktop: true,
+  durableRuns: true,
   electronFrontend: false
 };
 
