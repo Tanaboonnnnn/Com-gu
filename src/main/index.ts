@@ -67,10 +67,12 @@ import {
 } from './chat-workspace-scope.js';
 import { extensionDir } from './extension-path.js';
 import { passwordStoreForDesktop } from './linux-password-store.js';
+import { runtimeProfile } from './runtime/profile.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
 const RETIRED_WORKERS_STATE = 'retired-workers';
+const ACTIVE_RUNTIME_PROFILE = runtimeProfile('desktop-app');
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -396,7 +398,7 @@ void app.whenReady().then(async () => {
   // The bridge serves recording and multi-agent mode both: recording needs the
   // extension to observe the chat, and multi-agent mode needs it to open worker tabs.
   // Either switch being on starts it. ipc.ts applies the same rule on a settings save.
-  if (getConfig().sessions.record || getConfig().multiAgent.enabled) {
+  if (ACTIVE_RUNTIME_PROFILE.browser && (getConfig().sessions.record || getConfig().multiAgent.enabled)) {
     void startBridge();
   }
   // Retention governs recordings already stored on disk, independent of whether recording is
