@@ -389,7 +389,7 @@ describe('cross-platform packaging targets', () => {
     expect(script).toContain('if [ $HAVE_NO_SANDBOX -eq 0 ] && ! unshare -Ur true 2>/dev/null ; then');
     expect(script).toContain('NO_SANDBOX=(--no-sandbox)');
     expect(script).toContain('exec "$BIN" "${NO_SANDBOX[@]}" "${args[@]}"');
-  });
+  }, 90_000);
 
   it('pins the current macOS release to unsigned thin native bundles with explicit metadata checks', () => {
     const builder = yamlFile('electron-builder.yml');

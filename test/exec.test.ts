@@ -198,7 +198,10 @@ describe('runCommand', () => {
     const result = await launchCommand(shell!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], cwd);
     expect(result.pid).toBeGreaterThan(0);
 
-    const deadline = Date.now() + 3000;
+    // A saturated Windows CI host can take several seconds to schedule the detached PowerShell
+    // child even after CreateProcess has returned a pid. This test proves eventual execution,
+    // not a launch-latency SLA; keep enough headroom for the full parallel verification suite.
+    const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const text = await fs.readFile(marker, 'utf8').catch(() => '');
       if (text === 'launched') return;
