@@ -120,4 +120,66 @@ describe('Linux X11 DesktopDriver', () => {
     await expect(driver.observe({ kind: 'ui' })).rejects.toThrow(/semantic UI/i);
     await expect(driver.act({ actions: [{ type: 'click_ref', ref: 'x' }] })).rejects.toThrow(/semantic UI/i);
   });
+
+  it('rejects unsupported verification before sending any X11 input', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: Buffer.from('') }));
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+
+    await expect(driver.act({
+      actions: [{ type: 'move', x: 10, y: 20 }],
+      verify: { until: 'foreground', window: 42 }
+    })).rejects.toThrow(/verification.*unsupported/i);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('reports exact partial execution metadata when an X11 batch action fails', async () => {
+    let moves = 0;
+    const run = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'xdotool' && args[0] === 'mousemove') {
+        moves += 1;
+        if (moves === 3) return { code: 1, stdout: Buffer.from('') };
+      }
+      return { code: 0, stdout: Buffer.from('') };
+    });
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+
+    await expect(driver.act({ actions: [
+      { type: 'move', x: 1, y: 1 },
+      { type: 'move', x: 2, y: 2 },
+      { type: 'move', x: 3, y: 3 }
+    ] })).rejects.toMatchObject({ name: 'ComputerError', completedCount: 2, failedIndex: 2 });
+  });
+
+  it('releases the X11 mouse button when a drag move fails after mousedown', async () => {
+    const calls: string[][] = [];
+    const run = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'xdotool') calls.push(args);
+      if (command === 'xdotool' && args[0] === 'mousemove' && !args.includes('mousedown')) {
+        return { code: 1, stdout: Buffer.from('') };
+      }
+      return { code: 0, stdout: Buffer.from('') };
+    });
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+
+    await expect(driver.act({ actions: [{ type: 'drag', path: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }] })).rejects.toThrow();
+    expect(calls).toContainEqual(['mouseup', '1']);
+  });
+
+  it('maps a scaled X11 window screenshot from its real desktop origin', async () => {
+    const image = await (await import('sharp')).default({
+      create: { width: 1000, height: 800, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } }
+    }).png().toBuffer();
+    const run = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'import') return { code: 0, stdout: image };
+      if (command === 'xdotool' && args[0] === 'getwindowgeometry') {
+        return { code: 0, stdout: Buffer.from('X=800\nY=200\nWIDTH=1000\nHEIGHT=800\n') };
+      }
+      return { code: 0, stdout: Buffer.from('') };
+    });
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+    const frame = await driver.observe({ kind: 'screenshot', window: 42, maxWidth: 500 });
+
+    await driver.act({ frameId: frame.screenshot.frameId, actions: [{ type: 'click', x: 250, y: 200 }] });
+    expect(run).toHaveBeenCalledWith('xdotool', ['mousemove', '1300', '600', 'click', '1'], undefined);
+  });
 });

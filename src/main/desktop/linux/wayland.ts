@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import type { Action, Screenshot } from '../../computer/index.js';
-import type { DesktopCapabilities, DesktopDriver, DesktopObserveRequest, DesktopObserveResult } from '../driver.js';
+import { DesktopError, type DesktopCapabilities, type DesktopDriver, type DesktopObserveRequest, type DesktopObserveResult } from '../driver.js';
 
 export interface WaylandPortalGrants {
   active: boolean; capture: boolean; pointer: boolean; keyboard: boolean;
@@ -19,8 +19,7 @@ export interface WaylandPortalSession {
   close(): Promise<void>;
 }
 
-class WaylandDesktopError extends Error { override name = 'ComputerError'; }
-const fail = (message: string): never => { throw new WaylandDesktopError(message); };
+const fail = (message: string): never => { throw new DesktopError(message); };
 
 function keySym(char: string): number {
   const code = char.codePointAt(0) ?? 0;
@@ -90,7 +89,15 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
       case 'scroll': if (!g.pointer) fail('Wayland pointer permission was not granted by the portal.'); await portal.scroll(action.scroll_x ?? 0, action.scroll_y ?? 0); return 'sendinput';
       case 'drag': {
         if (!g.pointer) fail('Wayland pointer permission was not granted by the portal.'); const [first, ...rest] = action.path; if (!first) return 'sendinput';
-        { const p = point(first.x, first.y); await portal.move(p.x, p.y); } await portal.button((action.button ?? 'left') as 'left' | 'middle' | 'right', true); for (const item of rest) { const p = point(item.x, item.y); await portal.move(p.x, p.y); } await portal.button((action.button ?? 'left') as 'left' | 'middle' | 'right', false); return 'sendinput';
+        const mouseButton = (action.button ?? 'left') as 'left' | 'middle' | 'right';
+        { const p = point(first.x, first.y); await portal.move(p.x, p.y); }
+        await portal.button(mouseButton, true);
+        try {
+          for (const item of rest) { const p = point(item.x, item.y); await portal.move(p.x, p.y); }
+        } finally {
+          await portal.button(mouseButton, false);
+        }
+        return 'sendinput';
       }
       case 'type': if (!g.keyboard) fail('Wayland keyboard permission was not granted by the portal.'); for (const ch of action.text) { const sym = keySym(ch); await portal.keysym(sym, true); await portal.keysym(sym, false); } return 'sendinput';
       case 'keypress': {
@@ -107,9 +114,21 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
     observe: observe as DesktopDriver['observe'],
     async act(request) {
       if (request.frameId !== undefined && request.frameId !== frame) fail('STALE_FRAME: the Wayland screenshot frame is no longer current.');
-      const clipboard: string[] = []; const routes: Array<'sendinput' | 'local'> = []; let completedCount = 0;
-      for (const action of request.actions) { routes.push(await doAction(action, clipboard)); completedCount += 1; }
       if (request.verify) fail('Wayland semantic verification is unsupported by the granted portal interface.');
+      const clipboard: string[] = []; const routes: Array<'sendinput' | 'local'> = []; let completedCount = 0;
+      for (let index = 0; index < request.actions.length; index++) {
+        const action = request.actions[index]!;
+        try {
+          routes.push(await doAction(action, clipboard));
+          completedCount += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new DesktopError(
+            `PARTIAL_BATCH: completed_count=${completedCount} failed_index=${index}. ${message}`,
+            { completedCount, failedIndex: index }
+          );
+        }
+      }
       const screenshot = request.capture ? await capture(request.capture.maxWidth) : null;
       return { cursor: null, clipboard, completedCount, routes, screenshot, verification: null };
     },

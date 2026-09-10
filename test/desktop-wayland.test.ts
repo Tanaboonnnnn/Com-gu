@@ -51,4 +51,41 @@ describe('Wayland portal DesktopDriver', () => {
     const portal = session(); const driver = createWaylandDesktopDriver(portal); const shot = await driver.observe({ kind: 'screenshot', maxWidth: 320 });
     expect(shot.screenshot.frameId).toBeGreaterThan(0); expect(shot.screenshot.captureMode).toBe('screen'); expect(portal.screenshot).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects unsupported verification before sending any Wayland input', async () => {
+    const portal = session();
+    const driver = createWaylandDesktopDriver(portal);
+    await expect(driver.act({ actions: [{ type: 'move', x: 1, y: 2 }], verify: { until: 'foreground', window: 42 } })).rejects.toThrow(/verification.*unsupported/i);
+    expect(portal.move).not.toHaveBeenCalled();
+    expect(portal.button).not.toHaveBeenCalled();
+  });
+
+  it('reports exact partial execution metadata when a Wayland batch action fails', async () => {
+    let moves = 0;
+    const portal = session({
+      move: vi.fn(async () => {
+        moves += 1;
+        if (moves === 3) throw new Error('portal move failed');
+      })
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    await expect(driver.act({ actions: [
+      { type: 'move', x: 1, y: 1 },
+      { type: 'move', x: 2, y: 2 },
+      { type: 'move', x: 3, y: 3 }
+    ] })).rejects.toMatchObject({ name: 'ComputerError', completedCount: 2, failedIndex: 2 });
+  });
+
+  it('releases the Wayland mouse button when a drag move fails after press', async () => {
+    let moves = 0;
+    const portal = session({
+      move: vi.fn(async () => {
+        moves += 1;
+        if (moves === 2) throw new Error('portal drag move failed');
+      })
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    await expect(driver.act({ actions: [{ type: 'drag', path: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }] })).rejects.toThrow();
+    expect(portal.button).toHaveBeenCalledWith('left', false);
+  });
 });

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
 import type { Action, Rect, Screenshot, WindowInfo } from '../../computer/index.js';
-import type { DesktopCapabilities, DesktopDriver, DesktopObserveRequest, DesktopObserveResult } from '../driver.js';
+import { DesktopError, type DesktopCapabilities, type DesktopDriver, type DesktopObserveRequest, type DesktopObserveResult } from '../driver.js';
 
 export interface X11RunResult { code: number; stdout: Buffer; }
 export type X11Runner = (command: string, args: string[], input?: Buffer | string) => Promise<X11RunResult>;
@@ -30,11 +30,7 @@ export function createX11ProcessRunner(env: NodeJS.ProcessEnv = process.env): X1
     child.stdin.end(input ?? '');
   });
 }
-class X11DesktopError extends Error {
-  override name = 'ComputerError';
-}
-
-function unsupported(message: string): never { throw new X11DesktopError(message); }
+function unsupported(message: string): never { throw new DesktopError(message); }
 function button(value?: string): string {
   if (!value || value === 'left') return '1';
   if (value === 'middle') return '2';
@@ -57,15 +53,32 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
 
   const runOk = async (command: string, args: string[], input?: Buffer | string): Promise<Buffer> => {
     const result = await options.run(command, args, input);
-    if (result.code !== 0) throw new X11DesktopError(`X11 command failed: ${command}`);
+    if (result.code !== 0) throw new DesktopError(`X11 command failed: ${command}`);
     return result.stdout;
   };
 
   const displayGeometry = async (): Promise<Rect> => {
     const text = (await runOk('xdotool', ['getdisplaygeometry'])).toString('utf8').trim();
     const [width, height] = text.split(/\s+/).map(Number);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) throw new X11DesktopError('Could not determine X11 display geometry.');
+    if (!Number.isFinite(width) || !Number.isFinite(height)) throw new DesktopError('Could not determine X11 display geometry.');
     return { x: 0, y: 0, width: width!, height: height! };
+  };
+
+  const windowGeometry = async (id: number): Promise<Rect> => {
+    const geoBuf = await runOk('xdotool', ['getwindowgeometry', '--shell', String(id)]);
+    const geo = Object.fromEntries(
+      geoBuf.toString('utf8').split(/\r?\n/).map((row) => row.split('=', 2)).filter((x) => x.length === 2)
+    );
+    const region = {
+      x: Number(geo.X ?? 0),
+      y: Number(geo.Y ?? 0),
+      width: Number(geo.WIDTH ?? 0),
+      height: Number(geo.HEIGHT ?? 0)
+    };
+    if (![region.x, region.y, region.width, region.height].every(Number.isFinite) || region.width <= 0 || region.height <= 0) {
+      throw new DesktopError('Could not determine X11 window geometry.');
+    }
+    return region;
   };
 
   const capture = async (request: Extract<DesktopObserveRequest, { kind: 'screenshot' }> | { kind: 'screenshot'; window?: number; maxWidth?: number; crop?: Rect; full?: boolean }): Promise<Screenshot> => {
@@ -75,8 +88,8 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
     let metadata = await sharp(image).metadata();
     const sourceWidth = metadata.width ?? 0;
     const sourceHeight = metadata.height ?? 0;
-    if (!sourceWidth || !sourceHeight) throw new X11DesktopError('X11 screenshot returned invalid image data.');
-    let region: Rect = request.window ? { x: 0, y: 0, width: sourceWidth, height: sourceHeight } : await displayGeometry();
+    if (!sourceWidth || !sourceHeight) throw new DesktopError('X11 screenshot returned invalid image data.');
+    let region: Rect = request.window ? await windowGeometry(request.window) : await displayGeometry();
     if (request.crop) {
       const left = Math.max(0, Math.floor(request.crop.x));
       const top = Math.max(0, Math.floor(request.crop.y));
@@ -135,7 +148,7 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
         if (out.code === 0 && Number.isFinite(id)) return { kind: 'wait-window', window: await windowInfo(id) };
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      throw new X11DesktopError('WINDOW_NOT_FOUND: no matching X11 window appeared before timeout.');
+      throw new DesktopError('WINDOW_NOT_FOUND: no matching X11 window appeared before timeout.');
     }
     return { kind: 'screenshot', screenshot: await capture(request) };
   };
@@ -171,9 +184,14 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
       case 'drag': {
         const [first, ...rest] = action.path; if (!first) return 'sendinput';
         const start = point(first.x, first.y);
-        await runOk('xdotool', ['mousemove', String(start.x), String(start.y), 'mousedown', button(action.button)]);
-        for (const item of rest) { const p = point(item.x, item.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y)]); }
-        await runOk('xdotool', ['mouseup', button(action.button)]); return 'sendinput';
+        const mouseButton = button(action.button);
+        await runOk('xdotool', ['mousemove', String(start.x), String(start.y), 'mousedown', mouseButton]);
+        try {
+          for (const item of rest) { const p = point(item.x, item.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y)]); }
+        } finally {
+          await runOk('xdotool', ['mouseup', mouseButton]);
+        }
+        return 'sendinput';
       }
     }
   };
@@ -182,13 +200,25 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
     capabilities: async () => caps(), observe: observe as DesktopDriver['observe'],
     async act(request) {
       if (request.frameId !== undefined && request.frameId !== lastFrame?.id) {
-        throw new X11DesktopError('STALE_FRAME: the X11 screenshot frame is no longer current.');
+        throw new DesktopError('STALE_FRAME: the X11 screenshot frame is no longer current.');
       }
+      if (request.verify) unsupported('X11 verification waits for semantic UI state are unsupported in V1.');
       const clipboard: string[] = []; const routes: Array<'sendinput' | 'focus' | 'local'> = [];
       let completedCount = 0;
-      for (const action of request.actions) { routes.push(await actOne(action, clipboard)); completedCount += 1; }
+      for (let index = 0; index < request.actions.length; index++) {
+        const action = request.actions[index]!;
+        try {
+          routes.push(await actOne(action, clipboard));
+          completedCount += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new DesktopError(
+            `PARTIAL_BATCH: completed_count=${completedCount} failed_index=${index}. ${message}`,
+            { completedCount, failedIndex: index }
+          );
+        }
+      }
       const screenshot = request.capture ? await capture({ kind: 'screenshot', window: request.capture.window, maxWidth: request.capture.maxWidth, crop: request.capture.crop, full: request.capture.full }) : null;
-      if (request.verify) unsupported('X11 verification waits for semantic UI state are unsupported in V1.');
       return { cursor: null, clipboard, completedCount, routes, screenshot, verification: null };
     },
     async dispose() {}
