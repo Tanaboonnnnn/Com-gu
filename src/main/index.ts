@@ -5,7 +5,6 @@
 import path from 'node:path';
 import { app, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session } from 'electron';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
-import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
 import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
 import { logError, logInfo, logWarn } from './logger.js';
 import { writePerfReadyMarker } from './perf-marker.js';
@@ -68,12 +67,14 @@ import {
 import { extensionDir } from './extension-path.js';
 import { passwordStoreForDesktop } from './linux-password-store.js';
 import { runtimeProfile } from './runtime/profile.js';
+import { createComGuRuntime } from './runtime/runtime.js';
 import { initMachineProfile } from './machine/profile.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
 const RETIRED_WORKERS_STATE = 'retired-workers';
 const ACTIVE_RUNTIME_PROFILE = runtimeProfile('desktop-app');
+const desktopRuntime = createComGuRuntime(ACTIVE_RUNTIME_PROFILE);
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -215,7 +216,7 @@ function trayIcon(running: boolean): Electron.NativeImage {
 
 function refreshTray(): void {
   if (!tray) return;
-  const state = getStatus().state;
+  const state = desktopRuntime.status().state;
   const locale = getConfig().ui.locale === 'th' ? 'th' : 'en';
   const tr = (key: MessageKey): string => t(locale, key);
   const connected = state === 'connected';
@@ -232,7 +233,7 @@ function refreshTray(): void {
       { label: tr('tray.open'), click: windowActivation.request },
       {
         label: running ? tr('common.disconnect') : tr('common.connect'),
-        click: () => void (running ? disconnect() : connect())
+        click: () => void (running ? desktopRuntime.disconnect() : desktopRuntime.connect())
       },
       { type: 'separator' },
       {
@@ -273,6 +274,8 @@ void app.whenReady().then(async () => {
   initSessionStore(userData);
   initDurableStore(userData);
   await loadConfig();
+  if (windowActivation.isDisabled()) return;
+  await desktopRuntime.start();
   if (windowActivation.isDisabled()) return;
   // Keep Chrome's stable unpacked folder synchronized with the installed ComGu release before
   // the bridge can tell an older running service worker which app version it is talking to.
@@ -384,7 +387,7 @@ void app.whenReady().then(async () => {
   tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
   tray.on('click', windowActivation.request);
   refreshTray();
-  onStatusChange(refreshTray);
+  desktopRuntime.subscribe(refreshTray);
 
   logInfo('app started');
   void writePerfReadyMarker(process.env).catch((error) =>
@@ -416,7 +419,7 @@ void app.whenReady().then(async () => {
     onError: (err) => logError(`session pruning failed: ${err.message}`)
   });
 
-  if (getConfig().ui.autoConnect) void connect();
+  if (getConfig().ui.autoConnect) void desktopRuntime.connect();
 });
 
 app.on('before-quit', () => {
@@ -455,7 +458,7 @@ app.on('will-quit', (event) => {
       // The budget has to clear the drains it contains, or it would silently defeat them:
       // the bridge force-closes wedged localhost sockets at 15s and the MCP endpoint forces
       // its own drain at 30s. This is the outer bound on both, not a competing one.
-      { name: 'admission/drain', budgetMs: 40_000, run: () => [shutdownConnection(), shutdownBridge()] },
+      { name: 'admission/drain', budgetMs: 40_000, run: () => [desktopRuntime.shutdown(), shutdownBridge()] },
       // Phase 2: only after request handlers are done may their owned child processes go.
       {
         name: 'process cleanup',
