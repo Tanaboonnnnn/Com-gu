@@ -2,6 +2,7 @@ import { createControlClient } from './control-client.js';
 import { defaultComGuProfileDir } from './profile-dir.js';
 import { renderPlainStatus } from './commands/status.js';
 import type { RuntimeControlMethod } from '../main/runtime/control.js';
+import type { ServiceAction } from './service-linux.js';
 
 export interface CliIo {
   writeOut(text: string): void;
@@ -15,6 +16,7 @@ export interface CliDependencies {
   request(method: RuntimeControlMethod): Promise<unknown>;
   startOwner(): Promise<void>;
   showDashboard?(): Promise<void>;
+  serviceAction?(action: ServiceAction): Promise<string>;
 }
 
 function defaultIo(): CliIo {
@@ -42,6 +44,18 @@ async function defaultDependencies(): Promise<CliDependencies> {
         import('./terminal.js')
       ]);
       await runDashboard({ request: (method) => client.request(method), terminal: createProcessTerminal() });
+    },
+    async serviceAction(action) {
+      const executable = process.env['COMGU_CLI_EXECUTABLE'] || process.argv[1] || process.execPath;
+      if (process.platform === 'linux') {
+        const { runLinuxServiceAction } = await import('./service-linux.js');
+        return runLinuxServiceAction(action, { executable, profileDir });
+      }
+      if (process.platform === 'win32') {
+        const { runWindowsServiceAction } = await import('./service-windows.js');
+        return runWindowsServiceAction(action, { executable, profileDir });
+      }
+      throw new Error('ComGu CLI background services support Windows and Linux only');
     }
   };
 }
@@ -91,10 +105,21 @@ export async function runCli(
           await runDashboard({ request: deps.request, terminal: createProcessTerminal() });
         }
         return 0;
+      case 'service': {
+        const action = args[0] as ServiceAction | undefined;
+        if (!action || !['install', 'start', 'stop', 'restart', 'status'].includes(action)) {
+          io.writeErr('Usage: comgu service <install|start|stop|restart|status>\n');
+          return 2;
+        }
+        if (!deps.serviceAction) throw new Error('Service lifecycle is unavailable');
+        const result = await deps.serviceAction(action);
+        if (result) io.writeOut(`${result}\n`);
+        return 0;
+      }
       case 'help':
       case '--help':
       case '-h':
-        io.writeOut('Usage: comgu <start|stop|connect|disconnect|status|dashboard> [--json]\n');
+        io.writeOut('Usage: comgu <start|stop|connect|disconnect|status|dashboard|service> [--json]\n');
         return 0;
       default:
         io.writeErr(`Unknown command: ${command}\n`);
