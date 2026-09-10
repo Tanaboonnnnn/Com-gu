@@ -223,4 +223,3 @@ describe('CredentialVault', () => {
     expect(marked).toEqual([]);
   });
 });
-

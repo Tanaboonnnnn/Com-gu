@@ -48,7 +48,7 @@ async function systemctl(args: string[]): Promise<string> {
 
 export async function runLinuxServiceAction(
   action: ServiceAction,
-  options: { executable: string; profileDir: string; home?: string } 
+  options: { executable: string; profileDir: string; home?: string }
 ): Promise<string> {
   if (process.platform !== 'linux') throw new Error('systemd user services are available on Linux only');
   const home = options.home ?? os.homedir();

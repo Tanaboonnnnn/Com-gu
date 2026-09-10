@@ -63,4 +63,3 @@ describe('Electron credential provider', () => {
     expect(safeStorage.decryptStringAsync).not.toHaveBeenCalled();
   });
 });
-

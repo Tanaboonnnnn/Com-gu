@@ -84,7 +84,7 @@ export async function runWindowsServiceAction(
 ): Promise<string> {
   if (process.platform !== 'win32') throw new Error('Windows Task Scheduler services are available on Windows only');
   switch (action) {
-    case 'install': { 
+    case 'install': {
       const userId = options.userId ?? (await currentUserSid());
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'comgu-task-'));
       const file = path.join(tempDir, 'comgu-task.xml');

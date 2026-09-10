@@ -236,4 +236,3 @@ Factories are functions returning dynamic imports. `RuntimeProfile` answers only
 - [ ] **Step 6: Review the branch against `docs/superpowers/specs/2026-09-11-durable-long-running-runs-design.md`; fix any Standards/Spec findings, then rerun affected tests.**
 
 - [ ] **Step 7: Commit the final verification/docs fixes.** Do not merge/tag/publish without the required real Linux X11/Wayland RC matrix if the release process requires those claims.
-
