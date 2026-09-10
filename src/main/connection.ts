@@ -5,7 +5,7 @@
  * There is one local server and one or two published connectors. The Core connector is
  * what the app is for and is always published; Desktop is optional, is published only
  * when the user has both granted desktop permissions and configured a way to reach it,
- * and its absence is never allowed to fail the connection — a user who never wants
+ * and its absence is never allowed to fail the connection โ€” a user who never wants
  * desktop control should not see a broken app because of a connector they did not create.
  */
 
@@ -21,25 +21,55 @@ import { startTunnel, TunnelError, type TunnelHandle } from './tunnel/index.js';
 import { desktopAutomationSupported } from './platform.js';
 import { currentMachineProfile } from './machine/profile.js';
 import type { RuntimeProfileName } from './runtime/profile.js';
+import type { DesktopCapabilities, DesktopDriver } from './desktop/driver.js';
 
 export interface ConnectionRuntimeDependencies {
   profile: RuntimeProfileName;
   getApiKey(): Promise<string | null>;
   prewarmDesktop(): void | Promise<void>;
   desktopSupported(): boolean;
+  desktopDriver(): Promise<DesktopDriver | null>;
 }
 
 const defaultConnectionRuntime = (): ConnectionRuntimeDependencies => ({
   profile: 'desktop-app',
   getApiKey: async () => (await import('./secrets.js')).getSecret('openaiApiKey'),
   prewarmDesktop: async () => {
+    if (process.platform !== 'win32') return;
     const { prewarmComputerHelper } = await import('./computer/index.js');
     await prewarmComputerHelper();
   },
-  desktopSupported: () => desktopAutomationSupported()
+  desktopSupported: () => desktopAutomationSupported(),
+  desktopDriver: async () => {
+    if (process.platform === 'linux') {
+      const { probeLinuxDesktop } = await import('./desktop/linux/index.js');
+      return (await probeLinuxDesktop()).driver;
+    }
+    return null;
+  }
 });
 
 let runtimeDependencies = defaultConnectionRuntime();
+let activeDesktopCapabilities: DesktopCapabilities | undefined;
+
+function runtimeCapabilities(config: Parameters<typeof effectiveCapabilities>[0]) {
+  const base = effectiveCapabilities(config);
+  const desktop = activeDesktopCapabilities;
+  if (!desktop) return base;
+  const next = { ...base };
+  next.screen = base.screen && desktop.available && desktop.capture;
+  next.control = base.control && desktop.available && desktop.pointer && desktop.keyboard;
+  next.clipboardRead = base.clipboardRead && desktop.available && desktop.clipboardRead;
+  next.clipboardWrite = base.clipboardWrite && desktop.available && desktop.clipboardWrite;
+  return next;
+}
+
+function unavailableDesktopCapabilities(reason: string): DesktopCapabilities {
+  return {
+    available: false, capture: false, pointer: false, keyboard: false,
+    clipboardRead: false, clipboardWrite: false, windows: false, uiElements: false, focus: false, reason
+  };
+}
 
 /**
  * Selects the frontend-specific adapters used by the shared connection state machine.
@@ -98,7 +128,7 @@ export function getStatus(): ConnectionStatus {
   // Read live rather than trusting the last stored copy: both clocks are set by
   // incoming requests, which do not go past setStatus, so a stored value would lag
   // behind reality by up to one tunnel report. The surface cards are rebuilt for the
-  // same reason — what each connector would advertise follows the permission
+  // same reason โ€” what each connector would advertise follows the permission
   // checkboxes, which change without any connection event to recompute them.
   return {
     ...status,
@@ -123,12 +153,12 @@ function setStatus(next: Partial<ConnectionStatus>): void {
  *
  * Built even while disconnected, because this is what the setup screen reads: the user
  * needs the exact name and description to paste into ChatGPT *before* anything is live,
- * and asking them to invent either is how a connector ends up named "my pc" — a name the
+ * and asking them to invent either is how a connector ends up named "my pc" โ€” a name the
  * model cannot address and a description it cannot route on.
  */
 function describeSurfaces(): SurfaceStatus[] {
   const config = getConfig();
-  const caps = effectiveCapabilities(config);
+  const caps = runtimeCapabilities(config);
   // A remembered surface report belongs to the currently running local endpoint. Once that
   // endpoint is gone, carrying its state/public URL forward makes a completed disconnect
   // internally contradictory: the headline says disconnected while a connector card can
@@ -171,7 +201,7 @@ function desktopUnavailableDetail(id: SurfaceId): string {
 /** The tools this surface would advertise right now, for the "what you get" list. */
 function toolsFor(id: SurfaceId): string[] {
   const config = getConfig();
-  const caps = effectiveCapabilities(config);
+  const caps = runtimeCapabilities(config);
   if (id === 'desktop') {
     const computer = caps.control || caps.clipboardRead || caps.clipboardWrite;
     return [...(caps.screen ? ['observe'] : []), ...(computer ? ['computer'] : [])];
@@ -225,8 +255,8 @@ function sameCoreTransport(
 /**
  * Derives a second surface's public URL from the first one's.
  *
- * Only correct for a transport that publishes a whole origin — cloudflared and a manual
- * reverse proxy — where both surfaces are already reachable at their own paths on the URL
+ * Only correct for a transport that publishes a whole origin โ€” cloudflared and a manual
+ * reverse proxy โ€” where both surfaces are already reachable at their own paths on the URL
  * the user was given. It is deliberately not used for the OpenAI tunnel, where a tunnel id
  * maps to one local URL and the second surface genuinely needs its own tunnel.
  */
@@ -260,7 +290,22 @@ async function connectImpl(): Promise<void> {
   const generation = ++connectionGeneration;
 
   const config = getConfig();
-  const caps = effectiveCapabilities(config);
+  const requestedCaps = effectiveCapabilities(config);
+  const wantsDesktop = requestedCaps.screen || requestedCaps.control || requestedCaps.clipboardRead || requestedCaps.clipboardWrite;
+  const desktopDriver = wantsDesktop && runtimeDependencies.desktopSupported()
+    ? await runtimeDependencies.desktopDriver().catch((error) => {
+        logWarn(`desktop driver unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      })
+    : null;
+  activeDesktopCapabilities = wantsDesktop
+    ? desktopDriver
+      ? await desktopDriver.capabilities().catch((error) => unavailableDesktopCapabilities(error instanceof Error ? error.message : String(error)))
+      : process.platform === 'linux'
+        ? unavailableDesktopCapabilities('Desktop driver is unavailable in this graphical session.')
+        : undefined
+    : undefined;
+  const caps = runtimeCapabilities(config);
   // A root is required by the capabilities that actually cross the filesystem boundary,
   // not by the mere presence or absence of Desktop. Otherwise enabling screen/clipboard
   // could accidentally waive the root needed by Core's file or command semantics.
@@ -270,16 +315,16 @@ async function connectImpl(): Promise<void> {
   }
 
   try {
-    setStatus({ state: 'starting-server', detail: 'Starting the local server…', publicUrl: null });
+    setStatus({ state: 'starting-server', detail: 'Starting the local serverโ€ฆ', publicUrl: null });
     const startedEndpoint = await startMcpServer(() => {
       const live = getConfig();
       return {
         roots: live.roots,
-        caps: effectiveCapabilities(live),
+        caps: runtimeCapabilities(live),
         readOnly: live.readOnly,
         privacyScreenshots: live.ui.privacyScreenshots
       };
-    }, currentMachineProfile(), runtimeDependencies.profile);
+    }, currentMachineProfile(), runtimeDependencies.profile, desktopDriver);
     if (shutdownRequested || generation !== connectionGeneration) {
       await startedEndpoint.stop({ forceAfterMs: 30_000 }).catch(() => {});
       return;
@@ -290,7 +335,7 @@ async function connectImpl(): Promise<void> {
       logError(`performance MCP endpoint marker failed: ${error instanceof Error ? error.message : String(error)}`)
     );
     if (runtimeDependencies.desktopSupported() && (caps.screen || caps.control)) void runtimeDependencies.prewarmDesktop();
-    updateSurface('core', { state: 'starting', detail: 'Connecting…' });
+    updateSurface('core', { state: 'starting', detail: 'Connectingโ€ฆ' });
 
     const apiKey = await runtimeDependencies.getApiKey();
     if (shutdownRequested || generation !== connectionGeneration) {
@@ -361,7 +406,7 @@ async function connectImpl(): Promise<void> {
  *
  * Every failure here is contained. Desktop is optional, the user may not have created its
  * connector yet, and the coding connector must not go down because a second tunnel id was
- * mistyped — so this reports the problem on the Desktop card and leaves the connection up.
+ * mistyped โ€” so this reports the problem on the Desktop card and leaves the connection up.
  */
 async function startDesktopTunnel(
   generation: number,
@@ -379,7 +424,7 @@ async function startDesktopTunnel(
     return;
   }
 
-  updateSurface('desktop', { state: 'starting', detail: 'Connecting…' });
+  updateSurface('desktop', { state: 'starting', detail: 'Connectingโ€ฆ' });
   try {
     desktopTunnelId = settings.desktopTunnelId;
     const startedDesktopTunnel = await startTunnel({
@@ -445,7 +490,7 @@ async function applySettingsImpl(): Promise<void> {
     await connectImpl();
     return;
   }
-  const caps = effectiveCapabilities(config);
+  const caps = runtimeCapabilities(config);
   const available = surfaceIsUseful('desktop', caps);
   if (runtimeDependencies.desktopSupported() && (caps.screen || caps.control)) void runtimeDependencies.prewarmDesktop();
   // Rebuild the cards first: permissions may have changed which tools each surface would
@@ -469,7 +514,7 @@ async function applySettingsImpl(): Promise<void> {
     return;
   }
   if (desktopTunnel && desktopTunnelId === config.tunnel.desktopTunnelId) return;
-  await stopDesktopTunnel('Reconnecting with the new tunnel…');
+  await stopDesktopTunnel('Reconnecting with the new tunnelโ€ฆ');
   await startDesktopTunnel(connectionGeneration, config.tunnel, await runtimeDependencies.getApiKey());
 }
 

@@ -8,6 +8,19 @@ import type {
   VerificationSpec,
   WindowInfo
 } from '../computer/index.js';
+export const DEFAULT_SCREENSHOT_WIDTH = 1280;
+export const MAX_SCREENSHOT_WIDTH = 2560;
+
+export class DesktopError extends Error {
+  readonly completedCount: number | null;
+  readonly failedIndex: number | null;
+  constructor(message: string, details: { completedCount?: number; failedIndex?: number } = {}) {
+    super(message);
+    this.name = 'ComputerError';
+    this.completedCount = details.completedCount ?? null;
+    this.failedIndex = details.failedIndex ?? null;
+  }
+}
 
 export interface DesktopCapabilities {
   available: boolean;

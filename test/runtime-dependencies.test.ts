@@ -76,4 +76,11 @@ describe('lightweight CLI dependency graph', () => {
     expectNoOptionalCliWeight(graph);
     expect([...graph].join('\n')).not.toContain('src/main/secrets.ts');
   });
+
+  it('keeps Desktop MCP schemas free of the Windows implementation', async () => {
+    const graph = await localDependencyGraph('src/main/mcp/tools-desktop.ts');
+    const joined = [...graph].join('\n').replace(/\\/g, '/');
+    expect(joined).not.toContain('src/main/desktop/windows.ts');
+    expect(joined).not.toContain('src/main/computer/index.ts');
+  });
 });
