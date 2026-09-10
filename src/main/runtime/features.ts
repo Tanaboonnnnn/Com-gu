@@ -37,11 +37,14 @@ export function createRuntimeFeatureLoader(
   factories: RuntimeFeatureFactories
 ): RuntimeFeatureLoader {
   const loaded = new Map<RuntimeFeatureKind, RuntimeFeature>();
-  const loading = new Map<RuntimeFeatureKind, Promise<RuntimeFeature>>();
+  const loading = new Map<RuntimeFeatureKind, Promise<RuntimeFeature | null>>();
   const order: RuntimeFeatureKind[] = [];
+  let stopping = false;
+  let stopInFlight: Promise<void> | null = null;
 
   return {
     async ensure(kind) {
+      if (stopping) return null;
       if (!allowed(profile, kind)) return null;
       const existing = loaded.get(kind);
       if (existing) return existing;
@@ -51,6 +54,11 @@ export function createRuntimeFeatureLoader(
       if (!factory) return null;
       const promise = factory().then(async (feature) => {
         await feature.start();
+        if (stopping) {
+          await feature.stop();
+          loading.delete(kind);
+          return null;
+        }
         loaded.set(kind, feature);
         order.push(kind);
         loading.delete(kind);
@@ -64,15 +72,24 @@ export function createRuntimeFeatureLoader(
     },
 
     async stopAll() {
-      const kinds = [...order].reverse();
-      order.length = 0;
-      await Promise.allSettled(
-        kinds.map(async (kind) => {
-          const feature = loaded.get(kind);
-          loaded.delete(kind);
-          await feature?.stop();
-        })
-      );
+      stopping = true;
+      if (!stopInFlight) {
+        stopInFlight = (async () => {
+          await Promise.allSettled([...loading.values()]);
+          const kinds = [...order].reverse();
+          order.length = 0;
+          await Promise.allSettled(
+            kinds.map(async (kind) => {
+              const feature = loaded.get(kind);
+              loaded.delete(kind);
+              await feature?.stop();
+            })
+          );
+          loading.clear();
+          loaded.clear();
+        })();
+      }
+      await stopInFlight;
     }
   };
 }

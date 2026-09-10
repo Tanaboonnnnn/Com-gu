@@ -4,6 +4,12 @@ import { runtimeProfile } from '../src/main/runtime/profile.js';
 import { readFile } from 'node:fs/promises';
 import { parse } from '@babel/parser';
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((onResolve) => { resolve = onResolve; });
+  return { promise, resolve };
+}
+
 it('loads an allowed feature once and stops loaded features in reverse order', async () => {
   const events: string[] = [];
   const loader = createRuntimeFeatureLoader(runtimeProfile('desktop-app'), {
@@ -108,4 +114,31 @@ it('keeps CLI owner and status paths free of browser, Goal, session, agents and 
       .filter((specifier) => forbidden.test(specifier));
     expect(runtimeImports, `${file.pathname} must keep the CLI baseline graph lightweight`).toEqual([]);
   }
+});
+
+it('does not publish a feature whose start finishes after shutdown begins', async () => {
+  const startEntered = deferred();
+  const releaseStart = deferred();
+  const events: string[] = [];
+  const loader = createRuntimeFeatureLoader(runtimeProfile('desktop-app'), {
+    agents: async () => ({
+      async start() {
+        events.push('start');
+        startEntered.resolve();
+        await releaseStart.promise;
+      },
+      async stop() { events.push('stop'); }
+    })
+  });
+
+  const ensuring = loader.ensure('agents');
+  await startEntered.promise;
+  const stopping = loader.stopAll();
+  expect(await loader.ensure('goal')).toBeNull();
+  releaseStart.resolve();
+
+  expect(await ensuring).toBeNull();
+  await stopping;
+  expect(events).toEqual(['start', 'stop']);
+  expect(await loader.ensure('agents')).toBeNull();
 });
