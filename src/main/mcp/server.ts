@@ -300,6 +300,7 @@ export async function startMcpServer(getContext: () => ToolContext, machine?: Ma
     exposed.agentTools = exposed.agentTools || agentTools;
     return {
       ...live,
+      machine,
       sessionTools,
       agentTools,
       exposedCaps: { ...exposed.caps },

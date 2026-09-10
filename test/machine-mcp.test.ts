@@ -4,6 +4,7 @@ import { defaultConfig, initConfigPath, saveConfig } from '../src/main/config.js
 import { startMcpServer, type McpEndpoint } from '../src/main/mcp/server.js';
 import { surfaceDefinition } from '../src/main/mcp/surfaces.js';
 import type { ToolContext } from '../src/main/mcp/tools.js';
+import { withMachineAttribution } from '../src/main/mcp/kernel.js';
 import type { MachineIdentity } from '../src/main/machine/profile.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
@@ -68,6 +69,23 @@ afterAll(async () => {
 });
 
 describe('machine-aware MCP metadata', () => {
+  it('adds machine attribution without replacing existing structured tool evidence', () => {
+    const result = withMachineAttribution(
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        structuredContent: { exit_code: 0, nested: { keep: true } }
+      },
+      machine
+    );
+
+    expect(result.content).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(result.structuredContent).toEqual({
+      exit_code: 0,
+      nested: { keep: true },
+      machine: { id: machine.id, name: 'home-server' }
+    });
+  });
+
   it('generates stable machine-scoped surface metadata without changing declared tools', () => {
     const core = surfaceDefinition('core', machine);
     const desktop = surfaceDefinition('desktop', machine);

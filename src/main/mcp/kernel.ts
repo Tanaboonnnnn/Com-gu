@@ -63,6 +63,7 @@ import {
 import { effectiveWorkspaceRoots } from '../run/scope.js';
 import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
+import type { MachineIdentity } from '../machine/profile.js';
 import {
   currentCall,
   emptyEvidence,
@@ -120,6 +121,8 @@ export interface ToolContext {
    * ever added to. Defaults to the live answer when the caller does not track it.
    */
   exposedFind?: boolean;
+  /** Stable identity of the local machine that will execute this call. */
+  machine?: MachineIdentity | null;
 }
 
 export type ToolContent =
@@ -130,6 +133,22 @@ export type ToolResult = { content: ToolContent[]; structuredContent?: Record<st
 
 export const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] });
 export const fail = (text: string): ToolResult => ({ content: [{ type: 'text', text }], isError: true });
+
+/**
+ * Machine attribution is wire evidence, not prose assembled independently by each tool.
+ * Keep it in one decorator so parallel multi-machine results can always be joined to the
+ * installation that actually executed them without disturbing established human-readable text.
+ */
+export function withMachineAttribution(result: ToolResult, machine?: MachineIdentity | null): ToolResult {
+  if (!machine) return result;
+  return {
+    ...result,
+    structuredContent: {
+      ...(result.structuredContent ?? {}),
+      machine: { id: machine.id, name: machine.name }
+    }
+  };
+}
 
 /** Maps runtime errors to short model-facing text without ever exposing real paths. */
 export function friendlyError(err: unknown): string {
@@ -365,6 +384,7 @@ async function dispatch(
   transportKey: string | null,
   requestId: string | null,
   surface: SurfaceId,
+  machine: MachineIdentity | null | undefined,
   run: () => Promise<ToolResult>
 ): Promise<ToolResult> {
   // The context is built here, one layer out from where the work happens, because the
@@ -382,7 +402,7 @@ async function dispatch(
     evidence: emptyEvidence()
   };
   return trackMcpRequest(() =>
-    trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run))
+    trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, machine, run))
   );
 }
 
@@ -393,6 +413,7 @@ async function dispatchTracked(
   transportKey: string | null,
   requestId: string | null,
   surface: SurfaceId,
+  machine: MachineIdentity | null | undefined,
   run: () => Promise<ToolResult>
 ): Promise<ToolResult> {
   noteTransportIdentity(transportKey);
@@ -565,7 +586,7 @@ async function dispatchTracked(
   // Inbox messages are part of the MCP result ChatGPT actually receives. Build the delivered
   // result before recording so session(action=read, tool_call=Tโ€ฆ) is genuine wire forensics rather than a
   // subtly earlier internal value that omits the worker report most likely to matter later.
-  const delivered = withInbox(context.caller.conversationId, context.agent, result, isFinish);
+  const delivered = withMachineAttribution(withInbox(context.caller.conversationId, context.agent, result, isFinish), machine);
   const recorderStartedAt = Date.now();
   const recording = recordToolCall({
     tool: name,
@@ -849,7 +870,7 @@ export function createRegistrar(server: McpServer, ctx: ToolContext, surface: Su
       // surface declared: who is calling is a fact about the conversation, established from
       // page evidence in `dispatch`, and never something the model is asked to carry.
       server.registerTool(name, config, ((args: never, mcpCtx?: McpCallContext) =>
-        dispatch(name, args, mcpCtx?.sessionId ?? null, requestIdOf(mcpCtx), surface, () =>
+        dispatch(name, args, mcpCtx?.sessionId ?? null, requestIdOf(mcpCtx), surface, ctx.machine, () =>
           handler(args)
         )) as never);
     },
