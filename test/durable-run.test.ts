@@ -1,6 +1,16 @@
 import { expect, it } from 'vitest';
 import { createDurableRunStore, type DurableRunSnapshot } from '../src/main/run/durable-run.js';
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function memoryPersistence(initial: DurableRunSnapshot | null = null) {
   let stored = initial;
   let failWrites = false;
@@ -149,4 +159,102 @@ it('does not resurrect a terminal run from a stale recovery snapshot', async () 
   const restored = createDurableRunStore(memory.persistence, { now: () => 40_000 });
   expect(await restored.recover()).toEqual([]);
   expect(restored.observe(run.id)?.state).toBe('completed');
+});
+
+it('keeps an uncommitted checkpoint invisible while its durability write is pending', async () => {
+  let stored: DurableRunSnapshot | null = null;
+  let blockNextWrite = false;
+  const writeStarted = deferred();
+  const releaseWrite = deferred();
+  const store = createDurableRunStore({
+    read: async () => stored,
+    write: async (value) => {
+      if (blockNextWrite) {
+        blockNextWrite = false;
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      stored = structuredClone(value);
+    }
+  }, { now: () => 50_000 });
+
+  const run = await store.open('persist first', 'conversation:a');
+  blockNextWrite = true;
+  const advancing = store.advance(run.id, {
+    type: 'checkpoint',
+    owner: 'conversation:a',
+    checkpoint: 'not durable yet'
+  });
+  await writeStarted.promise;
+
+  expect(store.observe(run.id)?.checkpoint).toBe('');
+  releaseWrite.resolve();
+  await advancing;
+  expect(store.observe(run.id)?.checkpoint).toBe('not durable yet');
+});
+
+it('serializes overlapping transitions so a failed older write cannot diverge memory from disk', async () => {
+  let stored: DurableRunSnapshot | null = null;
+  let writeCount = 0;
+  const firstStarted = deferred();
+  const failFirst = deferred();
+  const store = createDurableRunStore({
+    read: async () => stored,
+    write: async (value) => {
+      writeCount += 1;
+      if (writeCount === 2) {
+        firstStarted.resolve();
+        await failFirst.promise;
+        throw new Error('first transition failed');
+      }
+      stored = structuredClone(value);
+    }
+  }, { now: () => 60_000 });
+
+  const run = await store.open('serialize transitions', 'conversation:a');
+  const first = store.advance(run.id, {
+    type: 'checkpoint',
+    owner: 'conversation:a',
+    checkpoint: 'older checkpoint'
+  });
+  await firstStarted.promise;
+  const second = store.advance(run.id, {
+    type: 'operation',
+    owner: 'conversation:a',
+    operation: { id: 'mutation-1', retry: 'mutation', outcome: 'unknown' }
+  });
+
+  await Promise.resolve();
+  expect(writeCount).toBe(2);
+  failFirst.resolve();
+  await expect(first).rejects.toThrow('first transition failed');
+  await second;
+
+  expect(store.observe(run.id)?.state).toBe('needs-reconciliation');
+  const durable = stored as DurableRunSnapshot | null;
+  expect(durable?.runs.find((entry) => entry.id === run.id)?.state).toBe('needs-reconciliation');
+});
+
+it('loads persisted runs once when first operations arrive concurrently', async () => {
+  let readCount = 0;
+  const readStarted = deferred();
+  const releaseRead = deferred<DurableRunSnapshot | null>();
+  const store = createDurableRunStore({
+    read: async () => {
+      readCount += 1;
+      readStarted.resolve();
+      return releaseRead.promise;
+    },
+    write: async () => {}
+  }, { now: () => 70_000 });
+
+  const first = store.open('same work', 'conversation:a');
+  const second = store.open('same work', 'conversation:a');
+  await readStarted.promise;
+  await Promise.resolve();
+
+  expect(readCount).toBe(1);
+  releaseRead.resolve(null);
+  const [runA, runB] = await Promise.all([first, second]);
+  expect(runB.id).toBe(runA.id);
 });
