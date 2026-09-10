@@ -122,6 +122,32 @@ describe('secret store', () => {
     expect(secureStorageCiphertextIsProtected(v10, 'darwin')).toBe(true);
   });
 
+  it('transactionally migrates the existing Electron secret blob into the frontend-independent vault', async () => {
+    const legacy = path.join(dir, 'secrets.bin');
+    await fs.writeFile(
+      legacy,
+      Buffer.from(JSON.stringify({ openaiApiKey: 'legacy-openai', bridgeToken: 'legacy-bridge', futureSecret: 'keep-me' }), 'utf8')
+    );
+
+    expect(await getSecret('openaiApiKey')).toBe('legacy-openai');
+    expect(await getSecret('bridgeToken')).toBe('legacy-bridge');
+    expect(await fs.stat(path.join(dir, 'credentials.vault'))).toBeTruthy();
+    expect(await fs.stat(path.join(dir, 'credentials.key'))).toBeTruthy();
+    expect(await fs.readFile(path.join(dir, 'credentials.migrated'), 'utf8')).toContain('credential-vault-v1');
+    await expect(fs.access(legacy)).rejects.toBeDefined();
+    const migratedBackups = (await fs.readdir(dir)).filter((name) => name.startsWith('secrets.bin.migrated-'));
+    expect(migratedBackups).toHaveLength(1);
+
+    const vaultBytes = await fs.readFile(path.join(dir, 'credentials.vault'), 'utf8');
+    expect(vaultBytes).not.toContain('legacy-openai');
+    expect(vaultBytes).not.toContain('legacy-bridge');
+
+    await setSecret('openRouterApiKey', 'new-secret');
+    resetSecretsCacheForTests();
+    expect(await getSecret('openaiApiKey')).toBe('legacy-openai');
+    expect(await getSecret('openRouterApiKey')).toBe('new-secret');
+  });
+
   it('serializes concurrent writes so one credential cannot erase another', async () => {
     await Promise.all([
       setSecret('bridgeToken', 'bridge-token-456'),
@@ -135,7 +161,9 @@ describe('secret store', () => {
     resetSecretsCacheForTests();
     expect(await getSecret('bridgeToken')).toBe('bridge-token-456');
     expect(await getSecret('openaiApiKey')).toBe('sk-openai-789');
-    expect(await fs.stat(path.join(dir, 'secrets.bin'))).toBeTruthy();
+    expect(await fs.stat(path.join(dir, 'credentials.vault'))).toBeTruthy();
+    expect(await fs.stat(path.join(dir, 'credentials.key'))).toBeTruthy();
+    await expect(fs.access(path.join(dir, 'secrets.bin'))).rejects.toBeDefined();
   });
 
   it('single-flights an async cache miss so a late read cannot publish stale credentials after a write', async () => {
@@ -224,7 +252,8 @@ describe('secret store', () => {
     const staleRead = getSecret('bridgeToken');
     await decryptStarted;
     await deleteAllSecrets();
-    await expect(fs.access(path.join(dir, 'secrets.bin'))).rejects.toBeDefined();
+    await expect(fs.access(path.join(dir, 'credentials.vault'))).rejects.toBeDefined();
+    await expect(fs.access(path.join(dir, 'credentials.key'))).rejects.toBeDefined();
 
     releaseDecrypt();
     expect(await staleRead).toBeNull();
@@ -266,7 +295,7 @@ describe('secret store', () => {
       setSecret('bridgeToken', 'bridge-token-survives-ambiguous-decrypt-error'),
       setSecret('openaiApiKey', 'sk-survives-ambiguous-decrypt-error')
     ]);
-    const file = path.join(dir, 'secrets.bin');
+    const file = path.join(dir, 'credentials.key');
     const before = await fs.readFile(file);
     resetSecretsCacheForTests();
     vi.mocked(safeStorage.decryptStringAsync).mockRejectedValue(new Error('provider temporarily unavailable'));
@@ -293,7 +322,7 @@ describe('secret store', () => {
       setSecret('bridgeToken', 'bridge-token-from-old-app-identity'),
       setSecret('openaiApiKey', 'sk-from-old-app-identity')
     ]);
-    const file = path.join(dir, 'secrets.bin');
+    const file = path.join(dir, 'credentials.key');
     const before = await fs.readFile(file);
     resetSecretsCacheForTests();
     vi.mocked(safeStorage.decryptStringAsync).mockRejectedValueOnce(new Error('key belongs to previous app identity'));
@@ -337,17 +366,17 @@ describe('secret store', () => {
       setSecret('bridgeToken', 'bridge-token-before-malformed-store'),
       setSecret('openaiApiKey', 'sk-before-malformed-store')
     ]);
-    const file = path.join(dir, 'secrets.bin');
-    // The test safeStorage mock is identity encryption. This reproduces a decryptable payload
-    // whose shape cannot be safely treated as a string secret map.
-    await fs.writeFile(file, Buffer.from(JSON.stringify({ bridgeToken: 'still-there', openaiApiKey: 123 }), 'utf8'));
+    const file = path.join(dir, 'credentials.vault');
+    // The master key still opens, but the authenticated vault envelope itself is malformed.
+    // That is strong unreadable evidence and must never be replaced by a partial fresh map.
+    await fs.writeFile(file, Buffer.from(JSON.stringify({ version: 1, broken: true }), 'utf8'));
     resetSecretsCacheForTests();
     const before = await fs.readFile(file);
 
     expect(await getSecret('bridgeToken')).toBeNull();
     const malformedWrite = setSecret('openRouterApiKey', 'must-not-replace-malformed-blob');
     await expect(malformedWrite).rejects.toBeInstanceOf(SecretStorageError);
-    await expect(malformedWrite).rejects.toMatchObject({ code: 'secure_storage_unavailable' });
+    await expect(malformedWrite).rejects.toMatchObject({ code: 'stored_credentials_unreadable' });
     expect(await fs.readFile(file)).toEqual(before);
   });
 
@@ -365,16 +394,15 @@ describe('secret store', () => {
 
     expect(await getSecret('bridgeToken')).toBe('bridge-token-rotated');
     // Linux proves the selected async provider is not Chromium's hard-coded-key fallback by
-    // encrypting a harmless probe before each real write. Count the secret-blob reseal itself,
-    // not platform-specific availability probes.
+    // encrypting a harmless probe before each real write. The host provider now reseals only
+    // the random master key; credential names/values never cross the provider seam.
     const reseals = vi.mocked(safeStorage.encryptStringAsync).mock.calls
       .map(([value]) => value)
       .filter((value) => value !== 'chat-on-steroids-safe-storage-probe');
     expect(reseals).toHaveLength(1);
-    expect(JSON.parse(reseals[0]!)).toEqual({
-      bridgeToken: 'bridge-token-rotated',
-      openaiApiKey: 'sk-rotated'
-    });
+    expect(Buffer.from(reseals[0]!, 'base64')).toHaveLength(32);
+    expect(reseals[0]).not.toContain('bridge-token-rotated');
+    expect(reseals[0]).not.toContain('sk-rotated');
 
     resetSecretsCacheForTests();
     expect(await getSecret('openaiApiKey')).toBe('sk-rotated');
@@ -385,7 +413,7 @@ describe('secret store', () => {
       setSecret('bridgeToken', 'bridge-token-before-failed-rotation'),
       setSecret('openaiApiKey', 'sk-before-failed-rotation')
     ]);
-    const file = path.join(dir, 'secrets.bin');
+    const file = path.join(dir, 'credentials.key');
     const before = await fs.readFile(file);
     resetSecretsCacheForTests();
     vi.mocked(safeStorage.decryptStringAsync).mockImplementationOnce(async (buffer) => ({

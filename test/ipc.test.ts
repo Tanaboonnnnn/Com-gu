@@ -51,7 +51,14 @@ vi.mock('../src/main/recovery.js', () => ({
 }));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
-const { deleteAllSecrets, getSecret, initSecretsPath, resetSecretsCacheForTests, setSecret } = await import('../src/main/secrets.js');
+const {
+  deleteAllSecrets,
+  getSecret,
+  initSecretsPath,
+  resetSecretsCacheForTests,
+  setCredentialVaultTestHooks,
+  setSecret
+} = await import('../src/main/secrets.js');
 const { requestExtensionPairing } = await import('../src/main/bridge-pairing.js');
 const { appendEvent, createSession, initSessionStore, resetSessionStoreForTests } = await import('../src/main/session/store.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
@@ -495,12 +502,11 @@ describe('bounded IPC identities and OS launch results', () => {
     const persistPaused = new Promise<void>((resolve) => { releasePersist = resolve; });
     let persistenceStarted!: () => void;
     const persistenceDidStart = new Promise<void>((resolve) => { persistenceStarted = resolve; });
-    const encrypt = vi.mocked(safeStorage.encryptStringAsync);
-    const originalEncrypt = encrypt.getMockImplementation()!;
-    encrypt.mockImplementationOnce(async (value: string) => {
+    setCredentialVaultTestHooks({
+      beforeVaultCommit: async () => {
       persistenceStarted();
       await persistPaused;
-      return originalEncrypt(value);
+      }
     });
 
     const approval = handlers.get('bridge:approveExtensionPairing')!(null, { expectedOrigin: reviewedOrigin }) as Promise<any>;
@@ -509,6 +515,7 @@ describe('bounded IPC identities and OS launch results', () => {
     releasePersist();
 
     const approved = await approval;
+    setCredentialVaultTestHooks({});
     expect(approved.ok, approved.error).toBe(true);
     expect(approved.data.approvedOrigin).toBe(reviewedOrigin);
     expect(approved.data.pendingOrigin).toBe(replacementOrigin);
