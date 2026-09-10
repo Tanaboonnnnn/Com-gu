@@ -1,11 +1,4 @@
 import type { ConnectionStatus } from '../../shared/types.js';
-import {
-  connect as connectConnection,
-  disconnect as disconnectConnection,
-  getStatus as connectionStatus,
-  onStatusChange as onConnectionStatusChange,
-  shutdownConnection
-} from '../connection.js';
 import type { RuntimeProfile } from './profile.js';
 
 export interface RuntimeLifecycle {
@@ -26,21 +19,13 @@ export interface ComGuRuntime {
   shutdown(): Promise<void>;
 }
 
-const defaultLifecycle: RuntimeLifecycle = {
-  connect: connectConnection,
-  disconnect: disconnectConnection,
-  status: connectionStatus,
-  subscribe: onConnectionStatusChange,
-  shutdown: shutdownConnection
-};
-
 /**
  * The frontend seam for ComGu's runtime lifecycle. Connection/tunnel/MCP details stay behind
  * this interface so Electron and CLI do not grow separate lifecycle state machines.
  */
 export function createComGuRuntime(
   profile: RuntimeProfile,
-  lifecycle: RuntimeLifecycle = defaultLifecycle,
+  lifecycle: RuntimeLifecycle,
   prepare: () => Promise<void> = async () => {}
 ): ComGuRuntime {
   let startInFlight: Promise<void> | null = null;

@@ -36,10 +36,8 @@ import {
 } from '../sandbox.js';
 import { currentWorkspace, learnWorkspace } from '../workspace.js';
 import { ExecError } from '../exec.js';
-import { ComputerError } from '../computer/index.js';
 import { getConfig } from '../config.js';
 import {
-  AgentError,
   acknowledgeOffers,
   acknowledgeOffersForConversation,
   dormantWorkerNotice,
@@ -58,8 +56,15 @@ import {
   retiredWorkerForConversation,
   stageQueuedWorkerRevivals,
   swarmRunning,
-  workspaceScopeForCaller
-} from '../agents.js';
+  workspaceScopeForCaller,
+  awaitFreshCallOrigin,
+  evidenceWindow,
+  freshCallOrigin,
+  recordAgentMessage,
+  recordToolCall,
+  readOverflowText,
+  isOptionalRejectedError
+} from './optional-runtime.js';
 import { effectiveWorkspaceRoots } from '../run/scope.js';
 import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
@@ -74,14 +79,6 @@ import {
   trackMcpRequest,
   type CallContext
 } from './call-context.js';
-import {
-  awaitFreshCallOrigin,
-  evidenceWindow,
-  freshCallOrigin,
-  recordAgentMessage,
-  recordToolCall
-} from '../session/recorder.js';
-import { readOverflowText } from '../session/store.js';
 import type { StoredText } from '../../shared/session.js';
 
 export interface ToolContext {
@@ -152,7 +149,7 @@ export function withMachineAttribution(result: ToolResult, machine?: MachineIden
 
 /** Maps runtime errors to short model-facing text without ever exposing real paths. */
 export function friendlyError(err: unknown): string {
-  if (err instanceof SandboxError || err instanceof ComputerError) return err.message;
+  if (err instanceof SandboxError || (err instanceof Error && err.name === 'ComputerError')) return err.message;
   const code = (err as NodeJS.ErrnoException).code;
   if (code === 'ENOENT') return 'Not found';
   if (code === 'EACCES' || code === 'EPERM') return 'Access denied by the operating system';
@@ -227,10 +224,10 @@ export async function guard(name: string, fn: () => Promise<ToolResult>): Promis
     const elapsed = Date.now() - started;
     if (
       err instanceof SandboxError ||
-      err instanceof ComputerError ||
+      (err instanceof Error && err.name === 'ComputerError') ||
       err instanceof FsOpError ||
       err instanceof ExecError ||
-      err instanceof AgentError
+      isOptionalRejectedError(err)
     ) {
       noteOutcomeSafely('rejected');
       logInfo(`tool ${name} rejected in ${elapsed} ms: ${message}`);

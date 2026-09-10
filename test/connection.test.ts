@@ -319,4 +319,23 @@ describe('connection surface state', () => {
     expect(desktop.getStatus().state).toBe('connected');
     expect(mocks.starts).toBe(2);
   });
+
+  it('lets a CLI owner inject credential and Desktop hooks without loading the Electron defaults', async () => {
+    const connection = await import('../src/main/connection.js');
+    const getApiKey = vi.fn(async () => 'cli-key');
+    const prewarmDesktop = vi.fn(async () => undefined);
+    connection.configureConnectionRuntime({
+      profile: 'cli',
+      getApiKey,
+      prewarmDesktop,
+      desktopSupported: () => false
+    });
+
+    await connection.connect();
+
+    expect(getApiKey).toHaveBeenCalledTimes(1);
+    expect(prewarmDesktop).not.toHaveBeenCalled();
+    expect(mocks.secretReached).not.toHaveBeenCalled();
+    expect(mocks.prewarm).not.toHaveBeenCalled();
+  });
 });

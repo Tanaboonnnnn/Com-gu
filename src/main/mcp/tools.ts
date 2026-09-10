@@ -16,7 +16,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { createRegistrar, type ToolContext } from './kernel.js';
 import { registerCoreTools } from './tools-core.js';
-import { registerDesktopTools } from './tools-desktop.js';
 import { surfaceDefinition, type SurfaceId } from './surfaces.js';
 import { serverInstructions } from './instructions.js';
 import { APP_VERSION } from './../version.js';
@@ -24,7 +23,12 @@ import { toVirtualPath } from '../sandbox.js';
 import { logWarn } from '../logger.js';
 import type { MachineIdentity } from '../machine/profile.js';
 
-export function buildServer(ctx: ToolContext, surface: SurfaceId, machine?: MachineIdentity | null): McpServer {
+export function buildServer(
+  ctx: ToolContext,
+  surface: SurfaceId,
+  machine?: MachineIdentity | null,
+  registerDesktop?: (registrar: ReturnType<typeof createRegistrar>) => void
+): McpServer {
   const definition = surfaceDefinition(surface, machine);
   const server = new McpServer(
     { name: definition.serverName, version: APP_VERSION },
@@ -33,7 +37,7 @@ export function buildServer(ctx: ToolContext, surface: SurfaceId, machine?: Mach
 
   const registrar = createRegistrar(server, ctx, surface);
   if (surface === 'core') registerCoreTools(registrar);
-  else registerDesktopTools(registrar);
+  else registerDesktop?.(registrar);
 
   // Cheap self-check on a property the tests assert and the design depends on: a surface
   // may register fewer tools than it declares — permissions decide that — but it may never

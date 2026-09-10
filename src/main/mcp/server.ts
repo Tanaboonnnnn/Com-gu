@@ -25,8 +25,9 @@ import { localhostHostValidation, localhostOriginValidation, toNodeHandler } fro
 import { getConfig } from '../config.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 import { buildServer, resetToolClock, type ToolContext } from './tools.js';
-import { SURFACE_IDS, surfaceDefinition, type SurfaceId } from './surfaces.js';
+import { SURFACE_IDS, surfaceDefinition, surfaceIsUseful, type SurfaceId } from './surfaces.js';
 import type { MachineIdentity } from '../machine/profile.js';
+import type { RuntimeProfileName } from '../runtime/profile.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -256,7 +257,22 @@ export function forgetExposedSurface(): void {
   surfaceExposure.clear();
 }
 
-export async function startMcpServer(getContext: () => ToolContext, machine?: MachineIdentity | null): Promise<McpEndpoint> {
+export async function startMcpServer(
+  getContext: () => ToolContext,
+  machine?: MachineIdentity | null,
+  profile: RuntimeProfileName = 'desktop-app'
+): Promise<McpEndpoint> {
+  if (profile === 'desktop-app') {
+    const { installDesktopAppMcpRuntime } = await import('./desktop-app-runtime.js');
+    installDesktopAppMcpRuntime();
+  } else {
+    const { resetOptionalMcpRuntime } = await import('./optional-runtime.js');
+    resetOptionalMcpRuntime();
+  }
+  const initialContext = getContext();
+  const registerDesktop = profile === 'desktop-app' || surfaceIsUseful('desktop', initialContext.caps)
+    ? (await import('./tools-desktop.js')).registerDesktopTools
+    : undefined;
   // A per-session token in the path is what authorises callers. It is regenerated on
   // every app start, so a URL that leaks stops working when the app restarts.
   requestSeenAt = null;
@@ -320,7 +336,7 @@ export async function startMcpServer(getContext: () => ToolContext, machine?: Ma
     prmPath: `${PRM_PREFIX}${surface.basePath}`,
     url: '',
     handler: toNodeHandler(
-      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id, machine)),
+      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id, machine, registerDesktop)),
       { onerror: (error) => logError(`MCP handler error (${surface.id}): ${error.message}`) }
     )
   }));

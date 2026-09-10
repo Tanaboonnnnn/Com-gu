@@ -11,17 +11,44 @@
 
 import type { ConnectionStatus, SurfaceStatus, TunnelSettings } from '../shared/types.js';
 import { requiresApprovedFilesystemRoot } from '../shared/capabilities.js';
-import { prewarmComputerHelper } from './computer/index.js';
 import { effectiveCapabilities, getConfig } from './config.js';
 import { logError, logInfo, logWarn } from './logger.js';
 import { writePerfMcpEndpointMarker } from './perf-marker.js';
 import { lastRequestAt, startMcpServer, tunnelProbeHeaders, type McpEndpoint } from './mcp/server.js';
 import { lastToolCallAt } from './mcp/tools.js';
 import { surfaceList, surfaceIsUseful, type SurfaceId } from './mcp/surfaces.js';
-import { getSecret } from './secrets.js';
 import { startTunnel, TunnelError, type TunnelHandle } from './tunnel/index.js';
 import { desktopAutomationSupported } from './platform.js';
 import { currentMachineProfile } from './machine/profile.js';
+import type { RuntimeProfileName } from './runtime/profile.js';
+
+export interface ConnectionRuntimeDependencies {
+  profile: RuntimeProfileName;
+  getApiKey(): Promise<string | null>;
+  prewarmDesktop(): void | Promise<void>;
+  desktopSupported(): boolean;
+}
+
+const defaultConnectionRuntime = (): ConnectionRuntimeDependencies => ({
+  profile: 'desktop-app',
+  getApiKey: async () => (await import('./secrets.js')).getSecret('openaiApiKey'),
+  prewarmDesktop: async () => {
+    const { prewarmComputerHelper } = await import('./computer/index.js');
+    await prewarmComputerHelper();
+  },
+  desktopSupported: () => desktopAutomationSupported()
+});
+
+let runtimeDependencies = defaultConnectionRuntime();
+
+/**
+ * Selects the frontend-specific adapters used by the shared connection state machine.
+ * CLI installs non-Electron credential/Desktop hooks before connect; Electron keeps the
+ * lazy defaults. The connection module itself therefore stays importable in headless Node.
+ */
+export function configureConnectionRuntime(overrides: Partial<ConnectionRuntimeDependencies>): void {
+  runtimeDependencies = { ...runtimeDependencies, ...overrides };
+}
 
 let endpoint: McpEndpoint | null = null;
 /** The Core tunnel. Also the only tunnel on the cloudflared and manual paths. */
@@ -133,7 +160,7 @@ function describeSurfaces(): SurfaceStatus[] {
 }
 
 function desktopUnavailableDetail(id: SurfaceId): string {
-  if (id === 'desktop' && !desktopAutomationSupported()) {
+  if (id === 'desktop' && !runtimeDependencies.desktopSupported()) {
     return 'Desktop automation is Windows-only. Core files, terminal, sessions and sub-agents remain available.';
   }
   return id === 'desktop'
@@ -252,7 +279,7 @@ async function connectImpl(): Promise<void> {
         readOnly: live.readOnly,
         privacyScreenshots: live.ui.privacyScreenshots
       };
-    }, currentMachineProfile());
+    }, currentMachineProfile(), runtimeDependencies.profile);
     if (shutdownRequested || generation !== connectionGeneration) {
       await startedEndpoint.stop({ forceAfterMs: 30_000 }).catch(() => {});
       return;
@@ -262,10 +289,10 @@ async function connectImpl(): Promise<void> {
     void writePerfMcpEndpointMarker(process.env, endpoint.url).catch((error) =>
       logError(`performance MCP endpoint marker failed: ${error instanceof Error ? error.message : String(error)}`)
     );
-    if (desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
+    if (runtimeDependencies.desktopSupported() && (caps.screen || caps.control)) void runtimeDependencies.prewarmDesktop();
     updateSurface('core', { state: 'starting', detail: 'Connecting…' });
 
-    const apiKey = await getSecret('openaiApiKey');
+    const apiKey = await runtimeDependencies.getApiKey();
     if (shutdownRequested || generation !== connectionGeneration) {
       await disconnectImpl(30_000);
       return;
@@ -420,7 +447,7 @@ async function applySettingsImpl(): Promise<void> {
   }
   const caps = effectiveCapabilities(config);
   const available = surfaceIsUseful('desktop', caps);
-  if (desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
+  if (runtimeDependencies.desktopSupported() && (caps.screen || caps.control)) void runtimeDependencies.prewarmDesktop();
   // Rebuild the cards first: permissions may have changed which tools each surface would
   // advertise, and on a whole-origin transport that is all there is to do.
   setStatus({ surfaces: describeSurfaces() });
@@ -443,7 +470,7 @@ async function applySettingsImpl(): Promise<void> {
   }
   if (desktopTunnel && desktopTunnelId === config.tunnel.desktopTunnelId) return;
   await stopDesktopTunnel('Reconnecting with the new tunnel…');
-  await startDesktopTunnel(connectionGeneration, config.tunnel, await getSecret('openaiApiKey'));
+  await startDesktopTunnel(connectionGeneration, config.tunnel, await runtimeDependencies.getApiKey());
 }
 
 /** Applies a settings change to a live connection. Safe to call while disconnected. */

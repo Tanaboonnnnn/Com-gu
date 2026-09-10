@@ -69,12 +69,25 @@ import { passwordStoreForDesktop } from './linux-password-store.js';
 import { runtimeProfile } from './runtime/profile.js';
 import { createComGuRuntime } from './runtime/runtime.js';
 import { initMachineProfile } from './machine/profile.js';
+import {
+  connect as connectConnection,
+  disconnect as disconnectConnection,
+  getStatus as connectionStatus,
+  onStatusChange as onConnectionStatusChange,
+  shutdownConnection
+} from './connection.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
 const RETIRED_WORKERS_STATE = 'retired-workers';
 const ACTIVE_RUNTIME_PROFILE = runtimeProfile('desktop-app');
-const desktopRuntime = createComGuRuntime(ACTIVE_RUNTIME_PROFILE);
+const desktopRuntime = createComGuRuntime(ACTIVE_RUNTIME_PROFILE, {
+  connect: connectConnection,
+  disconnect: disconnectConnection,
+  status: connectionStatus,
+  subscribe: onConnectionStatusChange,
+  shutdown: shutdownConnection
+});
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;

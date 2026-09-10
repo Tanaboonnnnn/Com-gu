@@ -48,6 +48,7 @@ import { composeCommandBatch, parseCommandBatchSections } from '../codex/command
 import { formatExecOutputForModel, newStreamOutput } from '../codex/exec-output.js';
 import { DEFAULT_TRUNCATION_POLICY, EXEC_OUTPUT_CEILING_POLICY, unifiedExecManager } from '../codex/manager.js';
 import {
+  execCallerPrincipal,
   execOwnershipDenied,
   forgetExecOwner,
   noteExecOwner,
@@ -110,9 +111,13 @@ import {
   stageSpawn,
   swarmRunning,
   swarmStateForCaller,
-  type Caller
-} from '../agents.js';
-import { repairPrimeFromResumeShadow } from '../session/continuation.js';
+  repairPrimeFromResumeShadow,
+  awaitFreshCallOrigin,
+  recordAgentMessage,
+  findSessionByConversation,
+  registerOptionalSessionTool
+} from './optional-runtime.js';
+import type { Caller } from '../agents.js';
 import {
   currentCall,
   currentCaller,
@@ -121,11 +126,6 @@ import {
   noteDetail,
   noteExec
 } from './call-context.js';
-import {
-  awaitFreshCallOrigin,
-  recordAgentMessage
-} from '../session/recorder.js';
-import { findSessionByConversation } from '../session/store.js';
 import {
   adoptAgent,
   fail,
@@ -144,7 +144,6 @@ import {
   type SurfaceRegistrar,
   type ToolResult
 } from './kernel.js';
-import { registerSessionTool as registerSessionSearchReadTool } from './session-tool.js';
 
 /** Entries one `read` of a directory returns before it says it stopped. */
 const MAX_DIR_ENTRIES = 200;
@@ -797,7 +796,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             if (output.processId === null) {
               forgetExecOwner(processId);
             } else {
-              let owner = provenConversation(currentCaller().requestId, currentCaller().conversationId);
+              const caller = currentCaller();
+              let owner = provenConversation(caller.requestId, caller.conversationId);
               const call = currentCall();
               if (!owner && call?.caller.requestId) {
                 owner = await awaitFreshCallOrigin('exec_command', call.startedAt, IDENTITY_EVIDENCE_MS, {
@@ -805,7 +805,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
                 });
                 if (owner) call.caller.conversationId = owner;
               }
-              noteExecOwner(output.processId, owner);
+              noteExecOwner(output.processId, execCallerPrincipal(owner, call?.caller.transportKey ?? caller.transportKey));
             }
             const responseText = execCommandResponseText(output);
             // A search that found nothing exits 1 and has not failed. Recording it as an
@@ -883,7 +883,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           // A session id is a small integer that means nothing outside the chat that was given
           // it, and every chat reaches the same manager here. Refuse only what is proven to
           // belong elsewhere; an unproven caller keeps working exactly as before.
-          let asking = provenConversation(currentCaller().requestId, currentCaller().conversationId);
+          const caller = currentCaller();
+          let asking = provenConversation(caller.requestId, caller.conversationId);
           const call = currentCall();
           if (!asking && call?.caller.requestId) {
             asking = await awaitFreshCallOrigin('write_stdin', call.startedAt, IDENTITY_EVIDENCE_MS, {
@@ -891,7 +892,8 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             });
             if (asking) call.caller.conversationId = asking;
           }
-          if (execOwnershipDenied(input.session_id, asking)) {
+          const principal = execCallerPrincipal(asking, call?.caller.transportKey ?? caller.transportKey);
+          if (execOwnershipDenied(input.session_id, principal)) {
             return fail(
               `write_stdin failed: session ${input.session_id} is not proven to belong to this ChatGPT conversation. Start your own with exec_command or retry after the extension reconnects.`
             );
@@ -929,7 +931,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
 
   // ---------------------------------------------------------------- session
 
-  if (reg.sessionToolsExposed) registerSessionSearchReadTool(reg);
+  if (reg.sessionToolsExposed) registerOptionalSessionTool(reg);
 
   // ----------------------------------------------------------------- agents
 
