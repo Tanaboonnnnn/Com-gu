@@ -45,6 +45,7 @@ function button(value?: string): string {
 export function createX11DesktopDriver(options: { commands: Set<string>; run: X11Runner }): DesktopDriver {
   const has = (name: string) => options.commands.has(name);
   let frame = 0;
+  let lastFrame: { id: number; scale: number; region: Rect } | null = null;
 
   const caps = (): DesktopCapabilities => ({
     available: has('xdotool') && has('import'),
@@ -90,9 +91,11 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
     const final = await sharp(image).metadata();
     const width = final.width ?? 0;
     const height = final.height ?? 0;
+    const frameId = ++frame;
+    const scale = region.width > 0 ? width / region.width : 1;
+    lastFrame = { id: frameId, scale, region };
     return {
-      data: image.toString('base64'), frameId: ++frame, width, height, region,
-      scale: region.width > 0 ? width / region.width : 1,
+      data: image.toString('base64'), frameId, width, height, region, scale,
       focused: request.window ? null : null,
       captureMode: request.window ? 'window' : 'screen', windowId: request.window ?? null
     };
@@ -137,12 +140,21 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
     return { kind: 'screenshot', screenshot: await capture(request) };
   };
 
+  const point = (x: number, y: number): { x: number; y: number } => {
+    const current = lastFrame;
+    if (!current || current.scale <= 0) return { x: Math.round(x), y: Math.round(y) };
+    return {
+      x: Math.round(current.region.x + x / current.scale),
+      y: Math.round(current.region.y + y / current.scale)
+    };
+  };
+
   const actOne = async (action: Action, clipboard: string[]): Promise<'sendinput' | 'focus' | 'local'> => {
     switch (action.type) {
       case 'click_ref': case 'set_value': unsupported('X11 semantic UI refs are unsupported; use coordinates or typing.');
-      case 'move': await runOk('xdotool', ['mousemove', String(action.x), String(action.y)]); return 'sendinput';
-      case 'click': await runOk('xdotool', ['mousemove', String(action.x), String(action.y), 'click', button(action.button)]); return 'sendinput';
-      case 'double_click': await runOk('xdotool', ['mousemove', String(action.x), String(action.y), 'click', '--repeat', '2', '--delay', '100', button(action.button)]); return 'sendinput';
+      case 'move': { const p = point(action.x, action.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y)]); return 'sendinput'; }
+      case 'click': { const p = point(action.x, action.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y), 'click', button(action.button)]); return 'sendinput'; }
+      case 'double_click': { const p = point(action.x, action.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y), 'click', '--repeat', '2', '--delay', '100', button(action.button)]); return 'sendinput'; }
       case 'type': await runOk('xdotool', ['type', '--delay', '1', '--', action.text]); return 'sendinput';
       case 'keypress': await runOk('xdotool', ['key', action.keys.join('+')]); return 'sendinput';
       case 'focus': await runOk('xdotool', ['windowactivate', '--sync', String(action.window)]); return 'focus';
@@ -150,7 +162,7 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
       case 'read_clipboard': if (!has('xclip')) unsupported('X11 clipboard access requires xclip.'); clipboard.push((await runOk('xclip', ['-selection', 'clipboard', '-o'])).toString('utf8')); return 'local';
       case 'write_clipboard': if (!has('xclip')) unsupported('X11 clipboard access requires xclip.'); await runOk('xclip', ['-selection', 'clipboard'], action.text); return 'local';
       case 'scroll': {
-        await runOk('xdotool', ['mousemove', String(action.x), String(action.y)]);
+        const p = point(action.x, action.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y)]);
         const vertical = action.scroll_y ?? 0; const horizontal = action.scroll_x ?? 0;
         const clicks: Array<[number, string]> = [[vertical, vertical < 0 ? '4' : '5'], [horizontal, horizontal < 0 ? '6' : '7']];
         for (const [delta, key] of clicks) for (let i = 0; i < Math.min(50, Math.abs(Math.round(delta / 120))); i++) await runOk('xdotool', ['click', key]);
@@ -158,8 +170,9 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
       }
       case 'drag': {
         const [first, ...rest] = action.path; if (!first) return 'sendinput';
-        await runOk('xdotool', ['mousemove', String(first.x), String(first.y), 'mousedown', button(action.button)]);
-        for (const point of rest) await runOk('xdotool', ['mousemove', String(point.x), String(point.y)]);
+        const start = point(first.x, first.y);
+        await runOk('xdotool', ['mousemove', String(start.x), String(start.y), 'mousedown', button(action.button)]);
+        for (const item of rest) { const p = point(item.x, item.y); await runOk('xdotool', ['mousemove', String(p.x), String(p.y)]); }
         await runOk('xdotool', ['mouseup', button(action.button)]); return 'sendinput';
       }
     }
@@ -168,6 +181,9 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
   return {
     capabilities: async () => caps(), observe: observe as DesktopDriver['observe'],
     async act(request) {
+      if (request.frameId !== undefined && request.frameId !== lastFrame?.id) {
+        throw new X11DesktopError('STALE_FRAME: the X11 screenshot frame is no longer current.');
+      }
       const clipboard: string[] = []; const routes: Array<'sendinput' | 'focus' | 'local'> = [];
       let completedCount = 0;
       for (const action of request.actions) { routes.push(await actOne(action, clipboard)); completedCount += 1; }

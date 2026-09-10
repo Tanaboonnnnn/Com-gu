@@ -41,8 +41,15 @@ export async function probeLinuxDesktop(options: LinuxDesktopProbeOptions = {}):
   if (!hasWayland && !hasX11) return { kind: 'headless', driver: null, reason: 'No graphical Linux session is available.' };
 
   if (hasWayland) {
+    if (!(await exists('gdbus'))) {
+      return { kind: 'unavailable', driver: null, reason: 'Linux Wayland Desktop requires gdbus and xdg-desktop-portal.' };
+    }
     const load = options.loadWayland ?? (async () => {
-      throw new Error('Wayland Desktop support is not available until portal negotiation succeeds.');
+      const [{ createWaylandDesktopDriver }, { createGdbusWaylandPortalSession }] = await Promise.all([
+        import('./wayland.js'),
+        import('./wayland-portal.js')
+      ]);
+      return createWaylandDesktopDriver(await createGdbusWaylandPortalSession(env));
     });
     try {
       return { kind: 'wayland', driver: await load(), reason: null };

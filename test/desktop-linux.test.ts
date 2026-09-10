@@ -35,6 +35,20 @@ describe('Linux Desktop runtime probe', () => {
     expect(result).toMatchObject({ kind: 'unavailable', driver: null });
     expect(result.reason).toMatch(/import/i);
   });
+
+  it('refuses a Wayland claim when the portal client is unavailable', async () => {
+    const loadWayland = vi.fn();
+    const result = await probeLinuxDesktop({
+      platform: 'linux',
+      env: { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' },
+      commandExists: async () => false,
+      loadX11: vi.fn(),
+      loadWayland
+    });
+    expect(result).toMatchObject({ kind: 'unavailable', driver: null });
+    expect(result.reason).toMatch(/gdbus/i);
+    expect(loadWayland).not.toHaveBeenCalled();
+  });
 });
 
 describe('Linux X11 DesktopDriver', () => {
@@ -60,6 +74,40 @@ describe('Linux X11 DesktopDriver', () => {
     expect(result.screenshot.captureMode).toBe('screen');
   });
 
+  it('maps coordinates from a scaled screenshot frame back to X11 desktop coordinates', async () => {
+    const image = await (await import('sharp')).default({ create: { width: 1920, height: 1080, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+    const run = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'xdotool' && args[0] === 'getdisplaygeometry') return { code: 0, stdout: Buffer.from('1920 1080\n') };
+      if (command === 'import') return { code: 0, stdout: image };
+      return { code: 0, stdout: Buffer.from('') };
+    });
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+    const frame = await driver.observe({ kind: 'screenshot', maxWidth: 960 });
+    await driver.act({
+      frameId: frame.screenshot.frameId,
+      actions: [
+        { type: 'move', x: 480, y: 270 },
+        { type: 'click', x: 480, y: 270 },
+        { type: 'drag', path: [{ x: 0, y: 0 }, { x: 480, y: 270 }] }
+      ]
+    });
+    expect(run).toHaveBeenCalledWith('xdotool', ['mousemove', '960', '540'], undefined);
+    expect(run).toHaveBeenCalledWith('xdotool', ['mousemove', '960', '540', 'click', '1'], undefined);
+    expect(run).toHaveBeenCalledWith('xdotool', ['mousemove', '960', '540'], undefined);
+  });
+
+  it('rejects coordinates tied to a stale X11 screenshot frame', async () => {
+    const image = await (await import('sharp')).default({ create: { width: 640, height: 480, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+    const run = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'xdotool' && args[0] === 'getdisplaygeometry') return { code: 0, stdout: Buffer.from('640 480\n') };
+      if (command === 'import') return { code: 0, stdout: image };
+      return { code: 0, stdout: Buffer.from('') };
+    });
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+    const old = await driver.observe({ kind: 'screenshot' });
+    await driver.observe({ kind: 'screenshot' });
+    await expect(driver.act({ frameId: old.screenshot.frameId, actions: [{ type: 'click', x: 10, y: 10 }] })).rejects.toThrow(/STALE_FRAME/);
+  });
   it('passes clipboard text to xclip over stdin rather than argv', async () => {
     const run = vi.fn(async (_command: string, _args: string[], _input?: Buffer | string) => ({ code: 0, stdout: Buffer.from('') }));
     const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import', 'xclip']), run });
