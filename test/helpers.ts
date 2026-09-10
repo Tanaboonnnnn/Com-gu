@@ -13,7 +13,11 @@ export async function makeTempDir(prefix = 'clf-'): Promise<string> {
 }
 
 export async function removeTempDir(dir: string): Promise<void> {
-  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  // Windows can keep a just-terminated child process's cwd handle alive briefly after the
+  // process manager has observed termination. Under parallel Vitest load that shows up as
+  // transient EBUSY/EPERM during cleanup. Let fs.rm own the retry loop rather than adding
+  // per-test sleeps that make the suite timing-dependent.
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
 
 /** Writes a map of "a/b.txt" -> contents, creating parent folders as needed. */
