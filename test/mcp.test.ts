@@ -3138,7 +3138,21 @@ describe('exec_command and write_stdin', () => {
         yield_time_ms: 8_000
       }
     });
-    const brokenText = textOf(broken);
+    let brokenText = textOf(broken);
+    const yieldedSession = brokenText.match(/Process running with session ID (\d+)/)?.[1];
+    if (yieldedSession) {
+      // A cold Windows/MXC command can legitimately consume the response budget before the
+      // second batch command exits. Yielding is production behavior, not a failed batch, so
+      // follow the managed session exactly as a client would instead of making this regression
+      // depend on hosted-runner startup speed.
+      for (let attempt = 0; attempt < 3 && !brokenText.includes('--- exit code 3 ---'); attempt++) {
+        const drained = await core('tools/call', {
+          name: 'write_stdin',
+          arguments: { session_id: Number(yieldedSession), yield_time_ms: 5_000 }
+        });
+        brokenText += `\n${textOf(drained)}`;
+      }
+    }
     expect(brokenText).toContain('--- exit code 3 ---');
     expect(brokenText).not.toContain('is a result, not a failure');
   }, 60_000);
