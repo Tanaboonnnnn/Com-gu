@@ -10,7 +10,7 @@ import { logError, logInfo, logWarn } from './logger.js';
 import { writePerfReadyMarker } from './perf-marker.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
-import { setBrowserOpener, shutdownBridge, startBridge } from './bridge.js';
+import { recoverDurableGoalRuns, setBrowserOpener, shutdownBridge, startBridge } from './bridge.js';
 import { flushSessions, initSessionStore, pruneSessions } from './session/store.js';
 import {
   flushRecorder,
@@ -366,6 +366,11 @@ void app.whenReady().then(async () => {
   setContinuationRecoveryHooks({
     repairPrimeTransfer: (from, to) => loadedDesktopAgentsModule()?.repairPrimeConversationAfterRecovery(from, to) ?? false
   });
+  // Durable Run control state is restored before Compact & Resume can deliver anything. An
+  // ambiguous Goal send therefore blocks redraft after restart instead of being mistaken for a
+  // fresh turn merely because the browser process disappeared.
+  await recoverDurableGoalRuns();
+  if (windowActivation.isDisabled()) return;
   const savedContinuations = await readDurable<ContinuationSnapshot>(CONTINUATIONS_STATE);
   if (windowActivation.isDisabled()) return;
   await restoreContinuations(savedContinuations);

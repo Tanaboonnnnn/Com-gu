@@ -91,3 +91,20 @@ it('restores waiting and reconciliation state after restart without inventing a 
     checkpoint: 'goal:turn-1:drafting'
   });
 });
+
+it('keeps one run across chat replacement when the stable local session remains the owner', async () => {
+  const memory = memoryPersistence();
+  const firstStore = createDurableRunStore(memory.persistence, { now: () => 6_000 });
+  const first = createGoalDurableRunController(firstStore);
+  const beforeMove = await first.observeDraft('session:stable-1', 'finish the release', draft('ready'));
+  await first.acknowledge('session:stable-1', 'goal-token-1', 'sent');
+
+  const restartedStore = createDurableRunStore(memory.persistence, { now: () => 7_000 });
+  const restarted = createGoalDurableRunController(restartedStore);
+  const recovered = await restarted.recover();
+  expect(recovered).toHaveLength(1);
+  expect(recovered[0]?.run).toMatchObject({ id: beforeMove?.id, owner: 'session:stable-1', state: 'waiting' });
+
+  const afterMove = await restarted.prepare('session:stable-1', 'finish the release', 'turn-after-chat-move');
+  expect(afterMove).toMatchObject({ id: beforeMove?.id, state: 'running', checkpoint: 'goal:turn-after-chat-move:drafting' });
+});

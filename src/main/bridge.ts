@@ -4462,3 +4462,8 @@ export function resetBridgeForTests(): void {
 export function bridgePort(): number | null {
   return port;
 }
+
+/** Loads compact Durable Run control state before any startup continuation can be attempted. */
+export async function recoverDurableGoalRuns() {
+  return goalDurableRuns.recover();
+}
