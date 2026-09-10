@@ -109,6 +109,13 @@ export async function startCliOwner(options: { profileDir: string }): Promise<vo
   initConfigPath(options.profileDir);
   await loadConfig();
   const vault = createCliCredentialVault(options.profileDir, machine);
+  if (process.platform === 'win32') {
+    const [{ configureComputerClipboard }, { createWindowsCliClipboard }] = await Promise.all([
+      import('../main/computer/index.js'),
+      import('../main/desktop/windows-clipboard.js')
+    ]);
+    configureComputerClipboard(createWindowsCliClipboard());
+  }
   configureConnectionRuntime({
     profile: 'cli',
     getApiKey: () => vault.get('openaiApiKey')

@@ -3,7 +3,7 @@
  */
 
 import path from 'node:path';
-import { app, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session } from 'electron';
+import { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, nativeTheme, screen, session } from 'electron';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
 import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
 import { logError, logInfo, logWarn } from './logger.js';
@@ -36,7 +36,7 @@ import {
 } from './agents.js';
 import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
-import { stopComputerHelper } from './computer/index.js';
+import { configureComputerClipboard, stopComputerHelper } from './computer/index.js';
 import { GOAL_OBJECTIVES_STATE, restoreGoalObjectives, type GoalObjectivesSnapshot } from './goal.js';
 import {
   CONTINUATIONS_STATE,
@@ -87,6 +87,10 @@ const desktopRuntime = createComGuRuntime(ACTIVE_RUNTIME_PROFILE, {
   status: connectionStatus,
   subscribe: onConnectionStatusChange,
   shutdown: shutdownConnection
+});
+configureComputerClipboard({
+  readText: () => clipboard.readText(),
+  writeText: (text) => clipboard.writeText(text)
 });
 
 let window: BrowserWindow | null = null;

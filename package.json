@@ -43,7 +43,9 @@
     "dist:dir:linux": "node scripts/package.mjs --platform linux --arch x64,arm64 --dir",
     "test:kill": "node scripts/kill-stray-vitest.mjs",
     "verify:security": "node scripts/verify-security-invariants.mjs",
-    "audit:prod": "npm audit --omit=dev --audit-level=high"
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "cli:build": "node scripts/build-cli.mjs",
+    "cli:smoke": "node scripts/smoke-cli.mjs"
   },
   "dependencies": {
     "@microsoft/mxc-sdk": "0.8.0",

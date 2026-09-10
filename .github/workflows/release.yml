@@ -234,9 +234,74 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  cli-package:
+    name: Package CLI ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            platform: win32
+            arch: x64
+            runner: windows-2025
+            file: release/ComGu-CLI-windows-x64.zip
+            artifact: cli-package-windows-x64
+          - name: Windows arm64
+            platform: win32
+            arch: arm64
+            runner: windows-11-arm
+            file: release/ComGu-CLI-windows-arm64.zip
+            artifact: cli-package-windows-arm64
+          - name: Linux x64
+            platform: linux
+            arch: x64
+            runner: ubuntu-24.04
+            file: release/ComGu-CLI-linux-x64.tar.gz
+            artifact: cli-package-linux-x64
+          - name: Linux arm64
+            platform: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            file: release/ComGu-CLI-linux-arm64.tar.gz
+            artifact: cli-package-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          architecture: ${{ matrix.arch }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify CLI packaging contract
+        run: npx vitest run test/packaging-cli.test.ts test/runtime-dependencies.test.ts test/windows-cli-clipboard.test.ts
+
+      - name: Prove native runner target
+        run: node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')throw new Error('Expected ${{ matrix.platform }}-${{ matrix.arch }}, got '+process.platform+'-'+process.arch)"
+
+      - name: Build CLI artifact
+        run: node scripts/build-cli.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
+
+      - name: Smoke CLI owner and admin channel
+        run: node scripts/smoke-cli.mjs --dir .cli-build/${{ matrix.platform }}-${{ matrix.arch }}/ComGu-CLI
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.file }}
+          if-no-files-found: error
+          retention-days: 30
+
   assemble:
     name: Assemble release candidate
-    needs: package
+    needs: [package, cli-package]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -247,6 +312,13 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: package-*
+          path: release
+          merge-multiple: true
+
+      - name: Download CLI packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: cli-package-*
           path: release
           merge-multiple: true
 
@@ -272,6 +344,10 @@ jobs:
             release/ComGu-Linux-x64.deb
             release/ComGu-Linux-arm64.AppImage
             release/ComGu-Linux-arm64.deb
+            release/ComGu-CLI-windows-x64.zip
+            release/ComGu-CLI-windows-arm64.zip
+            release/ComGu-CLI-linux-x64.tar.gz
+            release/ComGu-CLI-linux-arm64.tar.gz
             release/ComGu-Extension.zip
           )
           for file in "${files[@]}"; do test -f "$file" || { echo "Missing $file" >&2; exit 1; }; done
@@ -284,6 +360,10 @@ jobs:
             ComGu-Linux-x64.deb \
             ComGu-Linux-arm64.AppImage \
             ComGu-Linux-arm64.deb \
+            ComGu-CLI-windows-x64.zip \
+            ComGu-CLI-windows-arm64.zip \
+            ComGu-CLI-linux-x64.tar.gz \
+            ComGu-CLI-linux-arm64.tar.gz \
             ComGu-Extension.zip > SHA256SUMS.txt)
           cat release/SHA256SUMS.txt
 
@@ -302,6 +382,10 @@ jobs:
             release/ComGu-Linux-x64.deb
             release/ComGu-Linux-arm64.AppImage
             release/ComGu-Linux-arm64.deb
+            release/ComGu-CLI-windows-x64.zip
+            release/ComGu-CLI-windows-arm64.zip
+            release/ComGu-CLI-linux-x64.tar.gz
+            release/ComGu-CLI-linux-arm64.tar.gz
             release/ComGu-Extension.zip
             release/SHA256SUMS.txt
           if-no-files-found: error
