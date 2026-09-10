@@ -9,6 +9,7 @@ import { startMcpServer, type McpEndpoint } from '../src/main/mcp/server.js';
 import { validateNewRoot } from '../src/main/sandbox.js';
 import { initSessionStore, resetSessionStoreForTests, unsetSessionRootForTests } from '../src/main/session/store.js';
 import { unifiedExecManager } from '../src/main/codex/manager.js';
+import { removeTempDir } from './helpers.js';
 
 let dir = '';
 let endpoint: McpEndpoint | null = null;
@@ -21,7 +22,7 @@ afterEach(async () => {
   unsetSessionRootForTests();
   resetDurableForTests();
   resetChatWorkspaceScopesForTests();
-  if (dir) await fs.rm(dir, { recursive: true, force: true });
+  if (dir) await removeTempDir(dir);
   dir = '';
 });
 
