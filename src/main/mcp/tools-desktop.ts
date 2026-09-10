@@ -19,16 +19,11 @@ import {
   ComputerError,
   DEFAULT_SCREENSHOT_WIDTH,
   MAX_SCREENSHOT_WIDTH,
-  actAndCapture,
-  activeWindow,
-  findUi,
-  getWindowState,
-  listWindows,
-  screenshot,
-  waitForWindow,
   type Action,
   type VerificationSpec
 } from '../computer/index.js';
+import type { DesktopDriver } from '../desktop/driver.js';
+import { windowsDesktopDriver } from '../desktop/windows.js';
 import { logInfo } from '../logger.js';
 import { noteCount, noteDetail } from './call-context.js';
 import {
@@ -108,7 +103,7 @@ const verificationArg = z
   })
   .strict();
 
-export function registerDesktopTools(reg: SurfaceRegistrar): void {
+export function registerDesktopTools(reg: SurfaceRegistrar, driver: DesktopDriver = windowsDesktopDriver()): void {
   const { ctx, caps, exposedCaps } = reg;
 
   // ---------------------------------------------------------------- observe
@@ -181,11 +176,12 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           let target = input.window;
           let waited: string | null = null;
           if (input.wait_for) {
-            const found = await waitForWindow({
+            const found = (await driver.observe({
+              kind: 'wait-window',
               title: input.wait_for,
               foreground: false,
               timeoutMs: input.timeout_ms
-            });
+            })).window;
             target = found.id;
             waited = `Found "${found.title}" (${found.process}) as window ${found.id}.`;
           }
@@ -193,7 +189,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           const what = input.wait_for ? (input.what ?? 'window') : (input.what ?? 'active');
 
           if (what === 'windows') {
-            const { windows, screen } = await listWindows();
+            const { windows, screen } = await driver.observe({ kind: 'windows' });
             const needle = input.match?.toLowerCase() ?? null;
             const matching = needle
               ? windows.filter(
@@ -220,7 +216,12 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           }
 
           if (what === 'ui' && input.match) {
-            const result = await findUi({ window: target, query: input.match, maxResults: input.max_elements });
+            const result = await driver.observe({
+              kind: 'ui',
+              window: target,
+              query: input.match,
+              maxResults: input.max_elements
+            });
             noteCount(result.elements.length);
             if (result.elements.length === 0) {
               return ok(prefix(waited, `No controls in window ${result.window} match "${input.match}".`));
@@ -238,15 +239,16 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           // A bare "what is on screen right now" with no window at all: cheapest possible
           // answer, and the only one that still works when there is no foreground window.
           if (what === 'active' && target === undefined && input.screenshot === false) {
-            const { window, screen } = await activeWindow();
+            const { window, screen } = await driver.observe({ kind: 'active' });
             if (!window) return ok(prefix(waited, `Desktop ${screen.width}x${screen.height}\nNo foreground window.`));
             return ok(prefix(waited, describeWindow(window)));
           }
 
           const wantsShot = what === 'ui' ? false : input.screenshot !== false;
-          let state: Awaited<ReturnType<typeof getWindowState>>;
+          let state: Extract<Awaited<ReturnType<DesktopDriver['observe']>>, { kind: 'state' }>;
           try {
-            state = await getWindowState({
+            state = await driver.observe({
+              kind: 'state',
               window: target,
               maxWidth: input.max_width,
               maxElements: input.max_elements,
@@ -264,7 +266,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
             ) {
               throw err;
             }
-            const shot = await screenshot({ maxWidth: input.max_width });
+            const shot = (await driver.observe({ kind: 'screenshot', maxWidth: input.max_width })).screenshot;
             return {
               content: [
                 {
@@ -485,7 +487,8 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
             : undefined;
           // One lock, one operation: the picture that verifies these actions must be taken
           // before anyone else can touch the desktop.
-          const result = await actAndCapture(parsed, {
+          const result = await driver.act({
+            actions: parsed,
             frameId,
             verify: parsedVerify,
             capture:
