@@ -44,6 +44,8 @@ import {
   resetAgentsForTests,
   spawnWithWorkspaceScope
 } from '../src/main/agents.js';
+import { installOptionalAgentsRuntime } from '../src/main/mcp/optional-runtime.js';
+import * as agentsRuntime from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
 import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
 
@@ -425,6 +427,11 @@ describe('active Run file authority', () => {
         deleteFile: true,
         command: false
       });
+      // Production startup loads the Agents RuntimeFeature before connecting MCP whenever
+      // multi-agent is enabled. This fixture imports the broker directly to construct worker
+      // state, so install the same optional MCP adapter explicitly instead of relying on the
+      // retired eager import from startMcpServer().
+      installOptionalAgentsRuntime(agentsRuntime);
       if (endpoint) await endpoint.stop();
       endpoint = await startMcpServer(() => ctx);
 
