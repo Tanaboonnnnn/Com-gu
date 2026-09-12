@@ -142,3 +142,75 @@ it('does not publish a feature whose start finishes after shutdown begins', asyn
   expect(events).toEqual(['start', 'stop']);
   expect(await loader.ensure('agents')).toBeNull();
 });
+
+it('retries a feature after start rejects and shares one in-flight attempt per try', async () => {
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  let factories = 0;
+  let starts = 0;
+  let stops = 0;
+  const loader = createRuntimeFeatureLoader(runtimeProfile('desktop-app'), {
+    agents: async () => {
+      factories += 1;
+      const attempt = factories;
+      return {
+        async start() {
+          starts += 1;
+          if (attempt === 1) {
+            firstStarted.resolve();
+            await releaseFirst.promise;
+            throw new Error('transient agents startup failure');
+          }
+        },
+        async stop() { stops += 1; }
+      };
+    }
+  });
+
+  const firstA = loader.ensure('agents');
+  const firstB = loader.ensure('agents');
+  await firstStarted.promise;
+  expect(factories).toBe(1);
+  expect(starts).toBe(1);
+  releaseFirst.resolve();
+  await expect(firstA).rejects.toThrow(/transient agents startup failure/i);
+  await expect(firstB).rejects.toThrow(/transient agents startup failure/i);
+  expect(stops).toBe(1);
+
+  const secondA = loader.ensure('agents');
+  const secondB = loader.ensure('agents');
+  const [loadedA, loadedB] = await Promise.all([secondA, secondB]);
+  expect(loadedA).toBe(loadedB);
+  expect(factories).toBe(2);
+  expect(starts).toBe(2);
+});
+
+it('fully stops features sequentially in reverse load order', async () => {
+  const agentsStopEntered = deferred();
+  const releaseAgentsStop = deferred();
+  const events: string[] = [];
+  const loader = createRuntimeFeatureLoader(runtimeProfile('desktop-app'), {
+    goal: async () => ({
+      async start() {},
+      async stop() { events.push('goal:stop'); }
+    }),
+    agents: async () => ({
+      async start() {},
+      async stop() {
+        events.push('agents:stop:start');
+        agentsStopEntered.resolve();
+        await releaseAgentsStop.promise;
+        events.push('agents:stop:end');
+      }
+    })
+  });
+
+  await loader.ensure('goal');
+  await loader.ensure('agents');
+  const stopping = loader.stopAll();
+  await agentsStopEntered.promise;
+  expect(events).toEqual(['agents:stop:start']);
+  releaseAgentsStop.resolve();
+  await stopping;
+  expect(events).toEqual(['agents:stop:start', 'agents:stop:end', 'goal:stop']);
+});

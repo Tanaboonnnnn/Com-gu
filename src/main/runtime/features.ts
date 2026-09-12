@@ -52,21 +52,27 @@ export function createRuntimeFeatureLoader(
       if (pending) return pending;
       const factory = factories[kind];
       if (!factory) return null;
-      const promise = factory().then(async (feature) => {
-        await feature.start();
-        if (stopping) {
-          await feature.stop();
+      const promise = (async (): Promise<RuntimeFeature | null> => {
+        let feature: RuntimeFeature | null = null;
+        let published = false;
+        try {
+          feature = await factory();
+          await feature.start();
+          if (stopping) {
+            await feature.stop().catch(() => undefined);
+            return null;
+          }
+          loaded.set(kind, feature);
+          order.push(kind);
+          published = true;
+          return feature;
+        } catch (error) {
+          if (feature && !published) await feature.stop().catch(() => undefined);
+          throw error;
+        } finally {
           loading.delete(kind);
-          return null;
         }
-        loaded.set(kind, feature);
-        order.push(kind);
-        loading.delete(kind);
-        return feature;
-      }, (error) => {
-        loading.delete(kind);
-        throw error;
-      });
+      })();
       loading.set(kind, promise);
       return promise;
     },
@@ -78,13 +84,15 @@ export function createRuntimeFeatureLoader(
           await Promise.allSettled([...loading.values()]);
           const kinds = [...order].reverse();
           order.length = 0;
-          await Promise.allSettled(
-            kinds.map(async (kind) => {
-              const feature = loaded.get(kind);
-              loaded.delete(kind);
+          for (const kind of kinds) {
+            const feature = loaded.get(kind);
+            loaded.delete(kind);
+            try {
               await feature?.stop();
-            })
-          );
+            } catch {
+              // Best-effort teardown must continue through the remaining dependency order.
+            }
+          }
           loading.clear();
           loaded.clear();
         })();

@@ -13,6 +13,8 @@ interface OptionalMcpRuntime {
   registerSessionTool: ((reg: SurfaceRegistrar) => void) | null;
 }
 
+type OptionalMcpBaseRuntime = Omit<OptionalMcpRuntime, 'agents'>;
+
 let runtime: OptionalMcpRuntime = {
   agents: null,
   recorder: null,
@@ -26,8 +28,16 @@ let runtime: OptionalMcpRuntime = {
  * deliberately leaves this seam empty: Core continues to work, but no browser-dependent state
  * exists and no import of those implementations is required merely to serve files/commands.
  */
-export function installOptionalMcpRuntime(next: OptionalMcpRuntime): void {
-  runtime = next;
+export function installOptionalMcpBaseRuntime(next: OptionalMcpBaseRuntime): void {
+  runtime = { ...runtime, ...next };
+}
+
+export function installOptionalAgentsRuntime(agents: AgentsModule | null): void {
+  runtime.agents = agents;
+}
+
+export function optionalAgentsRuntimeInstalled(): boolean {
+  return runtime.agents !== null;
 }
 
 export function resetOptionalMcpRuntime(): void {

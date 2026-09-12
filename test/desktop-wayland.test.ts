@@ -88,4 +88,28 @@ describe('Wayland portal DesktopDriver', () => {
     await expect(driver.act({ actions: [{ type: 'drag', path: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }] })).rejects.toThrow();
     expect(portal.button).toHaveBeenCalledWith('left', false);
   });
+
+  it('releases already-pressed Wayland keys when a later key-down fails', async () => {
+    const calls: Array<[number, boolean]> = [];
+    const portal = session({
+      keysym: vi.fn(async (sym: number, pressed: boolean) => {
+        calls.push([sym, pressed]);
+        if (pressed && sym === 0x4c) throw new Error('portal key-down failed');
+      })
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    await expect(driver.act({ actions: [{ type: 'keypress', keys: ['CTRL', 'L'] }] })).rejects.toThrow(/key-down failed/i);
+    expect(calls).toContainEqual([0xffe3, false]);
+  });
+
+  it('preserves the original Wayland keypress error when cleanup also fails', async () => {
+    const portal = session({
+      keysym: vi.fn(async (sym: number, pressed: boolean) => {
+        if (pressed && sym === 0x4c) throw new Error('original key-down failure');
+        if (!pressed && sym === 0xffe3) throw new Error('cleanup key-up failure');
+      })
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    await expect(driver.act({ actions: [{ type: 'keypress', keys: ['CTRL', 'L'] }] })).rejects.toThrow(/original key-down failure/i);
+  });
 });

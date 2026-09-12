@@ -85,8 +85,15 @@ function evdevButton(button: 'left' | 'middle' | 'right'): number {
 
 export async function createPortalWaylandSession(options: {
   transport: PortalTransport;
-  screenshotSupported: boolean;
+  /**
+   * Legacy Screenshot-portal availability. It is intentionally not sufficient for capture:
+   * Screenshot.Screenshot is a different coordinate authority from the selected ScreenCast
+   * stream used by RemoteDesktop absolute pointer input.
+   */
+  screenshotSupported?: boolean;
   screenshotTargetSupported?: boolean;
+  /** Capture bytes from the exact selected ScreenCast stream. */
+  captureSelectedStream?: (streamId: number, width: number, height: number) => Promise<Buffer>;
 }): Promise<WaylandPortalSession> {
   const create = await options.transport.request(
     'org.freedesktop.portal.RemoteDesktop.CreateSession',
@@ -128,7 +135,7 @@ export async function createPortalWaylandSession(options: {
 
   const grants = () => ({
     active,
-    capture: active && options.screenshotSupported,
+    capture: active && stream !== null && Boolean(options.captureSelectedStream),
     pointer: active && Boolean(devices & 2) && stream !== null,
     keyboard: active && Boolean(devices & 1),
     // The Clipboard portal transfers bytes over Unix file descriptors. The gdbus CLI transport
@@ -147,23 +154,10 @@ export async function createPortalWaylandSession(options: {
     grants,
     async screenshot() {
       assertActive();
-      if (!options.screenshotSupported || !options.transport.readUri) {
-        throw new Error('Wayland screenshot portal is unavailable');
+      if (!stream || !options.captureSelectedStream) {
+        throw new Error('Wayland same-stream capture is unavailable; refusing an unproven screenshot/input coordinate mapping');
       }
-      const response = await options.transport.request(
-        'org.freedesktop.portal.Screenshot.Screenshot',
-        [
-          "''",
-          requestOptions(
-            token('comgu_screenshot'),
-            options.screenshotTargetSupported
-              ? "'interactive': <false>, 'modal': <false>, 'target': <uint32 1>"
-              : "'interactive': <false>, 'modal': <false>"
-          )
-        ]
-      );
-      if (response.code !== 0 || !response.uri) throw new Error('Wayland screenshot permission was denied');
-      return options.transport.readUri(response.uri);
+      return options.captureSelectedStream(stream.id, stream.width, stream.height);
     },
     async move(x, y) {
       assertActive();
@@ -424,20 +418,17 @@ export async function createGdbusWaylandPortalSession(
 ): Promise<WaylandPortalSession> {
   const transport = createGdbusPortalTransport(env);
   try {
-    const [remoteDesktop, screenCast, screenshot] = await Promise.all([
+    const [remoteDesktop, screenCast] = await Promise.all([
       transport.call('org.freedesktop.DBus.Properties.Get', [quoted('org.freedesktop.portal.RemoteDesktop'), quoted('version')]),
-      transport.call('org.freedesktop.DBus.Properties.Get', [quoted('org.freedesktop.portal.ScreenCast'), quoted('version')]),
-      transport.call('org.freedesktop.DBus.Properties.Get', [quoted('org.freedesktop.portal.Screenshot'), quoted('version')]).catch(() => '')
+      transport.call('org.freedesktop.DBus.Properties.Get', [quoted('org.freedesktop.portal.ScreenCast'), quoted('version')])
     ]);
     if (parsePortalVersion(remoteDesktop) < 1 || parsePortalVersion(screenCast) < 1) {
       throw new Error('Wayland RemoteDesktop/ScreenCast portal is unavailable');
     }
-    const screenshotVersion = parsePortalVersion(screenshot);
-    return await createPortalWaylandSession({
-      transport,
-      screenshotSupported: screenshotVersion >= 1,
-      screenshotTargetSupported: screenshotVersion >= 3
-    });
+    // The gdbus CLI transport cannot receive the PipeWire file descriptor returned by
+    // ScreenCast.OpenPipeWireRemote. Until a same-stream capture adapter exists, capture stays
+    // fail-closed rather than mixing Screenshot-portal pixels with RemoteDesktop coordinates.
+    return await createPortalWaylandSession({ transport });
   } catch (error) {
     await transport.close();
     throw error;

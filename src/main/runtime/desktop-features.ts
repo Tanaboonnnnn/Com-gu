@@ -3,6 +3,7 @@ import {
   installBridgeGoalRuntime
 } from '../bridge-optional-runtime.js';
 import { writeDurableNow, writeDurableSoon } from '../durable.js';
+import { installOptionalAgentsRuntime } from '../mcp/optional-runtime.js';
 import type { RuntimeFeatureFactories } from './features.js';
 
 export type DesktopAgentsModule = typeof import('../agents.js');
@@ -18,6 +19,7 @@ async function loadAgents(): Promise<DesktopAgentsModule> {
   const loaded = await import('../agents.js');
   agentsModule = loaded;
   installBridgeAgentsRuntime(loaded);
+  installOptionalAgentsRuntime(loaded);
   // Persistence belongs to the feature adapter, not whichever UI happened to enable it. This
   // keeps a mid-process Settings enable just as durable as an app-start restore.
   loaded.onSwarmPersist(() => writeDurableSoon(SWARM_STATE, loaded.snapshotSwarm()));
@@ -57,6 +59,7 @@ export function desktopFeatureFactories(): RuntimeFeatureFactories {
       },
       async stop() {
         installBridgeAgentsRuntime(null);
+        installOptionalAgentsRuntime(null);
         agentsModule = null;
       }
     })
@@ -82,6 +85,7 @@ export function loadedDesktopAgentsModule(): DesktopAgentsModule | null {
 export function resetDesktopFeaturesForTests(): void {
   installBridgeGoalRuntime(null);
   installBridgeAgentsRuntime(null);
+  installOptionalAgentsRuntime(null);
   goalModule = null;
   agentsModule = null;
 }

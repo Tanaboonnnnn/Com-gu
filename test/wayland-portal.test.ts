@@ -29,7 +29,7 @@ describe('Wayland portal transport parsing', () => {
 });
 
 describe('Wayland portal session negotiation', () => {
-  it('publishes only grants returned by RemoteDesktop.Start and closes on portal revocation', async () => {
+  it('does not advertise capture from the independent Screenshot portal as RemoteDesktop-stream pixels', async () => {
     const closedHandlers: Array<() => void> = [];
     const request = vi
       .fn<PortalTransport['request']>()
@@ -53,7 +53,7 @@ describe('Wayland portal session negotiation', () => {
     const session = await createPortalWaylandSession({ transport, screenshotSupported: true });
     expect(session.grants()).toEqual({
       active: true,
-      capture: true,
+      capture: false,
       pointer: true,
       keyboard: false,
       clipboardRead: false,
@@ -61,11 +61,33 @@ describe('Wayland portal session negotiation', () => {
       width: 1920,
       height: 1080
     });
+    await expect(session.screenshot()).rejects.toThrow(/same.*stream|capture.*unavailable/i);
 
     closedHandlers[0]?.();
     expect(session.grants().active).toBe(false);
     await session.close();
     expect(transport.close).toHaveBeenCalled();
+  });
+
+  it('advertises capture only when bytes come from the selected ScreenCast stream', async () => {
+    const request = vi
+      .fn<PortalTransport['request']>()
+      .mockResolvedValueOnce({ code: 0, sessionHandle: '/session/comgu', devices: null, clipboardEnabled: null, stream: null, uri: null })
+      .mockResolvedValueOnce({ code: 0, sessionHandle: null, devices: null, clipboardEnabled: null, stream: null, uri: null })
+      .mockResolvedValueOnce({ code: 0, sessionHandle: null, devices: null, clipboardEnabled: null, stream: null, uri: null })
+      .mockResolvedValueOnce({ code: 0, sessionHandle: null, devices: 2, clipboardEnabled: false, stream: { id: 77, width: 1920, height: 1080 }, uri: null });
+    const captureSelectedStream = vi.fn(async (_id: number, _width: number, _height: number) => Buffer.from('frame'));
+    const transport: PortalTransport = {
+      request,
+      call: vi.fn(async () => ''),
+      onSessionClosed: () => () => {},
+      close: vi.fn(async () => undefined)
+    };
+
+    const session = await createPortalWaylandSession({ transport, captureSelectedStream });
+    expect(session.grants().capture).toBe(true);
+    expect(await session.screenshot()).toEqual(Buffer.from('frame'));
+    expect(captureSelectedStream).toHaveBeenCalledWith(77, 1920, 1080);
   });
 
   it('uses only portal Notify methods for input and never shells out to synthetic Wayland input', async () => {

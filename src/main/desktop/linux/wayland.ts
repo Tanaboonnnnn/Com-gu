@@ -34,6 +34,30 @@ const NAMED_KEYSYM: Record<string, number> = {
 export function createWaylandDesktopDriver(portal: WaylandPortalSession): DesktopDriver {
   let frame = 0;
   let lastScale = 1;
+
+  const sendKeySequence = async (syms: number[]): Promise<void> => {
+    const pressed: number[] = [];
+    let primaryError: unknown = null;
+    try {
+      for (const sym of syms) {
+        await portal.keysym(sym, true);
+        pressed.push(sym);
+      }
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally {
+      let cleanupError: unknown = null;
+      for (const sym of [...pressed].reverse()) {
+        try {
+          await portal.keysym(sym, false);
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+      if (!primaryError && cleanupError) throw cleanupError;
+    }
+  };
   const requireActive = (): WaylandPortalGrants => {
     const grants = portal.grants();
     if (!grants.active) fail('Wayland portal session is closed or permission was revoked.');
@@ -99,9 +123,9 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
         }
         return 'sendinput';
       }
-      case 'type': if (!g.keyboard) fail('Wayland keyboard permission was not granted by the portal.'); for (const ch of action.text) { const sym = keySym(ch); await portal.keysym(sym, true); await portal.keysym(sym, false); } return 'sendinput';
+      case 'type': if (!g.keyboard) fail('Wayland keyboard permission was not granted by the portal.'); for (const ch of action.text) await sendKeySequence([keySym(ch)]); return 'sendinput';
       case 'keypress': {
-        if (!g.keyboard) fail('Wayland keyboard permission was not granted by the portal.'); const syms = action.keys.map((key) => NAMED_KEYSYM[key.toLowerCase()] ?? keySym(key)); for (const sym of syms) await portal.keysym(sym, true); for (const sym of [...syms].reverse()) await portal.keysym(sym, false); return 'sendinput';
+        if (!g.keyboard) fail('Wayland keyboard permission was not granted by the portal.'); const syms = action.keys.map((key) => NAMED_KEYSYM[key.toLowerCase()] ?? keySym(key)); await sendKeySequence(syms); return 'sendinput';
       }
       case 'wait': await new Promise((resolve) => setTimeout(resolve, action.ms ?? 100)); return 'local';
       case 'read_clipboard': if (!g.clipboardRead) fail('Wayland clipboard read permission was not granted by the portal.'); clipboard.push(await portal.readClipboard()); return 'local';
