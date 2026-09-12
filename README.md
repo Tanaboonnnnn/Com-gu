@@ -83,6 +83,15 @@ Goal loop เป็นฟีเจอร์ optional ที่ใช้โมเ
 
 ฟีเจอร์นี้ต้องใช้ OpenRouter API key และมีค่าใช้จ่ายตาม provider/model ที่เลือก
 
+### Durable long-running goals
+
+Specific goals use a **Durable Run** control record. The run survives ComGu restarts and
+Compact & Resume chat replacement by following the stable local session identity rather than a
+single browser tab. ComGu checkpoints control state before exposing a continuation to the browser.
+If a user-message send may have happened but its acknowledgement is lost, the run enters
+`needs-reconciliation`; ComGu does not draft or replay another mutation until the existing outcome
+is proven. This is recoverable orchestration, not one HTTP/model request kept open for hours.
+
 ## Multi-agent
 
 Prime chat สามารถ spawn worker chats, ส่งข้อความหา worker และรับผลกลับผ่าน local broker ได้ Worker แต่ละตัวมี conversation identity ของตัวเองและไม่สามารถคุยกันเองโดยตรง

@@ -13,9 +13,9 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } fr
 import { z } from 'zod';
 import { BROWSER_FAMILIES, CAPABILITIES, GOAL_REASONING_LEVELS, type AppState, type Config } from '../shared/types.js';
 import { MAX_GOAL_SYSTEM_PROMPT_CHARS } from '../shared/goal.js';
+import type { SwarmState } from '../shared/session.js';
 import { applySettings, connect, disconnect, getStatus, onStatusChange } from './connection.js';
 import { getConfig, updateConfig } from './config.js';
-import { listGoalModels, MODEL_PAGE_SIZE, retireGoalDrafts } from './goal.js';
 import { forgetExposedSurface } from './mcp/server.js';
 import { runDiagnostics } from './diagnostics.js';
 import { formatLogAsJson, formatLogForClipboard, getLog, logInfo, onLog } from './logger.js';
@@ -52,15 +52,6 @@ import {
   readHandoff
 } from './session/store.js';
 import { activeSessionId, forgetSession, onSessionChange } from './session/recorder.js';
-import {
-  clearAgent,
-  onSwarmChange,
-  pauseSwarmForDisable,
-  persistAgentAuthorityNow,
-  resetSwarm,
-  setNextRunWorkspaceScope,
-  swarmState
-} from './agents.js';
 import { tokenPressure } from '../shared/session.js';
 import { forgetWorkspaceRoot, renameWorkspaceRoot } from './workspace.js';
 import { hostPlatformInfo } from './platform.js';
@@ -82,6 +73,29 @@ import {
   setManualWorkspaceScope
 } from './chat-workspace-scope.js';
 import { recoverSystem } from './recovery.js';
+import {
+  ensureDesktopAgentsModule,
+  ensureDesktopGoalModule,
+  loadedDesktopAgentsModule,
+  loadedDesktopGoalModule
+} from './runtime/desktop-features.js';
+
+const MODEL_PAGE_SIZE = 20;
+
+function unloadedSwarmState(): SwarmState {
+  return {
+    enabled: false,
+    running: false,
+    runId: null,
+    workspaceScope: null,
+    selectedWorkspaceScope: null,
+    agents: []
+  };
+}
+
+function currentSwarmState(): SwarmState {
+  return loadedDesktopAgentsModule()?.swarmState() ?? unloadedSwarmState();
+}
 
 type UpdateUiState =
   | { status: 'idle' | 'checking' | 'unsupported'; currentVersion: string }
@@ -335,7 +349,7 @@ async function buildState(): Promise<AppState> {
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
     bridge,
-    systemHealth: projectSystemHealth({ connection: status, bridge, swarm: swarmState() }),
+    systemHealth: projectSystemHealth({ connection: status, bridge, swarm: currentSwarmState() }),
     commandSandbox: commandSandboxRuntimeStatus()
   };
 }
@@ -368,6 +382,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const target = getWindow();
     if (!target || target.isDestroyed()) return;
     target.webContents.send(channel, ...args);
+  };
+
+  let swarmListenerInstalled = false;
+  const ensureAgentsForIpc = async () => {
+    const agents = await ensureDesktopAgentsModule();
+    if (!swarmListenerInstalled) {
+      swarmListenerInstalled = true;
+      agents.onSwarmChange(() => push('swarm:changed', agents.swarmState()));
+    }
+    return agents;
   };
 
   const currentVersion = app.getVersion();
@@ -483,7 +507,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       before.goal.prompt !== next.goal.prompt ||
       before.goal.objectivePrompt !== next.goal.objectivePrompt
     ) {
-      retireGoalDrafts();
+      const goal = next.goal.enabled ? await ensureDesktopGoalModule() : loadedDesktopGoalModule();
+      goal?.retireGoalDrafts();
     }
     // Switching multi-agent mode off has to be able to remove the `agents` tool from the
     // schemas, and the exposed surface only ever widens by default. So the latch is
@@ -495,13 +520,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     // commands has to happen while the bridge can still cancel those transports; stopping the
     // bridge first left queued worker/revival commands behind for a later restart to deliver.
     let authorityPersistError: Error | null = null;
+    const agents = next.multiAgent.enabled ? await ensureAgentsForIpc() : loadedDesktopAgentsModule();
     if (!next.multiAgent.enabled) {
       // Off pauses execution; it is not the destructive Clear swarm action. Preserve every
       // prime-owned worker history so re-enable/restart can still show and revive exact chats.
-      pauseSwarmForDisable();
+      agents?.pauseSwarmForDisable();
       cancelWorkerCommands('multi-agent mode was turned off');
       try {
-        if (!(await persistAgentAuthorityNow())) {
+        if (agents && !(await agents.persistAgentAuthorityNow())) {
           throw new Error('Multi-agent teardown has no immediate durable persistence sink.');
         }
       } catch (error) {
@@ -600,7 +626,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       throw new Error('Secure OS credential storage is unavailable, so the key cannot be stored safely.');
     }
     await setSecret(key, value);
-    if (key === 'openRouterApiKey') retireGoalDrafts();
+    if (key === 'openRouterApiKey') loadedDesktopGoalModule()?.retireGoalDrafts();
     const what = key === 'openRouterApiKey' ? 'openrouter key' : 'api key';
     logInfo(value.trim() === '' ? `${what} cleared` : `${what} stored`);
     return buildState();
@@ -625,7 +651,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    */
   handle('goal:models', async (payload) => {
     const { offset } = z.object({ offset: z.number().int().min(0).max(2000).default(0) }).parse(payload ?? {});
-    return listGoalModels(offset, MODEL_PAGE_SIZE);
+    const goal = await ensureDesktopGoalModule();
+    return goal.listGoalModels(offset, MODEL_PAGE_SIZE);
   });
 
   handle('binary:pick', async () => {
@@ -834,18 +861,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return pendingWorkspaceView();
   });
 
-  handle('swarm:get', async () => swarmState());
+  handle('swarm:get', async () => currentSwarmState());
   handle('swarm:setWorkspaceScope', async (payload) => {
     const selection = workspaceScopeSelection.parse(payload);
-    setNextRunWorkspaceScope(selection);
-    return swarmState();
+    const agents = await ensureAgentsForIpc();
+    agents.setNextRunWorkspaceScope(selection);
+    return agents.swarmState();
   });
   handle('swarm:reset', async () => {
-    resetSwarm();
-    if (!(await persistAgentAuthorityNow())) {
+    const agents = await ensureAgentsForIpc();
+    agents.resetSwarm();
+    if (!(await agents.persistAgentAuthorityNow())) {
       throw new Error('The cleared run could not be made durable. Retry clearing the swarm.');
     }
-    return swarmState();
+    return agents.swarmState();
   });
   /**
    * Clearing one row in the app: the prime ends the run, a worker frees its own slot.
@@ -858,16 +887,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    */
   handle('swarm:clearAgent', async (payload) => {
     const id = agentIdArg.parse(payload);
-    const outcome = clearAgent(id);
+    const agents = await ensureAgentsForIpc();
+    const outcome = agents.clearAgent(id);
     if (outcome.cleared !== 'none') {
-      if (!(await persistAgentAuthorityNow())) {
+      if (!(await agents.persistAgentAuthorityNow())) {
         throw new Error('The agent clear could not be made durable. Retry the clear action.');
       }
       if (outcome.cleared === 'worker') cancelWorkerCommands(outcome.reason, id);
     }
     // The prime's report stays in the main process: the renderer needs the outcome, not
     // the message queued for the prime agent.
-    return { cleared: outcome.cleared, reason: outcome.reason, swarm: swarmState() };
+    return { cleared: outcome.cleared, reason: outcome.reason, swarm: agents.swarmState() };
   });
 
   // Explicit maintenance only: this is the sole renderer path that may request UAC for MXC
@@ -905,7 +935,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   onBridgeChange(pushState);
   onLog((entry) => push('log:entry', entry));
   onSessionChange(() => push('session:changed'));
-  onSwarmChange(() => push('swarm:changed', swarmState()));
+  const loadedAgents = loadedDesktopAgentsModule();
+  if (loadedAgents && !swarmListenerInstalled) {
+    swarmListenerInstalled = true;
+    loadedAgents.onSwarmChange(() => push('swarm:changed', loadedAgents.swarmState()));
+  }
   onChatWorkspaceScopeChange(() =>
     push('chatWorkspace:changed', {
       roots: getConfig().roots.map((root) => root.name),

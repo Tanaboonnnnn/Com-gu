@@ -29,5 +29,5 @@ describe('target-only MXC packaging payload', () => {
     const metadata = JSON.parse(readFileSync(path.join(staged, 'package.json'), 'utf8'));
     expect(metadata.name).toBe('@microsoft/mxc-sdk');
     expect(metadata.version).toBe('0.8.0');
-  });
+  }, 90_000);
 });

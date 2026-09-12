@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pathEntries } from '../src/main/env.js';
@@ -16,7 +17,8 @@ import {
   prepareShellCommand,
   runCommand,
   runPowerShell,
-  terminateProcessTree
+  terminateProcessTree,
+  windowsDescendantsDeepestFirst
 } from '../src/main/exec.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir } from './helpers.js';
 
@@ -32,6 +34,18 @@ afterAll(async () => {
 });
 
 describe('runCommand', () => {
+  it('orders a snapshotted Windows process tree deepest-first for fallback termination', () => {
+    expect(
+      windowsDescendantsDeepestFirst(10, [
+        { processId: 11, parentProcessId: 10 },
+        { processId: 12, parentProcessId: 10 },
+        { processId: 13, parentProcessId: 11 },
+        { processId: 14, parentProcessId: 13 },
+        { processId: 99, parentProcessId: 42 }
+      ])
+    ).toEqual([14, 13, 11, 12]);
+  });
+
   it('runs an executable and captures stdout and the exit code', async () => {
     const result = await runCommand(node, ['-e', 'console.log("hello")'], cwd, 10_000);
     expect(result.exitCode).toBe(0);
@@ -96,6 +110,53 @@ describe('runCommand', () => {
     } finally {
       if (Number.isInteger(grandchildPid) && grandchildPid > 0) {
         await terminateProcessTree(grandchildPid, true).catch(() => undefined);
+      }
+    }
+  });
+
+  it.runIf(IS_WINDOWS)('kills Windows descendants even when taskkill times out under a wide process tree', async () => {
+    const pidFile = path.join(cwd, 'short-taskkill-grandchildren.json');
+    const grandchild = `setInterval(() => {}, 1000);`;
+    const parent = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const ids=[]; for(let i=0;i<48;i++){ const child=spawn(${JSON.stringify(node)}, ['-e', ${JSON.stringify(grandchild)}], {stdio:'ignore'}); ids.push(child.pid); } fs.writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify(ids)); setInterval(() => {}, 1000);`;
+    const child = spawn(node, ['-e', parent], { cwd, stdio: 'ignore', windowsHide: true });
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      try {
+        await fs.access(pidFile);
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    const grandchildPids = JSON.parse(await fs.readFile(pidFile, 'utf8')) as number[];
+    try {
+      await terminateProcessTree(child.pid!, true, 50);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const survivors = grandchildPids.filter((pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      expect(survivors).toEqual([]);
+    } finally {
+      for (const grandchildPid of grandchildPids) {
+        if (Number.isInteger(grandchildPid) && grandchildPid > 0) {
+          try {
+            process.kill(grandchildPid, 'SIGKILL');
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+      if (child.pid) {
+        try {
+          process.kill(child.pid, 'SIGKILL');
+        } catch {
+          /* already gone */
+        }
       }
     }
   });
@@ -198,7 +259,10 @@ describe('runCommand', () => {
     const result = await launchCommand(shell!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], cwd);
     expect(result.pid).toBeGreaterThan(0);
 
-    const deadline = Date.now() + 3000;
+    // A saturated Windows CI host can take several seconds to schedule the detached PowerShell
+    // child even after CreateProcess has returned a pid. This test proves eventual execution,
+    // not a launch-latency SLA; keep enough headroom for the full parallel verification suite.
+    const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const text = await fs.readFile(marker, 'utf8').catch(() => '');
       if (text === 'launched') return;

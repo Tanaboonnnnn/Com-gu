@@ -25,7 +25,10 @@ import { localhostHostValidation, localhostOriginValidation, toNodeHandler } fro
 import { getConfig } from '../config.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 import { buildServer, resetToolClock, type ToolContext } from './tools.js';
-import { SURFACE_IDS, surfaceDefinition, type SurfaceId } from './surfaces.js';
+import { SURFACE_IDS, surfaceDefinition, surfaceIsUseful, type SurfaceId } from './surfaces.js';
+import type { MachineIdentity } from '../machine/profile.js';
+import type { RuntimeProfileName } from '../runtime/profile.js';
+import type { DesktopDriver } from '../desktop/driver.js';
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -57,7 +60,7 @@ export interface McpEndpoint {
   stop: (options?: { forceAfterMs?: number }) => Promise<void>;
 }
 
-/** RFC 9728 §3.1: the metadata for a resource at /x lives at /.well-known/…/x. */
+/** RFC 9728 ยง3.1: the metadata for a resource at /x lives at /.well-known/โ€ฆ/x. */
 const PRM_PREFIX = '/.well-known/oauth-protected-resource';
 
 function safeEqual(a: string, b: string): boolean {
@@ -139,8 +142,8 @@ function readBoundedJsonBody(
 /**
  * RFC 9728 protected resource metadata.
  *
- * This server is not protected by OAuth — the unguessable path token is what
- * authorises a caller — so the document names the resource and lists no
+ * This server is not protected by OAuth โ€” the unguessable path token is what
+ * authorises a caller โ€” so the document names the resource and lists no
  * authorization server. That is the truthful "no OAuth here" answer, and it is what
  * stops a client from either failing discovery or trying to start an OAuth flow.
  *
@@ -240,22 +243,41 @@ function exposureFor(surface: SurfaceId): SurfaceExposure {
  * settings as they stand now.
  *
  * The monotonic rule above is about not deleting a tool from under a *cached* snapshot, and
- * that is the right default — but it made switching multi-agent mode off a decision the app
+ * that is the right default โ€” but it made switching multi-agent mode off a decision the app
  * could never carry out: the `agents` tool stayed registered for as long as the app kept
  * running, so a user who tried the feature once was stuck with it.
  *
  * So turning a feature off calls this, and the app tells the user to reconnect the connector
  * in ChatGPT. That reconnect is what makes it clean: ChatGPT re-reads the tool list, and what
  * it reads has no trace of the feature. The cost is the one thing the monotonic rule was
- * buying — a call from the stale snapshot in an already-open chat now fails as an unknown
- * tool rather than as a tidy refusal — which is why this is only ever called for a
+ * buying โ€” a call from the stale snapshot in an already-open chat now fails as an unknown
+ * tool rather than as a tidy refusal โ€” which is why this is only ever called for a
  * deliberate settings change and never on its own.
  */
 export function forgetExposedSurface(): void {
   surfaceExposure.clear();
 }
 
-export async function startMcpServer(getContext: () => ToolContext): Promise<McpEndpoint> {
+export async function startMcpServer(
+  getContext: () => ToolContext,
+  machine?: MachineIdentity | null,
+  profile: RuntimeProfileName = 'desktop-app',
+  desktopDriver?: DesktopDriver | null
+): Promise<McpEndpoint> {
+  if (profile === 'desktop-app') {
+    const { installDesktopAppMcpRuntime } = await import('./desktop-app-runtime.js');
+    installDesktopAppMcpRuntime();
+  } else {
+    const { resetOptionalMcpRuntime } = await import('./optional-runtime.js');
+    resetOptionalMcpRuntime();
+  }
+  const initialContext = getContext();
+  const registerDesktopTools = profile === 'desktop-app' || surfaceIsUseful('desktop', initialContext.caps)
+    ? (await import('./tools-desktop.js')).registerDesktopTools
+    : undefined;
+  const registerDesktop = registerDesktopTools
+    ? (registrar: Parameters<typeof registerDesktopTools>[0]) => registerDesktopTools(registrar, desktopDriver ?? undefined)
+    : undefined;
   // A per-session token in the path is what authorises callers. It is regenerated on
   // every app start, so a URL that leaks stops working when the app restarts.
   requestSeenAt = null;
@@ -299,6 +321,8 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     exposed.agentTools = exposed.agentTools || agentTools;
     return {
       ...live,
+      machine,
+      runtimeProfile: profile,
       sessionTools,
       agentTools,
       exposedCaps: { ...exposed.caps },
@@ -318,7 +342,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     prmPath: `${PRM_PREFIX}${surface.basePath}`,
     url: '',
     handler: toNodeHandler(
-      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id)),
+      createMcpHandler(() => buildServer(stableContext(surface.id), surface.id, machine, registerDesktop)),
       { onerror: (error) => logError(`MCP handler error (${surface.id}): ${error.message}`) }
     )
   }));
@@ -332,8 +356,8 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     const tunnelProbe = req.headers[TUNNEL_PROBE_HEADER] === tunnelProbeToken;
 
     // Logged for every request, so the Activity tab shows what actually arrived and
-    // what it was answered with. The path is reduced to a shape — it carries the
-    // session token — and nothing from the body is logged.
+    // what it was answered with. The path is reduced to a shape โ€” it carries the
+    // session token โ€” and nothing from the body is logged.
     const route = routes.find((candidate) => safeEqual(pathOnly, candidate.basePath)) ?? null;
     const prmRoute = routes.find((candidate) => safeEqual(pathOnly, candidate.prmPath)) ?? null;
 
@@ -346,7 +370,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
           : pathOnly.slice(0, 40);
       const method = req.method ?? '?';
       const who = selfTest ? ' (self-test)' : tunnelProbe ? ' (tunnel probe)' : '';
-      const line = `${method} ${shape} → ${res.statusCode} in ${Date.now() - startedAt}ms${who}`;
+      const line = `${method} ${shape} โ’ ${res.statusCode} in ${Date.now() - startedAt}ms${who}`;
       // Streamable HTTP makes the server-opened SSE stream and session deletion
       // optional, and 405 is the prescribed answer for a server that offers
       // neither. ChatGPT probes for both on every connect, so treating those two
@@ -355,8 +379,8 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
       const optional =
         res.statusCode === 405 && route !== null && (method === 'GET' || method === 'DELETE');
       const expectedTunnelProbe = tunnelProbe && res.statusCode === 415 && route !== null && method === 'POST';
-      if (optional) logInfo(`request ${line} (stream/session not offered — normal)`);
-      else if (expectedTunnelProbe) logInfo(`request ${line} (probe compatibility check — normal)`);
+      if (optional) logInfo(`request ${line} (stream/session not offered โ€” normal)`);
+      else if (expectedTunnelProbe) logInfo(`request ${line} (probe compatibility check โ€” normal)`);
       else if (res.statusCode >= 400) logWarn(`request ${line}`);
       else logInfo(`request ${line}`);
     });
@@ -364,7 +388,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     if (prmRoute) {
       if (!checkHost(req, res)) return;
       if (!checkOrigin(req, res)) return;
-      const body = protectedResourceMetadata(prmRoute.url, surfaceDefinition(prmRoute.id).connectorName);
+      const body = protectedResourceMetadata(prmRoute.url, surfaceDefinition(prmRoute.id, machine).connectorName);
       res.writeHead(200, {
         'content-type': 'application/json',
         'cache-control': 'no-store',
@@ -463,7 +487,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
                 if (settled) return;
                 // Force first, report second. This timer is the only thing between a wedged
                 // peer and a shutdown that never ends, so nothing it depends on may sit behind
-                // a call that could throw — and logging reaches the renderer, which by this
+                // a call that could throw โ€” and logging reaches the renderer, which by this
                 // point in a quit is already gone.
                 server.closeAllConnections();
                 logWarn(`server drain timed out after ${forceAfterMs}ms during final shutdown; forcing remaining connections closed`);

@@ -36,10 +36,8 @@ import {
 } from '../sandbox.js';
 import { currentWorkspace, learnWorkspace } from '../workspace.js';
 import { ExecError } from '../exec.js';
-import { ComputerError } from '../computer/index.js';
 import { getConfig } from '../config.js';
 import {
-  AgentError,
   acknowledgeOffers,
   acknowledgeOffersForConversation,
   dormantWorkerNotice,
@@ -58,11 +56,20 @@ import {
   retiredWorkerForConversation,
   stageQueuedWorkerRevivals,
   swarmRunning,
-  workspaceScopeForCaller
-} from '../agents.js';
+  workspaceScopeForCaller,
+  awaitFreshCallOrigin,
+  evidenceWindow,
+  freshCallOrigin,
+  recordAgentMessage,
+  recordToolCall,
+  readOverflowText,
+  isOptionalRejectedError
+} from './optional-runtime.js';
 import { effectiveWorkspaceRoots } from '../run/scope.js';
 import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
+import type { MachineIdentity } from '../machine/profile.js';
+import type { RuntimeProfileName } from '../runtime/profile.js';
 import {
   currentCall,
   emptyEvidence,
@@ -73,14 +80,6 @@ import {
   trackMcpRequest,
   type CallContext
 } from './call-context.js';
-import {
-  awaitFreshCallOrigin,
-  evidenceWindow,
-  freshCallOrigin,
-  recordAgentMessage,
-  recordToolCall
-} from '../session/recorder.js';
-import { readOverflowText } from '../session/store.js';
 import type { StoredText } from '../../shared/session.js';
 
 export interface ToolContext {
@@ -120,6 +119,10 @@ export interface ToolContext {
    * ever added to. Defaults to the live answer when the caller does not track it.
    */
   exposedFind?: boolean;
+  /** Stable identity of the local machine that will execute this call. */
+  machine?: MachineIdentity | null;
+  /** Frontend/runtime policy that owns this MCP endpoint. */
+  runtimeProfile?: RuntimeProfileName;
 }
 
 export type ToolContent =
@@ -131,9 +134,25 @@ export type ToolResult = { content: ToolContent[]; structuredContent?: Record<st
 export const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] });
 export const fail = (text: string): ToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
+/**
+ * Machine attribution is wire evidence, not prose assembled independently by each tool.
+ * Keep it in one decorator so parallel multi-machine results can always be joined to the
+ * installation that actually executed them without disturbing established human-readable text.
+ */
+export function withMachineAttribution(result: ToolResult, machine?: MachineIdentity | null): ToolResult {
+  if (!machine) return result;
+  return {
+    ...result,
+    structuredContent: {
+      ...(result.structuredContent ?? {}),
+      machine: { id: machine.id, name: machine.name }
+    }
+  };
+}
+
 /** Maps runtime errors to short model-facing text without ever exposing real paths. */
 export function friendlyError(err: unknown): string {
-  if (err instanceof SandboxError || err instanceof ComputerError) return err.message;
+  if (err instanceof SandboxError || (err instanceof Error && err.name === 'ComputerError')) return err.message;
   const code = (err as NodeJS.ErrnoException).code;
   if (code === 'ENOENT') return 'Not found';
   if (code === 'EACCES' || code === 'EPERM') return 'Access denied by the operating system';
@@ -208,10 +227,10 @@ export async function guard(name: string, fn: () => Promise<ToolResult>): Promis
     const elapsed = Date.now() - started;
     if (
       err instanceof SandboxError ||
-      err instanceof ComputerError ||
+      (err instanceof Error && err.name === 'ComputerError') ||
       err instanceof FsOpError ||
       err instanceof ExecError ||
-      err instanceof AgentError
+      isOptionalRejectedError(err)
     ) {
       noteOutcomeSafely('rejected');
       logInfo(`tool ${name} rejected in ${elapsed} ms: ${message}`);
@@ -365,6 +384,7 @@ async function dispatch(
   transportKey: string | null,
   requestId: string | null,
   surface: SurfaceId,
+  machine: MachineIdentity | null | undefined,
   run: () => Promise<ToolResult>
 ): Promise<ToolResult> {
   // The context is built here, one layer out from where the work happens, because the
@@ -382,7 +402,7 @@ async function dispatch(
     evidence: emptyEvidence()
   };
   return trackMcpRequest(() =>
-    trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run))
+    trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, machine, run))
   );
 }
 
@@ -393,6 +413,7 @@ async function dispatchTracked(
   transportKey: string | null,
   requestId: string | null,
   surface: SurfaceId,
+  machine: MachineIdentity | null | undefined,
   run: () => Promise<ToolResult>
 ): Promise<ToolResult> {
   noteTransportIdentity(transportKey);
@@ -565,7 +586,7 @@ async function dispatchTracked(
   // Inbox messages are part of the MCP result ChatGPT actually receives. Build the delivered
   // result before recording so session(action=read, tool_call=Tโ€ฆ) is genuine wire forensics rather than a
   // subtly earlier internal value that omits the worker report most likely to matter later.
-  const delivered = withInbox(context.caller.conversationId, context.agent, result, isFinish);
+  const delivered = withMachineAttribution(withInbox(context.caller.conversationId, context.agent, result, isFinish), machine);
   const recorderStartedAt = Date.now();
   const recording = recordToolCall({
     tool: name,
@@ -849,7 +870,7 @@ export function createRegistrar(server: McpServer, ctx: ToolContext, surface: Su
       // surface declared: who is calling is a fact about the conversation, established from
       // page evidence in `dispatch`, and never something the model is asked to carry.
       server.registerTool(name, config, ((args: never, mcpCtx?: McpCallContext) =>
-        dispatch(name, args, mcpCtx?.sessionId ?? null, requestIdOf(mcpCtx), surface, () =>
+        dispatch(name, args, mcpCtx?.sessionId ?? null, requestIdOf(mcpCtx), surface, ctx.machine, () =>
           handler(args)
         )) as never);
     },

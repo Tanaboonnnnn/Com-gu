@@ -106,6 +106,18 @@ export interface ActionResult {
   routes: Array<'uia' | 'sendinput' | 'focus' | 'local'>;
 }
 
+export interface ComputerClipboardProvider {
+  readText(): string | Promise<string>;
+  writeText(text: string): void | Promise<void>;
+}
+
+let clipboardProvider: ComputerClipboardProvider | null = null;
+
+/** Frontend adapter: Electron and headless CLI provide clipboard access without Core importing either. */
+export function configureComputerClipboard(provider: ComputerClipboardProvider | null): void {
+  clipboardProvider = provider;
+}
+
 export type VerificationSpec =
   | { until: 'foreground'; window: number; timeoutMs?: number }
   | { until: 'window_exists'; match: string; timeoutMs?: number }
@@ -1255,7 +1267,8 @@ async function actLocked(
     if (action.type === 'read_clipboard') {
       await flush();
       try {
-        clipboard.push((await electronClipboard()).readText());
+        if (!clipboardProvider) throw new ComputerError('The clipboard is unavailable in this runtime.');
+        clipboard.push(await clipboardProvider.readText());
       } catch (err) {
         throw localActionFailure(err, completedCount, index);
       }
@@ -1266,7 +1279,8 @@ async function actLocked(
     if (action.type === 'write_clipboard') {
       await flush();
       try {
-        (await electronClipboard()).writeText(action.text);
+        if (!clipboardProvider) throw new ComputerError('The clipboard is unavailable in this runtime.');
+        await clipboardProvider.writeText(action.text);
       } catch (err) {
         throw localActionFailure(err, completedCount, index);
       }
@@ -1321,23 +1335,6 @@ function localActionFailure(err: unknown, completedCount: number, failedIndex: n
     `PARTIAL_BATCH: completed_count=${completedCount} failed_index=${failedIndex}. ${message}`,
     { completedCount, failedIndex }
   );
-}
-
-/**
- * Electron's clipboard, loaded only if a clipboard action is actually used.
- *
- * Imported lazily rather than at the top of the file because everything else here runs
- * happily outside Electron — the desktop tests drive the helper directly — and a static
- * import would make that impossible for the sake of two actions.
- */
-async function electronClipboard(): Promise<{ readText: () => string; writeText: (text: string) => void }> {
-  try {
-    const { clipboard } = await import('electron');
-    if (!clipboard) throw new Error('no clipboard');
-    return clipboard;
-  } catch {
-    throw new ComputerError('The clipboard is only available while the app is running.');
-  }
 }
 
 /** Confirms the helper can run at all, so the UI can say so before ChatGPT tries. */

@@ -25,6 +25,9 @@ ComGu is a permission boundary between ChatGPT and the logged-in OS user running
 - The companion-extension bridge is a separate loopback service and exposes no filesystem, command or settings-mutation route.
 - Stored API/bridge credentials use Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, a secure desktop secret store on Linux). Linux `basic_text` is refused; normal Activity logs are redacted, capped and memory-only.
 - Session recording is separate durable local history. It is on for fresh installs and can be disabled.
+- Durable Runs persist only bounded control/checkpoint metadata. They do not copy transcripts, tool outputs, screenshots or file contents into a second history store.
+- A transport timeout or process restart never authorizes replay of an arbitrary mutation. Read-only work can be retried; receipt-backed work follows its receipt contract; an uncertain mutation remains `needs-reconciliation` until its outcome is proven.
+- Durable Run recovery preserves the existing caller identity and `WorkspaceScope` checks. Recovery is continuation authority, not additional filesystem, terminal or Desktop authority.
 
 ## Expected limitations
 
@@ -32,9 +35,9 @@ These are properties of the current design, not vulnerability reports by themsel
 
 - **Release binaries are not publisher-signed; macOS builds are also unnotarized.** Apple-silicon Mach-O files may still carry ad-hoc signatures, which do not identify a publisher or establish Gatekeeper trust. Windows SmartScreen, macOS Gatekeeper or browsers can warn. Verify release SHA-256 checksums before running them.
 - **The Linux AppImage has a sandbox-availability fallback.** Its electron-builder static launcher can add `--no-sandbox` when the host disables unprivileged user namespaces. On Debian/Ubuntu, prefer the DEB on such restrictive systems if you do not want the portable AppImage to take that fallback.
-- **Fresh installs start Core permissions enabled and read-only mode off.** Windows additionally enables Desktop permissions; Desktop is unavailable on macOS/Linux. Review permissions before connecting ChatGPT. Existing installs keep their explicit stored choices.
+- **Fresh installs start Core permissions enabled and read-only mode off.** Desktop capabilities are exposed only when the host adapter proves them available and the corresponding permission is enabled. Review permissions before connecting ChatGPT. Existing installs keep their explicit stored choices.
 - **Application path checks are not a kernel/VM sandbox.** They substantially constrain the app's filesystem tools, but same-user filesystem races can still exist. Do not treat approved roots as isolation from a hostile local process.
-- **Command and Windows Desktop capabilities remain powerful.** Run-scoped Windows commands are constrained to their WorkspaceScope, but ordinary non-Run commands and Desktop control still act with the logged-in user's normal OS authority.
+- **Command and Desktop capabilities remain powerful.** Run-scoped commands use only confinement proven for that host; ordinary non-Run commands and Desktop control still act with the logged-in user's normal OS authority.
 - **Run command confinement is currently proven only for supported Windows hosts.** macOS/Linux Run-scoped commands fail closed until a trustworthy process-filesystem confinement backend is implemented and tested.
 - **Windows host preparation is explicit.** On AppContainer+DACL fallback hosts, ComGu may require the user to approve the bundled MXC host-preparation helper through UAC. Build, test, startup and normal command spawning do not elevate or perform this preparation implicitly.
 - **Session recording is intentionally detailed and is not encrypted by `safeStorage`.** Recorded conversations/tool activity stay local to this app, but anyone with access to your OS account may be able to read the session files.

@@ -44,6 +44,8 @@ import {
   resetAgentsForTests,
   spawnWithWorkspaceScope
 } from '../src/main/agents.js';
+import { installOptionalAgentsRuntime } from '../src/main/mcp/optional-runtime.js';
+import * as agentsRuntime from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
 import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
 
@@ -425,6 +427,11 @@ describe('active Run file authority', () => {
         deleteFile: true,
         command: false
       });
+      // Production startup loads the Agents RuntimeFeature before connecting MCP whenever
+      // multi-agent is enabled. This fixture imports the broker directly to construct worker
+      // state, so install the same optional MCP adapter explicitly instead of relying on the
+      // retired eager import from startMcpServer().
+      installOptionalAgentsRuntime(agentsRuntime);
       if (endpoint) await endpoint.stop();
       endpoint = await startMcpServer(() => ctx);
 
@@ -3138,7 +3145,21 @@ describe('exec_command and write_stdin', () => {
         yield_time_ms: 8_000
       }
     });
-    const brokenText = textOf(broken);
+    let brokenText = textOf(broken);
+    const yieldedSession = brokenText.match(/Process running with session ID (\d+)/)?.[1];
+    if (yieldedSession) {
+      // A cold Windows/MXC command can legitimately consume the response budget before the
+      // second batch command exits. Yielding is production behavior, not a failed batch, so
+      // follow the managed session exactly as a client would instead of making this regression
+      // depend on hosted-runner startup speed.
+      for (let attempt = 0; attempt < 3 && !brokenText.includes('--- exit code 3 ---'); attempt++) {
+        const drained = await core('tools/call', {
+          name: 'write_stdin',
+          arguments: { session_id: Number(yieldedSession), yield_time_ms: 5_000 }
+        });
+        brokenText += `\n${textOf(drained)}`;
+      }
+    }
     expect(brokenText).toContain('--- exit code 3 ---');
     expect(brokenText).not.toContain('is a result, not a failure');
   }, 60_000);

@@ -14,16 +14,18 @@ import { getConfig } from '../config.js';
 import { isGitRepository } from '../toolchain.js';
 import type { ToolContext } from './kernel.js';
 import { surfaceDefinition, type SurfaceId } from './surfaces.js';
+import type { MachineIdentity } from '../machine/profile.js';
 
 export function serverInstructions(
   ctx: ToolContext,
   surface: SurfaceId = 'core',
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  machine?: MachineIdentity | null
 ): string {
-  return surface === 'desktop' ? desktopInstructions(ctx) : coreInstructions(ctx, platform);
+  return surface === 'desktop' ? desktopInstructions(ctx, machine) : coreInstructions(ctx, platform, machine);
 }
 
-function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
+function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, machine?: MachineIdentity | null): string {
   const config = getConfig();
   const sessionTools = ctx.sessionTools ?? config.sessions.record;
   const agentTools = ctx.agentTools ?? config.multiAgent.enabled;
@@ -96,7 +98,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
       '',
       // Named rather than hinted at: the model can see this connector but not the other, and
       // "I cannot do that" is the wrong answer when the user only has to connect it.
-      `Seeing and controlling the Windows desktop lives in a separate connector, "${surfaceDefinition('desktop').connectorName}".`,
+      `Seeing and controlling the Windows desktop lives in a separate connector, "${surfaceDefinition('desktop', machine).connectorName}".`,
       'If a task needs screenshots, windows, mouse/keyboard control or the clipboard and that connector is not available here, say so and ask the user to connect it.'
     );
   }
@@ -146,7 +148,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
   return lines.join('\n');
 }
 
-function desktopInstructions(ctx: ToolContext): string {
+function desktopInstructions(ctx: ToolContext, machine?: MachineIdentity | null): string {
   const lines = [
     'Local Windows desktop control: look at this PC’s screen and windows, and drive its mouse and keyboard.',
     '',
@@ -178,7 +180,7 @@ function desktopInstructions(ctx: ToolContext): string {
 
   lines.push(
     '',
-    `Files, patches and commands live in a separate connector, "${surfaceDefinition('core').connectorName}".`,
+    `Files, patches and commands live in a separate connector, "${surfaceDefinition('core', machine).connectorName}".`,
     'This one cannot read or change files. If a task needs that and it is not available here, say so.'
   );
 

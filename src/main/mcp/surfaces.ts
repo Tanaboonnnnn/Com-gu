@@ -23,6 +23,8 @@
 
 import type { Capabilities } from '../../shared/types.js';
 import { desktopAutomationSupported } from '../platform.js';
+import type { MachineIdentity } from '../machine/profile.js';
+import { connectorMetadata } from '../machine/metadata.js';
 
 export const SURFACE_IDS = ['core', 'desktop'] as const;
 export type SurfaceId = (typeof SURFACE_IDS)[number];
@@ -139,8 +141,21 @@ export const SURFACES: Record<SurfaceId, SurfaceDefinition> = { core: CORE, desk
 
 export const SURFACE_LIST: readonly SurfaceDefinition[] = [CORE, DESKTOP];
 
-export function surfaceDefinition(id: SurfaceId): SurfaceDefinition {
-  return SURFACES[id];
+export function surfaceDefinition(id: SurfaceId, machine?: MachineIdentity | null): SurfaceDefinition {
+  const base = SURFACES[id];
+  if (!machine) return base;
+  const metadata = connectorMetadata(machine, id);
+  return {
+    ...base,
+    serverName: metadata.serverName,
+    connectorName: metadata.connectorName,
+    description: machine.confirmed ? metadata.description : base.description,
+    cardSummary: machine.confirmed ? metadata.cardSummary : base.cardSummary
+  };
+}
+
+export function surfaceList(machine?: MachineIdentity | null): readonly SurfaceDefinition[] {
+  return SURFACE_IDS.map((id) => surfaceDefinition(id, machine));
 }
 
 /**
@@ -168,6 +183,10 @@ export function surfaceIsUseful(
 }
 
 /** Surfaces worth connecting under these capabilities, in setup order. */
-export function usefulSurfaces(caps: Capabilities): SurfaceDefinition[] {
-  return SURFACE_LIST.filter((surface) => surfaceIsUseful(surface.id, caps));
+export function usefulSurfaces(
+  caps: Capabilities,
+  platform: NodeJS.Platform = process.platform,
+  machine?: MachineIdentity | null
+): SurfaceDefinition[] {
+  return surfaceList(machine).filter((surface) => surfaceIsUseful(surface.id, caps, platform));
 }

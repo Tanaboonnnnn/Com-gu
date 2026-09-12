@@ -17,6 +17,18 @@ import { requestCorrelation } from '../session/correlation.js';
 
 /** Owners, keyed by the process id `exec_command` handed back as `session_id`. */
 const owners = new Map<number, string | null>();
+const TRANSPORT_OWNER_PREFIX = '\u0000transport:';
+
+/**
+ * Returns the local principal allowed to continue a managed command session. Proven ChatGPT
+ * conversation identity wins. A transport session is only a local fallback for CLI/headless
+ * connectors with no browser recorder; it is namespaced so it can never masquerade as a
+ * conversation id or be moved by Compact & Resume.
+ */
+export function execCallerPrincipal(conversationId: string | null, transportKey: string | null): string | null {
+  if (conversationId) return conversationId;
+  return transportKey ? `${TRANSPORT_OWNER_PREFIX}${transportKey}` : null;
+}
 
 /**
  * The conversation behind an in-flight MCP request, when it is already proven.

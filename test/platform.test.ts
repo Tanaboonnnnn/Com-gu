@@ -23,7 +23,7 @@ const allCapabilities = (): Capabilities => ({
 });
 
 describe('cross-platform product surface', () => {
-  it.each(['darwin', 'linux'] as const)('keeps Core fully usable while omitting Desktop on %s', (platform) => {
+  it.each(['darwin', 'linux'] as const)('keeps Core fully usable while leaving Desktop off by default on %s', (platform) => {
     const config = defaultConfig(platform);
     expect(config.capabilities).toMatchObject({
       browse: true,
@@ -41,27 +41,26 @@ describe('cross-platform product surface', () => {
       clipboardWrite: false
     });
     expect(surfaceIsUseful('core', config.capabilities, platform)).toBe(true);
-    expect(surfaceIsUseful('desktop', allCapabilities(), platform)).toBe(false);
+    expect(surfaceIsUseful('desktop', allCapabilities(), platform)).toBe(platform === 'linux');
   });
 
-  it('masks stored Windows Desktop grants at runtime without deleting the stored choices', () => {
+  it('allows explicitly stored Linux Desktop grants while fresh Linux installs stay opt-in', () => {
     const stored = allCapabilities();
     const config = { ...defaultConfig('linux'), capabilities: stored };
     const live = effectiveCapabilities(config, 'linux');
 
-    expect(live.screen).toBe(false);
-    expect(live.control).toBe(false);
-    expect(live.clipboardRead).toBe(false);
-    expect(live.clipboardWrite).toBe(false);
-    expect(live.command).toBe(true);
+    expect(live.screen).toBe(true);
+    expect(live.control).toBe(true);
+    expect(live.clipboardRead).toBe(true);
+    expect(live.clipboardWrite).toBe(true);
+    expect(defaultConfig('linux').capabilities.screen).toBe(false);
     expect(config.capabilities).toBe(stored);
-    expect(config.capabilities.screen).toBe(true);
   });
 
   it('reports the host family and Desktop support explicitly', () => {
     expect(hostPlatformInfo('win32')).toEqual({ family: 'windows', name: 'Windows', desktopAutomation: true });
     expect(hostPlatformInfo('darwin')).toEqual({ family: 'macos', name: 'macOS', desktopAutomation: false });
-    expect(hostPlatformInfo('linux')).toEqual({ family: 'linux', name: 'Linux', desktopAutomation: false });
+    expect(hostPlatformInfo('linux')).toEqual({ family: 'linux', name: 'Linux', desktopAutomation: true });
     expect(desktopAutomationSupported('freebsd')).toBe(false);
     expect(capabilitiesForPlatform(allCapabilities(), 'win32')).toEqual(allCapabilities());
   });

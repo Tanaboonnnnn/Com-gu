@@ -49,17 +49,19 @@ const {
   unpair
 } = await import('../src/main/bridge.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
+const goalModule = await import('../src/main/goal.js');
 const {
   GOAL_OBJECTIVES_STATE,
   goalObjectiveFor,
   humanReply,
   resetGoalStateForTests,
   setGoalObjective
-} = await import('../src/main/goal.js');
+} = goalModule;
 const { createSession, deleteSession, getSession, initSessionStore, readEvents, resetSessionStoreForTests } = await import(
   '../src/main/session/store.js'
 );
 const { closeConversation, liveConversations, noteChatOrigin, recordChatObservations, recordToolCall, resetRecorderForTests } = await import('../src/main/session/recorder.js');
+const agentsModule = await import('../src/main/agents.js');
 const {
   CONTINUATIONS_STATE,
   abortContinuation,
@@ -101,9 +103,8 @@ const {
   swarmStateForCaller,
   WORKER_CONTEXT_CEILING_TOKENS,
   workerConversationGone
-} = await import(
-  '../src/main/agents.js'
-);
+} = agentsModule;
+const { installBridgeAgentsRuntime, installBridgeGoalRuntime } = await import('../src/main/bridge-optional-runtime.js');
 const { makeTempDir, removeTempDir, SAMPLE_BRIEF } = await import('./helpers.js');
 const { resumeBootstrapText } = await import('../src/main/session/handoff.js');
 const { getLog } = await import('../src/main/logger.js');
@@ -279,6 +280,11 @@ async function pair(): Promise<string> {
 }
 
 beforeAll(async () => {
+  // This suite exercises the full Desktop bridge profile. Production installs these adapters
+  // lazily; tests install the real modules explicitly so the bridge seam is exercised without
+  // restoring the static bridge -> Goal/agents dependency we are removing.
+  installBridgeGoalRuntime(goalModule);
+  installBridgeAgentsRuntime(agentsModule);
   dir = await makeTempDir('clf-bridge-');
   initConfigPath(dir);
   initSecretsPath(dir);
@@ -3788,6 +3794,42 @@ describe('restarting the bridge', () => {
     base = `http://127.0.0.1:${port}`;
     await waitForOpened(1);
     expect(pendingCommands().map((command) => command.what)).toEqual(['worker:worker-1']);
+  });
+
+  it('activates agent bridge hooks when multi-agent is enabled after the bridge is already running', async () => {
+    await stopBridge();
+    installBridgeAgentsRuntime(null);
+    const port = await startBridge();
+    expect(port).not.toBeNull();
+    base = `http://127.0.0.1:${port}`;
+
+    try {
+      installBridgeAgentsRuntime(agentsModule);
+      spawn({ workers: [{ task: 'hot enabled worker' }], caller: { conversationId: PRIME_CHAT } });
+      expect(pendingCommands().map((command) => command.what)).toEqual(['worker:worker-1']);
+      await waitForOpened(1);
+
+      resetSwarm();
+      resetBridgeForTests();
+      opened.length = 0;
+      setBrowserOpener(async (url, family) => {
+        opened.push(url);
+        openedFamilies.push(family);
+      });
+      installBridgeAgentsRuntime(null);
+      installBridgeAgentsRuntime(agentsModule);
+      spawn({ workers: [{ task: 'enabled again without duplicate hooks' }], caller: { conversationId: PRIME_CHAT } });
+      expect(pendingCommands().map((command) => command.what)).toEqual(['worker:worker-1']);
+      await waitForOpened(1);
+      expect(opened).toHaveLength(1);
+    } finally {
+      resetSwarm();
+      await stopBridge();
+      installBridgeAgentsRuntime(agentsModule);
+      const restoredPort = await startBridge();
+      expect(restoredPort).not.toBeNull();
+      base = `http://127.0.0.1:${restoredPort}`;
+    }
   });
 
   it('does not queue or reopen a sleeping worker through a stale revival callback while stopped', async () => {

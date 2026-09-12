@@ -187,15 +187,159 @@ function findTaskkill(): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
+export interface WindowsProcessRow {
+  processId: number;
+  parentProcessId: number;
+}
+
+/**
+ * Returns descendants of one snapshotted Windows process tree deepest-first.
+ *
+ * `taskkill /T` is normally the authority for Windows tree teardown, but under heavy load the
+ * helper itself can hit its bounded timeout after it has already disturbed the parent. If the
+ * parent disappears in that window, asking taskkill to rediscover the tree is too late: the
+ * children have been re-parented and can keep the old cwd locked. A pre-kill snapshot gives the
+ * fallback exact numeric process ids to clean up without guessing from names or command lines.
+ */
+export function windowsDescendantsDeepestFirst(
+  rootPid: number,
+  rows: readonly WindowsProcessRow[]
+): number[] {
+  const children = new Map<number, number[]>();
+  for (const row of rows) {
+    if (!Number.isInteger(row.processId) || row.processId <= 0) continue;
+    if (!Number.isInteger(row.parentProcessId) || row.parentProcessId <= 0) continue;
+    const siblings = children.get(row.parentProcessId) ?? [];
+    siblings.push(row.processId);
+    children.set(row.parentProcessId, siblings);
+  }
+
+  const ordered: number[] = [];
+  const visiting = new Set<number>();
+  const visited = new Set<number>();
+  const visit = (pid: number): void => {
+    if (visiting.has(pid) || visited.has(pid)) return;
+    visiting.add(pid);
+    for (const childPid of children.get(pid) ?? []) visit(childPid);
+    visiting.delete(pid);
+    visited.add(pid);
+    if (pid !== rootPid) ordered.push(pid);
+  };
+  visit(rootPid);
+  return ordered;
+}
+
+async function queryWindowsChildRows(
+  parentPids: readonly number[],
+  timeoutMs: number
+): Promise<WindowsProcessRow[]> {
+  const powershell = windowsPowerShellPath();
+  if (!existsSync(powershell) || parentPids.length === 0) return [];
+  const filter = parentPids.map((pid) => `ParentProcessId=${pid}`).join(' OR ');
+  const script = `$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process -Filter ${JSON.stringify(filter)} | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress`;
+  return new Promise<WindowsProcessRow[]>((resolve) => {
+    let settled = false;
+    let stdout = '';
+    let timer: NodeJS.Timeout | null = null;
+    const finish = (rows: WindowsProcessRow[] = []): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(rows);
+    };
+    try {
+      const child = spawn(
+        powershell,
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+        { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: childEnv() }
+      );
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
+        if (stdout.length <= 2 * 1024 * 1024) stdout += chunk;
+      });
+      child.once('error', () => finish());
+      child.once('close', (code) => {
+        if (code !== 0 || stdout.length > 2 * 1024 * 1024) {
+          finish();
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as
+            | { ProcessId?: unknown; ParentProcessId?: unknown }
+            | Array<{ ProcessId?: unknown; ParentProcessId?: unknown }>;
+          const items = Array.isArray(parsed) ? parsed : [parsed];
+          finish(
+            items
+              .map((row) => ({
+                processId: Number(row.ProcessId),
+                parentProcessId: Number(row.ParentProcessId)
+              }))
+              .filter((row) => Number.isInteger(row.processId) && Number.isInteger(row.parentProcessId))
+          );
+        } catch {
+          finish();
+        }
+      });
+      timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* already gone */
+        }
+        finish();
+      }, Math.max(100, timeoutMs));
+      timer.unref?.();
+    } catch {
+      finish();
+    }
+  });
+}
+
+async function snapshotWindowsDescendants(rootPid: number, timeoutMs = 4_000): Promise<number[]> {
+  const deadline = Date.now() + Math.max(100, timeoutMs);
+  const rows: WindowsProcessRow[] = [];
+  const seen = new Set<number>([rootPid]);
+  let frontier = [rootPid];
+
+  while (frontier.length > 0 && Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const children = await queryWindowsChildRows(frontier, remaining);
+    if (children.length === 0) break;
+    rows.push(...children);
+    const next: number[] = [];
+    for (const child of children) {
+      if (seen.has(child.processId)) continue;
+      seen.add(child.processId);
+      next.push(child.processId);
+    }
+    frontier = next;
+  }
+
+  return windowsDescendantsDeepestFirst(rootPid, rows);
+}
+
+function windowsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 export async function terminateProcessTree(
   pid: number,
   force = true,
-  helperTimeoutMs = force ? 1_000 : 500
+  helperTimeoutMs = force ? 5_000 : 500
 ): Promise<void> {
   // child.kill() leaves grandchildren running on Windows; taskkill /T handles the tree.
-  // taskkill itself can block while waiting on an uncooperative console process, so
-  // bound the helper too. The caller owns the larger graceful/forced deadline.
+  // taskkill itself can block while waiting on an uncooperative console process, so bound the
+  // helper too. Do not make the forced bound too short: under process-heavy Windows workloads
+  // taskkill can take more than a second to enumerate/tear down the tree, and falling back to a
+  // direct parent kill at that point leaves grandchildren alive (and their cwd handles locked).
+  // The caller still owns the larger graceful/forced deadline.
   if (process.platform === 'win32') {
+    const descendantsBeforeKill = force ? await snapshotWindowsDescendants(pid) : [];
     const killed = await new Promise<boolean>((resolve) => {
       const taskkill = findTaskkill();
       if (!taskkill) {
@@ -234,11 +378,23 @@ export async function terminateProcessTree(
         finish(false);
       }
     });
-    if (killed) return;
-    // The helper could not do it. Killing the process directly leaves grandchildren behind
-    // — which is why taskkill is tried first — but it does end the child the caller is
-    // waiting on, and a caller that gets its close event and a partial result is strictly
-    // better than one that waits forever on a process nothing ever signalled.
+    if (killed) {
+      const descendantsStillAlive = descendantsBeforeKill.some((descendantPid) => windowsProcessAlive(descendantPid));
+      if (!windowsProcessAlive(pid) && !descendantsStillAlive) return;
+    }
+    // The helper could not do it. Snapshot again while the parent is still available so children
+    // born after the first snapshot are included, then terminate deepest-first. If taskkill
+    // already killed the parent before timing out, the pre-kill snapshot still names the orphaned
+    // descendants that would otherwise keep their cwd handles alive.
+    const descendantsAfterFailure = force ? await snapshotWindowsDescendants(pid, 2_000) : [];
+    const fallbackPids = [...new Set([...descendantsAfterFailure, ...descendantsBeforeKill])];
+    for (const descendantPid of fallbackPids) {
+      try {
+        process.kill(descendantPid, force ? 'SIGKILL' : 'SIGTERM');
+      } catch {
+        /* already gone */
+      }
+    }
     try {
       process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
     } catch {

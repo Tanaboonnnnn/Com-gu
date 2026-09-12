@@ -38,7 +38,9 @@ const mocks = vi.hoisted(() => {
     tunnelStartReached: vi.fn(),
     tunnelStop: vi.fn(async () => undefined),
     secretGate: null as Promise<void> | null,
-    secretReached: vi.fn()
+    secretReached: vi.fn(),
+    desktopDriverSeen: null as unknown,
+    contextCapsSeen: null as unknown
   };
 });
 
@@ -54,7 +56,9 @@ vi.mock('../src/main/logger.js', () => ({ logError: vi.fn(), logInfo: vi.fn() })
 vi.mock('../src/main/mcp/server.js', () => ({
   lastRequestAt: () => null,
   tunnelProbeHeaders: () => ({}),
-  startMcpServer: vi.fn(async () => {
+  startMcpServer: vi.fn(async (getContext: () => { caps: unknown }, _machine: unknown, _profile: unknown, desktopDriver: unknown) => {
+    mocks.desktopDriverSeen = desktopDriver;
+    mocks.contextCapsSeen = getContext().caps;
     mocks.endpointStartReached();
     if (mocks.endpointStartGate) await mocks.endpointStartGate;
     return {
@@ -105,6 +109,8 @@ describe('connection surface state', () => {
     mocks.tunnelStop.mockClear();
     mocks.secretReached.mockClear();
     mocks.secretGate = null;
+    mocks.desktopDriverSeen = null;
+    mocks.contextCapsSeen = null;
     Object.assign(mocks.caps, {
       browse: true,
       search: true,
@@ -298,6 +304,27 @@ describe('connection surface state', () => {
     expect(connection.getStatus().detail).toBe('Add a folder before connecting.');
   });
 
+  it('passes a profile-selected DesktopDriver into the MCP server without importing a platform default there', async () => {
+    mocks.caps.screen = true;
+    const fakeDriver = { capabilities: async () => ({ available: true }) };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(mocks.desktopDriverSeen).toBe(fakeDriver);
+  });
+  it('masks configured Desktop permissions to what the selected driver can actually satisfy', async () => {
+    Object.assign(mocks.caps, { screen: true, control: true, clipboardRead: true, clipboardWrite: true });
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: false, keyboard: false,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: false, focus: false
+      })
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(mocks.contextCapsSeen).toMatchObject({ screen: true, control: false, clipboardRead: false, clipboardWrite: false });
+  });
   it('keeps genuinely rootless Desktop and clipboard setups connectable', async () => {
     mocks.config.roots = [];
     Object.assign(mocks.caps, {
@@ -318,5 +345,24 @@ describe('connection surface state', () => {
     await desktop.connect();
     expect(desktop.getStatus().state).toBe('connected');
     expect(mocks.starts).toBe(2);
+  });
+
+  it('lets a CLI owner inject credential and Desktop hooks without loading the Electron defaults', async () => {
+    const connection = await import('../src/main/connection.js');
+    const getApiKey = vi.fn(async () => 'cli-key');
+    const prewarmDesktop = vi.fn(async () => undefined);
+    connection.configureConnectionRuntime({
+      profile: 'cli',
+      getApiKey,
+      prewarmDesktop,
+      desktopSupported: () => false
+    });
+
+    await connection.connect();
+
+    expect(getApiKey).toHaveBeenCalledTimes(1);
+    expect(prewarmDesktop).not.toHaveBeenCalled();
+    expect(mocks.secretReached).not.toHaveBeenCalled();
+    expect(mocks.prewarm).not.toHaveBeenCalled();
   });
 });

@@ -3,15 +3,14 @@
  */
 
 import path from 'node:path';
-import { app, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session } from 'electron';
+import { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, nativeTheme, screen, session } from 'electron';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
-import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
 import { checkForUpdatesInBackground, registerIpc } from './ipc.js';
 import { logError, logInfo, logWarn } from './logger.js';
 import { writePerfReadyMarker } from './perf-marker.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
-import { setBrowserOpener, shutdownBridge, startBridge } from './bridge.js';
+import { recoverDurableGoalRuns, setBrowserOpener, shutdownBridge, startBridge } from './bridge.js';
 import { flushSessions, initSessionStore, pruneSessions } from './session/store.js';
 import {
   flushRecorder,
@@ -19,26 +18,11 @@ import {
   setAgentBinder,
   setAgentConversationLookup
 } from './session/recorder.js';
-import {
-  agentConversation,
-  bindConversation,
-  onRetiredWorkersPersist,
-  onRetiredWorkersPersistNow,
-  onSwarmPersist,
-  onSwarmPersistNow,
-  pauseSwarmForDisable,
-  repairPrimeConversationAfterRecovery,
-  restoreRetiredWorkers,
-  restoreSwarm,
-  snapshotRetiredWorkers,
-  snapshotSwarm,
-  type RetiredWorkersSnapshot,
-  type SwarmSnapshot
-} from './agents.js';
-import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
+import type { RetiredWorkersSnapshot, SwarmSnapshot } from './agents.js';
+import { flushDurable, initDurableStore, readDurable, writeDurableNow } from './durable.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
-import { stopComputerHelper } from './computer/index.js';
-import { GOAL_OBJECTIVES_STATE, restoreGoalObjectives, type GoalObjectivesSnapshot } from './goal.js';
+import { configureComputerClipboard, stopComputerHelper } from './computer/index.js';
+import type { GoalObjectivesSnapshot } from './goal.js';
 import {
   CONTINUATIONS_STATE,
   restoreContinuations,
@@ -67,10 +51,40 @@ import {
 } from './chat-workspace-scope.js';
 import { extensionDir } from './extension-path.js';
 import { passwordStoreForDesktop } from './linux-password-store.js';
+import { runtimeProfile } from './runtime/profile.js';
+import { createComGuRuntime } from './runtime/runtime.js';
+import { createRuntimeFeatureLoader } from './runtime/features.js';
+import {
+  desktopFeatureFactories,
+  loadedDesktopAgentsModule,
+  loadedDesktopGoalModule
+} from './runtime/desktop-features.js';
+import { initMachineProfile } from './machine/profile.js';
+import {
+  connect as connectConnection,
+  disconnect as disconnectConnection,
+  getStatus as connectionStatus,
+  onStatusChange as onConnectionStatusChange,
+  shutdownConnection
+} from './connection.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
 const RETIRED_WORKERS_STATE = 'retired-workers';
+const GOAL_OBJECTIVES_STATE = 'goal-objectives';
+const ACTIVE_RUNTIME_PROFILE = runtimeProfile('desktop-app');
+const desktopFeatures = createRuntimeFeatureLoader(ACTIVE_RUNTIME_PROFILE, desktopFeatureFactories());
+const desktopRuntime = createComGuRuntime(ACTIVE_RUNTIME_PROFILE, {
+  connect: connectConnection,
+  disconnect: disconnectConnection,
+  status: connectionStatus,
+  subscribe: onConnectionStatusChange,
+  shutdown: shutdownConnection
+}, undefined, desktopFeatures);
+configureComputerClipboard({
+  readText: () => clipboard.readText(),
+  writeText: (text) => clipboard.writeText(text)
+});
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -212,7 +226,7 @@ function trayIcon(running: boolean): Electron.NativeImage {
 
 function refreshTray(): void {
   if (!tray) return;
-  const state = getStatus().state;
+  const state = desktopRuntime.status().state;
   const locale = getConfig().ui.locale === 'th' ? 'th' : 'en';
   const tr = (key: MessageKey): string => t(locale, key);
   const connected = state === 'connected';
@@ -229,7 +243,7 @@ function refreshTray(): void {
       { label: tr('tray.open'), click: windowActivation.request },
       {
         label: running ? tr('common.disconnect') : tr('common.connect'),
-        click: () => void (running ? disconnect() : connect())
+        click: () => void (running ? desktopRuntime.disconnect() : desktopRuntime.connect())
       },
       { type: 'separator' },
       {
@@ -250,6 +264,10 @@ void app.whenReady().then(async () => {
   // primary that was told to quit before ready, must never touch the primary's shared userData.
   if (!shouldBeginAppBootstrap(hasSingleInstanceLock, quitting)) return;
   const userData = app.getPath('userData');
+  // Machine identity is non-secret and must exist before any connector metadata is constructed.
+  // New/upgraded installs remain on legacy connector names until the user confirms an alias.
+  await initMachineProfile(userData);
+  if (windowActivation.isDisabled()) return;
   // Changing package/app identity changes Electron's default userData directory. Copy only the
   // two bootstrap files that must exist before their owners initialize; never delete the legacy
   // directory and never decrypt secrets as part of this compatibility migration.
@@ -267,6 +285,8 @@ void app.whenReady().then(async () => {
   initDurableStore(userData);
   await loadConfig();
   if (windowActivation.isDisabled()) return;
+  await desktopRuntime.start();
+  if (windowActivation.isDisabled()) return;
   // Keep Chrome's stable unpacked folder synchronized with the installed ComGu release before
   // the bridge can tell an older running service worker which app version it is talking to.
   // The extension itself verifies the on-disk manifest before reloading, so a failed copy cannot
@@ -283,15 +303,20 @@ void app.whenReady().then(async () => {
   restoreChatWorkspaceScopes(savedChatWorkspaceScopes);
   const savedGoalObjectives = await readDurable<GoalObjectivesSnapshot>(GOAL_OBJECTIVES_STATE);
   if (windowActivation.isDisabled()) return;
-  restoreGoalObjectives(savedGoalObjectives);
+  if (getConfig().goal.enabled || (savedGoalObjectives?.objectives.length ?? 0) > 0) {
+    await desktopFeatures.ensure('goal');
+    loadedDesktopGoalModule()?.restoreGoalObjectives(savedGoalObjectives);
+  }
   // Request ownership must exist before either side of the bridge can race in. A request id
   // that was proved yesterday remains the same workflow today even if its ChatGPT tab closed.
   await restoreRequestCorrelations();
   if (windowActivation.isDisabled()) return;
-  setAgentConversationLookup(agentConversation);
+  setAgentConversationLookup((agent) => loadedDesktopAgentsModule()?.agentConversation(agent) ?? null);
   // The prime's chat is the user's own, so no extension report can name it. It is bound
   // when the recorder manages to place the prime's first call. See recordToolCall.
-  setAgentBinder(bindConversation);
+  setAgentBinder((agent, conversationId) => {
+    loadedDesktopAgentsModule()?.bindConversation(agent, conversationId);
+  });
   // Before anything can call an agent tool, and before a run is restored: the broker
   // decides whether a previous run has been abandoned partly from which ChatGPT tabs are
   // open, and without this it can only answer "I cannot see" — which it treats, on
@@ -316,34 +341,36 @@ void app.whenReady().then(async () => {
   // dependency. Multi-agent can be enabled from Settings without restarting the process;
   // keeping both sinks wired from startup guarantees the first spawn can cross its durable
   // acceptance barrier even when this launch began with multi-agent disabled.
-  onSwarmPersist(() => writeDurableSoon(SWARM_STATE, snapshotSwarm()));
-  onSwarmPersistNow((snapshot) => writeDurableNow(SWARM_STATE, snapshot));
-
-  // A multi-agent run outlives this process. Restoring it before the bridge starts
-  // means a worker that never joined gets its chat re-requested through the same queue
-  // as a fresh one, rather than being stranded with a key nobody has.
-  onRetiredWorkersPersist(() => writeDurableSoon(RETIRED_WORKERS_STATE, snapshotRetiredWorkers()));
-  onRetiredWorkersPersistNow((snapshot) => writeDurableNow(RETIRED_WORKERS_STATE, snapshot));
   const retiredWorkers = await readDurable<RetiredWorkersSnapshot>(RETIRED_WORKERS_STATE);
   if (windowActivation.isDisabled()) return;
-  restoreRetiredWorkers(retiredWorkers);
   const savedSwarm = await readDurable<SwarmSnapshot>(SWARM_STATE);
   if (windowActivation.isDisabled()) return;
-  restoreSwarm(savedSwarm);
-  if (!getConfig().multiAgent.enabled) {
-    // A feature toggle is a pause, not Clear swarm. Canonicalize any active incarnation left by
-    // a crash into stopped prime-owned history before the bridge exists, then make that safer
-    // projection durable. Re-enabling later in this process or after another restart recovers the
-    // same exact worker conversations without letting disabled workers consume execution slots.
-    pauseSwarmForDisable('multi-agent mode is disabled');
-    await writeDurableNow(SWARM_STATE, snapshotSwarm());
-    if (windowActivation.isDisabled()) return;
+  const hasAgentRecoveryState =
+    (retiredWorkers?.workers.length ?? 0) > 0 ||
+    Boolean(savedSwarm && (savedSwarm as { agents?: unknown[] }).agents?.length);
+  if (getConfig().multiAgent.enabled || hasAgentRecoveryState) {
+    await desktopFeatures.ensure('agents');
+    const agents = loadedDesktopAgentsModule();
+    if (agents) {
+      agents.restoreRetiredWorkers(retiredWorkers);
+      agents.restoreSwarm(savedSwarm);
+      if (!getConfig().multiAgent.enabled) {
+        agents.pauseSwarmForDisable('multi-agent mode is disabled');
+        await writeDurableNow(SWARM_STATE, agents.snapshotSwarm());
+        if (windowActivation.isDisabled()) return;
+      }
+    }
   }
   // Continuation recovery is after swarm restore because an interrupted durable rebind may
   // have to finish publishing the prime transfer that was frozen in that snapshot.
   setContinuationRecoveryHooks({
-    repairPrimeTransfer: repairPrimeConversationAfterRecovery
+    repairPrimeTransfer: (from, to) => loadedDesktopAgentsModule()?.repairPrimeConversationAfterRecovery(from, to) ?? false
   });
+  // Durable Run control state is restored before Compact & Resume can deliver anything. An
+  // ambiguous Goal send therefore blocks redraft after restart instead of being mistaken for a
+  // fresh turn merely because the browser process disappeared.
+  await recoverDurableGoalRuns();
+  if (windowActivation.isDisabled()) return;
   const savedContinuations = await readDurable<ContinuationSnapshot>(CONTINUATIONS_STATE);
   if (windowActivation.isDisabled()) return;
   await restoreContinuations(savedContinuations);
@@ -377,7 +404,7 @@ void app.whenReady().then(async () => {
   tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
   tray.on('click', windowActivation.request);
   refreshTray();
-  onStatusChange(refreshTray);
+  desktopRuntime.subscribe(refreshTray);
 
   logInfo('app started');
   void writePerfReadyMarker(process.env).catch((error) =>
@@ -396,7 +423,7 @@ void app.whenReady().then(async () => {
   // The bridge serves recording and multi-agent mode both: recording needs the
   // extension to observe the chat, and multi-agent mode needs it to open worker tabs.
   // Either switch being on starts it. ipc.ts applies the same rule on a settings save.
-  if (getConfig().sessions.record || getConfig().multiAgent.enabled) {
+  if (ACTIVE_RUNTIME_PROFILE.browser && (getConfig().sessions.record || getConfig().multiAgent.enabled)) {
     void startBridge();
   }
   // Retention governs recordings already stored on disk, independent of whether recording is
@@ -409,7 +436,7 @@ void app.whenReady().then(async () => {
     onError: (err) => logError(`session pruning failed: ${err.message}`)
   });
 
-  if (getConfig().ui.autoConnect) void connect();
+  if (getConfig().ui.autoConnect) void desktopRuntime.connect();
 });
 
 app.on('before-quit', () => {
@@ -448,7 +475,7 @@ app.on('will-quit', (event) => {
       // The budget has to clear the drains it contains, or it would silently defeat them:
       // the bridge force-closes wedged localhost sockets at 15s and the MCP endpoint forces
       // its own drain at 30s. This is the outer bound on both, not a competing one.
-      { name: 'admission/drain', budgetMs: 40_000, run: () => [shutdownConnection(), shutdownBridge()] },
+      { name: 'admission/drain', budgetMs: 40_000, run: () => [desktopRuntime.shutdown(), shutdownBridge()] },
       // Phase 2: only after request handlers are done may their owned child processes go.
       {
         name: 'process cleanup',
