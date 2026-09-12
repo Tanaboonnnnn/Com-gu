@@ -55,7 +55,7 @@ beforeAll(async () => {
   await saveConfig(defaultConfig());
   const ctx: ToolContext = {
     roots: [],
-    caps: { ...defaultConfig().capabilities },
+    caps: { ...defaultConfig().capabilities, command: true },
     readOnly: true,
     sessionTools: false,
     agentTools: false
@@ -118,5 +118,23 @@ describe('machine-aware MCP metadata', () => {
     expect(core.result.serverInfo.name).toBe(surfaceDefinition('core', machine).serverName);
     expect(desktop.result.serverInfo.name).toBe(surfaceDefinition('desktop', machine).serverName);
     expect(desktop.result.instructions).toContain('ComGu · home-server Core');
+  });
+
+  it('declares machine attribution in structured output schemas', async () => {
+    const listed = await post(endpoint.urls.core, {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/list',
+      params: {}
+    });
+    const exec = listed.result.tools.find((tool: any) => tool.name === 'exec_command');
+    const stdin = listed.result.tools.find((tool: any) => tool.name === 'write_stdin');
+
+    expect(exec?.outputSchema?.properties?.machine).toMatchObject({ type: 'object' });
+    expect(exec?.outputSchema?.properties?.machine?.properties).toMatchObject({
+      id: { type: 'string' },
+      name: { type: 'string' }
+    });
+    expect(stdin?.outputSchema).toEqual(exec?.outputSchema);
   });
 });

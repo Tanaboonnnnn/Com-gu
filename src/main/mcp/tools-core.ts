@@ -215,6 +215,12 @@ const unifiedExecOutputSchema = z
   })
   .strict();
 
+const machineScopedUnifiedExecOutputSchema = unifiedExecOutputSchema.extend({
+  machine: z
+    .object({ id: z.string(), name: z.string() })
+    .describe('Stable local machine identity for multi-machine attribution.')
+});
+
 /** Whether the one-time note about a discovered toolchain has already been logged. */
 let toolchainLogged = false;
 
@@ -655,7 +661,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               });
             }
           }),
-        outputSchema: unifiedExecOutputSchema
+        outputSchema: ctx.machine ? machineScopedUnifiedExecOutputSchema : unifiedExecOutputSchema
       },
       async (input) =>
         reg.guarded('command', 'exec_command', async () => {
@@ -884,7 +890,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             max_output_tokens: unsignedIntegerNumber.optional().describe(MAX_OUTPUT_TOKENS_DESCRIPTION)
           })
           .strict(),
-        outputSchema: unifiedExecOutputSchema
+        outputSchema: ctx.machine ? machineScopedUnifiedExecOutputSchema : unifiedExecOutputSchema
       },
       async (input) =>
         reg.guarded('command', 'write_stdin', async () => {
