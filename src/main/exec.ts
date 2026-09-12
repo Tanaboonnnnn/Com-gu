@@ -190,11 +190,14 @@ function findTaskkill(): string | null {
 export async function terminateProcessTree(
   pid: number,
   force = true,
-  helperTimeoutMs = force ? 1_000 : 500
+  helperTimeoutMs = force ? 5_000 : 500
 ): Promise<void> {
   // child.kill() leaves grandchildren running on Windows; taskkill /T handles the tree.
-  // taskkill itself can block while waiting on an uncooperative console process, so
-  // bound the helper too. The caller owns the larger graceful/forced deadline.
+  // taskkill itself can block while waiting on an uncooperative console process, so bound the
+  // helper too. Do not make the forced bound too short: under process-heavy Windows workloads
+  // taskkill can take more than a second to enumerate/tear down the tree, and falling back to a
+  // direct parent kill at that point leaves grandchildren alive (and their cwd handles locked).
+  // The caller still owns the larger graceful/forced deadline.
   if (process.platform === 'win32') {
     const killed = await new Promise<boolean>((resolve) => {
       const taskkill = findTaskkill();

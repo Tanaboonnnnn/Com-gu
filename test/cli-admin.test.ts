@@ -6,6 +6,15 @@ import { initConfigPath, loadConfig } from '../src/main/config.js';
 import { loadMachineProfile } from '../src/main/machine/profile.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
+const unavailableVault = () => ({
+  status: async () => ({
+    available: false as const,
+    readable: false as const,
+    reason: 'provider_unavailable' as const,
+    detail: 'test'
+  })
+});
+
 let profileDir: string;
 
 beforeEach(async () => {
@@ -83,15 +92,16 @@ describe('CLI profile administration', () => {
   });
 
   it('keeps legacy connector names until the machine alias is explicitly confirmed', async () => {
-    const first = await runAdminCommand('setup', [], { profileDir });
+    const first = await runAdminCommand('setup', [], { profileDir, credentialVaultFactory: unavailableVault });
     expect((first.json as { connectors: Array<{ connectorName: string }> }).connectors[0]?.connectorName).toBe('ComGu Core');
-    const confirmed = await runAdminCommand('setup', ['--name', 'ubuntu-laptop'], { profileDir });
+    const confirmed = await runAdminCommand('setup', ['--name', 'ubuntu-laptop'], { profileDir, credentialVaultFactory: unavailableVault });
     expect((confirmed.json as { connectors: Array<{ connectorName: string }> }).connectors[0]?.connectorName).toBe('ComGu · ubuntu-laptop Core');
   });
 
   it('enables only Desktop permissions proven by the explicit setup probe', async () => {
     await runAdminCommand('setup', ['--name', 'linux-box', '--desktop'], {
       profileDir,
+      credentialVaultFactory: unavailableVault,
       desktopProbe: async () => ({
         available: true, capture: true, pointer: true, keyboard: true,
         clipboardRead: false, clipboardWrite: false, windows: false, uiElements: false, focus: false

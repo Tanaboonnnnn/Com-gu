@@ -12,12 +12,14 @@ import {
 } from '../../main/machine/profile.js';
 import { RESERVED_ROOT_NAMES } from '../../main/sandbox.js';
 import { createCliCredentialVault } from '../credentials.js';
+import type { CredentialVault } from '../../main/credentials/vault.js';
 import type { DesktopCapabilities } from '../../main/desktop/driver.js';
 
 export interface AdminCommandContext {
   profileDir: string;
   ownerStatus?(): Promise<unknown>;
   desktopProbe?(): Promise<DesktopCapabilities | null>;
+  credentialVaultFactory?(profileDir: string, machine: MachineIdentity): Pick<CredentialVault, 'status'>;
 }
 
 export interface AdminCommandResult {
@@ -183,7 +185,7 @@ async function setup(profileDir: string, args: string[], context: AdminCommandCo
       }
     }));
   }
-  const vault = createCliCredentialVault(profileDir, machine);
+  const vault = context.credentialVaultFactory?.(profileDir, machine) ?? createCliCredentialVault(profileDir, machine);
   const credential = await vault.status();
   const core = connectorMetadata(machine, 'core');
   const desktopEnabled = DESKTOP_CAPABILITIES.some((capability) => getConfig().capabilities[capability]);
