@@ -47,7 +47,10 @@ describe('CLI packaging contract', () => {
 
   it('does not make GitHub Release publication depend on an npm registry token', () => {
     const publish = readFileSync('.github/workflows/publish.yml', 'utf8');
+    const publishJob = publish.slice(publish.indexOf('  publish:'), publish.indexOf('    steps:', publish.indexOf('  publish:')));
     const npmStep = publish.slice(publish.indexOf('      - name: Publish comgu-cli to npm'));
-    expect(npmStep).toContain("if: ${{ secrets.NPM_TOKEN != '' }}");
+    expect(publishJob).toContain('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}');
+    expect(npmStep).toContain("if: ${{ env.NPM_TOKEN != '' }}");
+    expect(npmStep).not.toContain('secrets.NPM_TOKEN');
   });
 });
