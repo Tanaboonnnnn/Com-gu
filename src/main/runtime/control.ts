@@ -129,10 +129,14 @@ async function processStartIdentity(pid: number): Promise<string | null> {
   }
   if (process.platform === 'linux') {
     try {
-      const raw = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+      const [bootIdRaw, raw] = await Promise.all([
+        fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8'),
+        fs.readFile(`/proc/${pid}/stat`, 'utf8')
+      ]);
+      const bootId = bootIdRaw.trim();
       const tail = raw.slice(raw.lastIndexOf(')') + 2).trim().split(/\s+/);
       const startTicks = tail[19];
-      return startTicks ? `linux:${startTicks}` : null;
+      return bootId && startTicks ? `linux:${bootId}:${startTicks}` : null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       return null;

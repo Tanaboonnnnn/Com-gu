@@ -20,6 +20,29 @@ afterEach(async () => {
 });
 
 describe('runtime local control channel', () => {
+  it('treats the same Linux pid and start ticks from a different boot as stale ownership', async () => {
+    const ownerPid = 4201;
+    const ownerIdentity = 'linux:BOOT-A:7350';
+    await fs.writeFile(`${dir}/.comgu-control.owner`, JSON.stringify({
+      version: 1,
+      pid: ownerPid,
+      processIdentity: ownerIdentity,
+      nonce: '77777777777777777777777777777777'
+    }), 'utf8');
+
+    const identities = new Map<number, string | null>([
+      [ownerPid, 'linux:BOOT-B:7350'],
+      [4202, 'linux:BOOT-B:9000']
+    ]);
+    const release = await acquireRuntimeControlOwnershipGate(dir, 2_000, {
+      pid: 4202,
+      processIdentity: async (pid) => identities.get(pid) ?? null
+    });
+
+    const current = JSON.parse(await fs.readFile(`${dir}/.comgu-control.owner`, 'utf8')) as { pid: number; processIdentity: string };
+    expect(current).toMatchObject({ pid: 4202, processIdentity: 'linux:BOOT-B:9000' });
+    await release();
+  });
   it.runIf(process.platform !== 'win32')('never treats a paused live ownership generation as stale before publication completes', async () => {
     let reachedClaim!: () => void;
     const claimed = new Promise<void>((resolve) => { reachedClaim = resolve; });
