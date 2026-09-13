@@ -17,7 +17,8 @@ describe('professional CLI install scripts', () => {
   it('keeps the PowerShell installer fail-closed and user-scoped', () => {
     const source = readFileSync('install.ps1', 'utf8');
     expect(source).toContain("$ErrorActionPreference = 'Stop'");
-    expect(source).toContain('Get-FileHash');
+    expect(source).toContain('[System.Security.Cryptography.SHA256]::Create()');
+    expect(source).not.toContain('Get-FileHash');
     expect(source).toContain('SHA256SUMS.txt');
     expect(source).toContain('LOCALAPPDATA');
     expect(source).toContain('ComGu\\bin');
