@@ -89,6 +89,10 @@ jobs:
             'ComGu-Linux-x64.deb',
             'ComGu-Linux-arm64.AppImage',
             'ComGu-Linux-arm64.deb',
+            'ComGu-CLI-windows-x64.zip',
+            'ComGu-CLI-windows-arm64.zip',
+            'ComGu-CLI-linux-x64.tar.gz',
+            'ComGu-CLI-linux-arm64.tar.gz',
             'ComGu-Extension.zip',
             'SHA256SUMS.txt'
           ]) {
@@ -182,6 +186,10 @@ jobs:
             publish/ComGu-Linux-x64.deb \
             publish/ComGu-Linux-arm64.AppImage \
             publish/ComGu-Linux-arm64.deb \
+            publish/ComGu-CLI-windows-x64.zip \
+            publish/ComGu-CLI-windows-arm64.zip \
+            publish/ComGu-CLI-linux-x64.tar.gz \
+            publish/ComGu-CLI-linux-arm64.tar.gz \
             publish/ComGu-Extension.zip \
             publish/SHA256SUMS.txt \
             --title "ComGu ${TAG#v}" \

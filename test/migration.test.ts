@@ -3,6 +3,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { migrateLegacyUserData, resolveCompatibleUserDataPath } from '../src/main/migration.js';
+import { defaultComGuProfileDir } from '../src/cli/profile-dir.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
 let root = '';
@@ -23,6 +24,20 @@ describe('ComGu user-data migration', () => {
     expect(setPath).toBeLessThan(ready);
   });
 
+  it('acquires the shared Desktop profile owner before any mutable profile bootstrap', () => {
+    const main = readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');
+    const awaitProfileOwner = main.indexOf('await desktopControlStart');
+    const machine = main.indexOf('await initMachineProfile(userData)');
+    const config = main.indexOf('initConfigPath(userData)');
+    const secrets = main.indexOf('initSecretsPath(userData)');
+    const durable = main.indexOf('initDurableStore(userData)');
+    expect(awaitProfileOwner).toBeGreaterThan(-1);
+    expect(awaitProfileOwner).toBeLessThan(machine);
+    expect(awaitProfileOwner).toBeLessThan(config);
+    expect(awaitProfileOwner).toBeLessThan(secrets);
+    expect(awaitProfileOwner).toBeLessThan(durable);
+  });
+
   it('keeps upgraded users on the legacy userData directory so safeStorage key material stays paired with secrets.bin', async () => {
     root = await makeTempDir('comgu-userdata-');
     const legacy = path.join(root, 'chat-on-steroids');
@@ -34,6 +49,7 @@ describe('ComGu user-data migration', () => {
     await fs.writeFile(path.join(current, 'Local State'), '{"os_crypt":{"encrypted_key":"wrong-new-key"}}', 'utf8');
 
     expect(resolveCompatibleUserDataPath({ appDataDir: root, defaultUserDataDir: current })).toBe(legacy);
+    expect(defaultComGuProfileDir('win32', { APPDATA: root }, root)).toBe(legacy);
   });
 
   it('ignores an empty leftover legacy directory', async () => {
@@ -50,6 +66,7 @@ describe('ComGu user-data migration', () => {
     const current = path.join(root, 'ComGu');
     await fs.mkdir(current, { recursive: true });
     expect(resolveCompatibleUserDataPath({ appDataDir: root, defaultUserDataDir: current })).toBe(current);
+    expect(defaultComGuProfileDir('win32', { APPDATA: root }, root)).toBe(current);
   });
 
   it('copies legacy config and ciphertext first, leaves legacy data intact, and is idempotent', async () => {

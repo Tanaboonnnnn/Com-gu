@@ -43,7 +43,7 @@ import {
   retireGoalDraftsFor,
   setGoalObjectiveNow,
   startGoalDraft
-} from './goal.js';
+} from './bridge-optional-runtime.js';
 import { logInfo, logWarn } from './logger.js';
 import {
   closeConversation,
@@ -101,7 +101,7 @@ import {
   workerConversationGone,
   workerRevivalDeliveredSince,
   type WorkerRevival
-} from './agents.js';
+} from './bridge-optional-runtime.js';
 import {
   abortContinuation,
   abortContinuationNow,
@@ -123,6 +123,7 @@ import { bindAgentWorkspace } from './workspace.js';
 import { MAX_GOAL_OBJECTIVE_CHARS } from '../shared/goal.js';
 import { chatWorkspaceScopeView, setChatWorkspaceScope } from './chat-workspace-scope.js';
 import { WorkspaceScopeError } from './run/scope.js';
+import { createGoalDurableRunController, type GoalDraftReceipt } from './run/goal-durable-run.js';
 
 /** Fixed candidates so the extension can find the app without being told a port. */
 export const DEFAULT_PORTS = [8765, 8766, 8767, 8768, 8769];
@@ -149,6 +150,18 @@ const STALE_SWARM_SWEEP_MS = 30_000;
 /** /events batches currently between parse and durable/session+worker lifecycle completion. */
 let observationWritesInFlight = 0;
 const browserFamilyByConversation = new Map<string, BrowserFamily>();
+let goalDurableRuns = createGoalDurableRunController();
+
+function goalRunOwner(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+async function goalRunOwnerForConversation(conversation: string): Promise<string | null> {
+  const live = liveConversations().find((entry) => entry.conversationId === conversation);
+  if (live) return goalRunOwner(live.sessionId);
+  const known = await findSessionByConversation(conversation, { requireUnique: true });
+  return known ? goalRunOwner(known.id) : null;
+}
 
 function browserFamily(value: unknown): BrowserFamily | null {
   return typeof value === 'string' && BROWSER_FAMILIES.includes(value as BrowserFamily) ? (value as BrowserFamily) : null;
@@ -1463,6 +1476,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           ]
         : []
     );
+    const objective = workerBlocked ? '' : goalObjectiveFor(id);
+    const goalDraft = goalViewFor(id, goalClient);
+    if (objective && goalDraft) {
+      // A ready Goal draft is about to cross the browser's irreversible send boundary. Make
+      // that ambiguity durable before exposing the token/reply to the page; a crash between
+      // this response and /goal/ack must reconcile rather than redraft the same user turn.
+      await goalDurableRuns.observeDraft(goalRunOwner(live.sessionId), objective, goalDraft);
+    }
     return json(
       res,
       200,
@@ -1521,11 +1542,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
           model: getConfig().goal.model,
           // This chat's own goal, and never a worker's: the loop is off there whatever is
           // stored, and reporting one would let the page offer to drive a chat the prime owns.
-          objective: workerBlocked ? '' : goalObjectiveFor(id),
+          objective,
           // Why the switch is drawn off when the user did not turn it off. Without this the
           // menu says "Goal off" in a worker chat and looks like a setting that failed to save.
           blocked: workerBlocked ? 'worker' : '',
-          draft: goalViewFor(id, goalClient)
+          draft: goalDraft
         },
         // Local calls still executing for *this chat*. ChatGPT-native compaction waits for
         // this to reach zero after interrupting the turn, so the handoff is written about a
@@ -1842,6 +1863,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         origin
       );
     }
+    const objective = goalObjectiveFor(id);
+    if (objective) {
+      const prepared = await goalDurableRuns.prepare(goalRunOwner(sessionId), objective, turnId);
+      if (prepared?.state === 'needs-reconciliation') {
+        return json(
+          res,
+          409,
+          {
+            error: 'run_needs_reconciliation',
+            message: 'The previous Goal send has an uncertain outcome. ComGu will not draft another user turn until it is reconciled.'
+          },
+          origin
+        );
+      }
+    }
     let draft;
     try {
       draft = startGoalDraft({ sessionId, conversationId: id, turnId, clientId });
@@ -1856,6 +1892,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       }
       throw err;
     }
+    if (objective) await goalDurableRuns.observeDraft(goalRunOwner(sessionId), objective, draft);
     return json(res, 200, { goal: draft, sessionId }, origin);
   }
 
@@ -1871,6 +1908,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
     const token = typeof body['token'] === 'string' ? body['token'] : '';
     const clientId = typeof body['clientId'] === 'string' ? body['clientId'].slice(0, 100) : '';
+    const receipt: GoalDraftReceipt = body['receipt'] === 'sent' || body['receipt'] === 'retired' ? body['receipt'] : 'unknown';
+    const runOwner = await goalRunOwnerForConversation(id);
+    if (runOwner) await goalDurableRuns.acknowledge(runOwner, token, receipt);
     return json(res, 200, { acknowledged: ackGoalDraft(id, token, clientId) }, origin);
   }
 
@@ -1901,6 +1941,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (goalWorkerChat(id)) return json(res, 409, { error: 'goal_worker_chat' }, origin);
     const text = typeof body['text'] === 'string' ? body['text'] : '';
     if (text.length > MAX_GOAL_OBJECTIVE_CHARS * 2) return tooLarge(res, origin);
+    const previousObjective = goalObjectiveFor(id);
+    const nextObjective = text.trim().slice(0, MAX_GOAL_OBJECTIVE_CHARS);
+    if (previousObjective && previousObjective !== nextObjective) {
+      const runOwner = await goalRunOwnerForConversation(id);
+      if (runOwner) {
+        await goalDurableRuns.cancelObjective(runOwner, nextObjective ? 'Goal objective changed' : 'Goal objective cleared');
+      }
+    }
     const objective = await setGoalObjectiveNow(id, text);
     retireGoalDraftsFor(id);
     logInfo(objective ? `bridge: chat ${id} was given a specific goal` : `bridge: the specific goal for chat ${id} was cleared`);
@@ -4386,6 +4434,7 @@ export async function restoreCommands(): Promise<void> {
 
 /** Test seam. */
 export function resetBridgeForTests(): void {
+  goalDurableRuns = createGoalDurableRunController();
   browserFamilyByConversation.clear();
   for (const command of commands) if (command.timer) clearTimeout(command.timer);
   if (browserPresenceTimer) clearTimeout(browserPresenceTimer);
@@ -4412,4 +4461,9 @@ export function resetBridgeForTests(): void {
 
 export function bridgePort(): number | null {
   return port;
+}
+
+/** Loads compact Durable Run control state before any startup continuation can be attempted. */
+export async function recoverDurableGoalRuns() {
+  return goalDurableRuns.recover();
 }

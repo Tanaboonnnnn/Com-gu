@@ -33,6 +33,16 @@ vi.mock('../src/main/computer/index.js', () => ({
 
 import { registerDesktopTools } from '../src/main/mcp/tools-desktop.js';
 
+const driver = {
+  capabilities: async () => ({ available: true }),
+  observe: async (request: any) => {
+    if (request.kind === 'windows') return { kind: 'windows', ...(await computer.listWindows()) };
+    throw new Error(`unexpected observe ${request.kind}`);
+  },
+  act: async (request: any) => (computer.actAndCapture as any)(request.actions, request),
+  dispose: async () => undefined
+} as never;
+
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
     browse: false,
@@ -70,7 +80,7 @@ describe('Desktop computer permission normalization', () => {
       },
       guarded: vi.fn()
     };
-    registerDesktopTools(registrar as never);
+    registerDesktopTools(registrar as never, driver);
     expect(computerHandler).not.toBeNull();
 
     const result = await computerHandler!({
@@ -109,7 +119,7 @@ describe('Desktop computer permission normalization', () => {
       },
       guarded: vi.fn()
     };
-    registerDesktopTools(registrar as never);
+    registerDesktopTools(registrar as never, driver);
 
     const result = await computerHandler!({ actions: [{ type: 'read_clipboard' }] });
     const text = result.content[0].text as string;
@@ -147,7 +157,7 @@ describe('Desktop computer permission normalization', () => {
       },
       guarded: async (_cap: unknown, _name: unknown, fn: () => Promise<any>) => fn()
     };
-    registerDesktopTools(registrar as never);
+    registerDesktopTools(registrar as never, driver);
 
     const result = await observeHandler!({ what: 'windows', max_elements: 3 });
     const text = result.content[0].text as string;

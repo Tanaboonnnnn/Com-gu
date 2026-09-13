@@ -1,6 +1,7 @@
 node_modules/
 .worktrees/
 out/
+.cli-build/
 release/
 release-next/
 release-clean/

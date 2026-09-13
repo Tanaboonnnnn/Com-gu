@@ -53,17 +53,19 @@
 import { randomBytes } from 'node:crypto';
 import type { Handoff } from '../../shared/session.js';
 import { logInfo, logWarn } from '../logger.js';
+import { clearChatWorkspace, moveChatWorkspace, workspaceForChat } from '../workspace.js';
 import {
   PRIME_ID,
   agentForOwnedConversation,
   beginPrimeTransfer,
   cancelPrimeTransfer,
+  clearGoalObjective,
   commitPrimeTransfer,
   freezePrimeTransfer,
+  goalObjectiveFor,
+  moveGoalObjective,
   thawPrimeTransfer
-} from '../agents.js';
-import { clearChatWorkspace, moveChatWorkspace, workspaceForChat } from '../workspace.js';
-import { clearGoalObjective, goalObjectiveFor, moveGoalObjective } from '../goal.js';
+} from '../bridge-optional-runtime.js';
 import { moveChatWorkspaceScopeProjection } from '../chat-workspace-scope.js';
 import { writeDurableNow, writeDurableSoon } from '../durable.js';
 import { prepareHandoff, resumeBootstrapMatches } from './handoff.js';

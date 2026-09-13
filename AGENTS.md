@@ -25,8 +25,10 @@ computer capabilities over MCP. It is a bridge and a permission layer — not a 
 not a model host. It also ships a Chrome extension that watches ChatGPT itself, so the app can
 record conversations, prove which conversation issued which tool call, replace generic tool
 rows with what actually happened, compact a long chat into a fresh one, and run worker chats.
-Core is portable; the Desktop/computer-use surface is deliberately Windows-only and must be
-absent from live macOS/Linux capability/discovery state.
+Core is portable. The Desktop/computer-use surface is native on Windows and supported Linux
+graphical sessions; macOS remains Core-only in V1 and must not advertise Desktop capabilities.
+Linux Desktop is adapter-driven and fail-closed: X11 requires the probed local tools, while
+Wayland authority comes only from the active xdg-desktop-portal session grants.
 
 Four runtime planes, only two of which are servers:
 
@@ -145,7 +147,8 @@ Release numbers are authoritative in `package.json`, `src/main/version.ts` and
 the app/extension versions stay in sync, so this architecture guide deliberately does not
 copy a release number that can drift. Core is cross-platform; main process is TypeScript;
 extension is plain MV3 JavaScript with no build step; Vitest; `node-pty` is the main native
-terminal dependency. Desktop automation remains explicitly Windows-only.
+terminal dependency. Desktop automation is implemented for Windows and supported Linux graphical
+sessions; macOS remains unsupported for Desktop V1.
 
 Fresh-install defaults from `config.ts` — **all Core tool permissions on**, **read-only off**,
 **recording on**, session advisory/limit **400k/533k** estimated tokens, **auto-compaction on
@@ -154,9 +157,10 @@ derived, never typed: the Chat panel offers one threshold and writes `limit = th
 so the defaults have to satisfy that relation or the first save in that panel moves the red
 line. Existing
 configs keep explicit user choices; conservative migration defaults do not widen omitted legacy
-permissions merely because the fresh-install defaults are broader. Windows also enables the
-Desktop capability group; macOS/Linux mask that group off at runtime while preserving stored
-choices so a config moved back to Windows does not lose them.
+permissions merely because the fresh-install defaults are broader. Windows enables the Desktop
+capability group on first install. Linux supports Desktop but starts those permissions off until
+the user explicitly enables them and the active X11/Wayland adapter proves the corresponding
+capability. macOS masks the Desktop group off at runtime while preserving stored choices.
 
 ### Stale-doc traps
 
@@ -190,6 +194,8 @@ src/preload/index.ts          the complete renderer-facing API allowlist
 src/main/secrets.ts           Electron safeStorage-backed secret storage
 src/main/logger.ts            redacted RAM-only operational log (not the session store)
 src/main/durable.ts           small named JSON state files under userData/state
+src/main/run/durable-run.ts   bounded long-run checkpoint/lease/reconciliation authority
+src/main/runtime/features.ts  Runtime Feature loading seam; optional adapters stay lazy
 src/main/diagnostics.ts       the UI self-test chain, hop by hop
 
 ── MCP ────────────────────────────────────────────────────────────────────
@@ -202,6 +208,13 @@ src/main/mcp/tools-desktop.ts Desktop registration + wrappers
 src/main/mcp/inbound.ts       x-request-id extraction and normalization
 src/main/mcp/call-context.ts  AsyncLocalStorage per call + in-flight accounting
 src/main/mcp/instructions.ts  model-facing server instructions
+
+── desktop adapters ─────────────────────────────────────────────────────────
+src/main/desktop/windows.ts          Windows native DesktopDriver adapter
+src/main/desktop/linux/index.ts      Linux session probe + driver selection
+src/main/desktop/linux/x11.ts        X11 capture/input/clipboard adapter
+src/main/desktop/linux/wayland.ts    portal-grant DesktopDriver adapter
+src/main/desktop/linux/wayland-portal.ts  RemoteDesktop/ScreenCast portal transport/session
 
 ── filesystem / execution ─────────────────────────────────────────────────
 src/main/sandbox.ts           approved-root authority; virtual↔native containment
@@ -253,7 +266,7 @@ electron-builder.yml          Windows/macOS/Linux package contents and target po
 ```
 
 `exec.ts` remains as the shared low-level process/environment primitive used by unified exec,
-the Windows desktop helper and tunnels. The retired connector-native managed-process and patch
+native desktop helpers/adapters and tunnels. The retired connector-native managed-process and patch
 stacks were removed after production moved to `codex/unified-exec.ts` and `codex/apply-patch/*`;
 do not recreate parallel runtimes beside those live owners.
 
@@ -308,10 +321,12 @@ earn it today.
 | `session` | recording enabled | session subsystem |
 | `agents` | multi-agent enabled | `agents.ts` |
 
-**Desktop** (`chat-on-steroids-desktop`, optional, **Windows-only**): `observe` needs `screen`;
-`computer` registers on `control` **or** either clipboard permission, then re-checks each
-of its 13 actions at runtime. The surface is offered at all only when one of those four
-permissions exists on Windows — an empty or impossible connector is worse than no connector.
+**Desktop** (`chat-on-steroids-desktop`, optional, **Windows + supported Linux graphical
+sessions**): `observe` needs a live `screen` capability; `computer` registers on `control` **or**
+either clipboard permission, then re-checks each of its 13 actions at runtime. Windows uses the
+native computer helper. Linux routes through the probed X11 or Wayland adapter and publishes only
+capabilities the adapter can prove. macOS exposes no Desktop surface in V1. An empty or impossible
+connector is worse than no connector.
 
 **Exposure is monotonic per endpoint lifetime.** ChatGPT caches schemas, and yanking one
 from under a cached snapshot surfaces as a transport-level UNKNOWN failure. So
@@ -751,13 +766,22 @@ retry, not an outage — an outage is complaints that outlive a poll cycle with 
 poll. `diagnostics.ts` builds the UI self-test and must agree with that same grace period.
 Tests: `tunnel.test.ts`.
 
-**Desktop automation (Windows only).** `tools-desktop.ts` + `computer/*` for screenshots, UI
-Automation and SendInput/clipboard. Registration-time permission is not enough: each action re-checks. The
-helper is prewarmed only when native Desktop capabilities are published; window observation is
-background-first and never focuses. Recent immutable frames bind coordinates to screenshot and
-window geometry; semantic refs bind cached elements to bounded UIA snapshots. Physical input
-revalidates the target, batches report partial completion and route evidence, and compact local
-postconditions avoid model-driven wait/observe loops. Tests: `computer*.test.ts`.
+**Desktop automation.** `tools-desktop.ts` targets the shared `DesktopDriver` contract and re-checks
+live permission for every action; registration-time permission is never enough. On Windows,
+`computer/*` owns screenshots, UI Automation, SendInput and clipboard. Its helper is prewarmed only
+when native Desktop capabilities are published; recent immutable frames bind coordinates to the
+captured target and semantic refs bind cached elements to bounded UIA snapshots.
+
+On Linux, `desktop/linux/index.ts` chooses an adapter from the logged-in graphical session. X11
+uses `x11.ts` with probed `xdotool`/capture/clipboard tools, including real window origins for
+frame-coordinate mapping. Wayland uses `wayland-portal.ts` + `wayland.ts`; authority comes from the
+same RemoteDesktop/ScreenCast portal session and disappears immediately on revocation. The current
+gdbus transport cannot receive the PipeWire FD for the selected ScreenCast stream, so **Wayland
+capture is deliberately fail-closed** rather than mixing independent Screenshot-portal pixels with
+RemoteDesktop absolute-input coordinates. Keyboard portal control may remain available when granted;
+frame-based pointer control cannot be claimed until same-stream capture exists. macOS remains
+Core-only for Desktop V1. Tests: `computer*.test.ts`, `desktop-linux.test.ts`,
+`desktop-wayland.test.ts`, `wayland-portal.test.ts`.
 
 **On-disk state to inspect.** Electron `userData` — `%APPDATA%\chat-on-steroids\` on Windows,
 `~/Library/Application Support/chat-on-steroids/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/chat-on-steroids/`

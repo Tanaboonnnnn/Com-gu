@@ -1,5 +1,27 @@
 # Changelog
 
+## [3.2.0] — 2026-09-13
+
+3.2.0 is the durable multi-machine runtime release. It adds the standalone Windows/Linux CLI, shared profile ownership across Desktop and CLI, stable per-machine identity, recoverable Durable Runs, lifecycle-owned Desktop drivers, and capability-gated Linux desktop automation while keeping ambiguous mutations fail closed.
+
+### Added
+- Standalone ComGu CLI packages for Windows x64/ARM64 and Linux x64/ARM64, with setup/status/admin flows and a shared local runtime control channel.
+- Durable Run checkpoints and recovery for long-running goals across turn cutoffs, browser reconnects and app restarts; uncertain mutations enter `needs-reconciliation` instead of replaying automatically.
+- Linux Desktop adapters for X11 and portal-gated Wayland with explicit capability projection.
+- Stable machine metadata for multi-machine routing and command-result attribution.
+
+### Changed
+- Desktop and CLI now share one frontend-independent profile ownership authority. The losing frontend stays out of mutable profile initialization.
+- Machine/config/credential bootstrap occurs only after profile ownership is proven.
+- Default CLI profile resolution follows the same legacy-userData compatibility rules as Desktop upgrades.
+- DesktopDriver lifetime is owned by the connection generation and disposed deterministically on disconnect, reconnect, startup failure and shutdown.
+- Pixel-coordinate desktop actions require frame identity; semantic ref navigation remains frame-free so app/sidebar navigation does not require a screenshot coordinate contract.
+
+### Security and correctness
+- Unix ownership recovery uses generation-aware exclusive records and process-start identity so stale recovery cannot replace a live creator or trust a recycled PID.
+- Wayland keyboard-only authority remains usable when granted, while pointer coordinates fail closed without an authoritative selected-stream frame.
+- DurableRun state persists before publication and recovery loading remains single-flight.
+- Runtime feature startup/shutdown races, lazy Agents installation and Windows descendant cleanup have deterministic regression coverage.
 ## [3.1.5] ? 2026-09-09
 
 3.1.5 supersedes the unreleased 3.1.4 candidate and carries its Linux secure-storage and extension-reachability fixes, plus bounded process-group cleanup for Linux GUI release smoke jobs.

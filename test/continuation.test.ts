@@ -25,6 +25,7 @@ vi.mock('electron', () => ({
 }));
 
 const { defaultConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
+const agentsModule = await import('../src/main/agents.js');
 const {
   TRANSFER_TTL_MS,
   beginPrimeTransfer,
@@ -48,7 +49,8 @@ const {
   swarmStateForCaller,
   thawPrimeTransfer,
   WORKER_CONTEXT_CEILING_TOKENS
-} = await import('../src/main/agents.js');
+} = agentsModule;
+const goalModule = await import('../src/main/goal.js');
 const {
   CONTINUATION_TTL_MS,
   abortContinuation,
@@ -76,7 +78,10 @@ const {
   goalObjectiveFor,
   resetGoalStateForTests,
   setGoalObjective
-} = await import('../src/main/goal.js');
+} = goalModule;
+const { installBridgeAgentsRuntime, installBridgeGoalRuntime } = await import('../src/main/bridge-optional-runtime.js');
+installBridgeGoalRuntime(goalModule);
+installBridgeAgentsRuntime(agentsModule);
 
 const { makeTempDir, removeTempDir, SAMPLE_BRIEF } = await import('./helpers.js');
 const { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests } = await import('../src/main/chat-workspace-scope.js');

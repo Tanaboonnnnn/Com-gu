@@ -44,8 +44,11 @@ import {
   resetAgentsForTests,
   spawnWithWorkspaceScope
 } from '../src/main/agents.js';
+import { installOptionalAgentsRuntime } from '../src/main/mcp/optional-runtime.js';
+import * as agentsRuntime from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
 import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
+import type { DesktopDriver } from '../src/main/desktop/driver.js';
 
 // ---------------------------------------------------------------- transport
 
@@ -237,6 +240,15 @@ let approved: string;
 let outside: string;
 let endpoint: McpEndpoint;
 let ctx: ToolContext;
+const desktopFixtureDriver = {
+  capabilities: async () => ({
+    available: true, capture: true, pointer: true, keyboard: true,
+    clipboardRead: true, clipboardWrite: true, windows: true, uiElements: true, focus: true
+  }),
+  observe: async () => { throw new Error('Desktop fixture observation was not expected'); },
+  act: async () => { throw new Error('Desktop fixture action was not expected'); },
+  dispose: async () => undefined
+} as unknown as DesktopDriver;
 
 function withCaps(overrides: Partial<Capabilities>): Capabilities {
   return { ...DEFAULT_CAPABILITIES, ...overrides };
@@ -307,7 +319,7 @@ beforeEach(async () => {
   ctx.agentTools = false;
   // A fresh endpoint gives every test a fresh ChatGPT tool-surface snapshot. Tests
   // that change permissions mid-flight still exercise the real live-config path.
-  endpoint = await startMcpServer(() => ctx);
+  endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
 });
 
 // ------------------------------------------------------------------- tests
@@ -425,8 +437,13 @@ describe('active Run file authority', () => {
         deleteFile: true,
         command: false
       });
+      // Production startup loads the Agents RuntimeFeature before connecting MCP whenever
+      // multi-agent is enabled. This fixture imports the broker directly to construct worker
+      // state, so install the same optional MCP adapter explicitly instead of relying on the
+      // retired eager import from startMcpServer().
+      installOptionalAgentsRuntime(agentsRuntime);
       if (endpoint) await endpoint.stop();
-      endpoint = await startMcpServer(() => ctx);
+      endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
 
       setChatWorkspaceScopeForTests(primeConversation, runRoots, { primaryRoot: 'a', sharedRoots: ['b'] });
       spawnWithWorkspaceScope(
@@ -479,7 +496,7 @@ describe('active Run file authority', () => {
       // and must use the same narrowed roots before it touches disk.
       ctx.caps = withCaps({ command: true, read: true, browse: true, metadata: true, create: true, edit: true });
       if (endpoint) await endpoint.stop();
-      endpoint = await startMcpServer(() => ctx);
+      endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
       const shellPatchTarget = path.join(rootB, 'blocked-shell.txt');
       const shellPatch = addPatch('/b/blocked-shell.txt', ['blocked']);
       const intercepted = await asWorker('exec_command', {
@@ -879,7 +896,7 @@ describe('surface boundaries', () => {
     // looks like from here.
     ctx.agentTools = false;
     await endpoint.stop();
-    endpoint = await startMcpServer(() => ctx);
+    endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
 
     expect(toolNames(await core('tools/list'))).not.toContain('agents');
     // And with it every word of the multi-agent vocabulary: nothing is left for a model to
@@ -1708,6 +1725,20 @@ describe('desktop capabilities', () => {
     });
     expect(written.body.result?.isError).toBe(true);
     expect(textOf(written)).toContain('Replace clipboard text permission');
+  });
+
+  it('requires a fresh frame identity for pixel coordinates after control permission is proven', async () => {
+    ctx.readOnly = false;
+    ctx.caps = withCaps({ screen: true, control: true });
+    expect(toolNames(await desktop('tools/list'))).toContain('computer');
+
+    const clicked = await desktop('tools/call', {
+      name: 'computer',
+      arguments: { actions: [{ type: 'click', x: 5, y: 5 }] }
+    });
+    expect(clicked.body.result?.isError).toBe(true);
+    expect(textOf(clicked)).toContain('frameId is required for coordinate actions');
+    expect(textOf(clicked)).toContain('click_ref');
   });
 
   it('marks observing read-only and control destructive', async () => {
@@ -3138,7 +3169,21 @@ describe('exec_command and write_stdin', () => {
         yield_time_ms: 8_000
       }
     });
-    const brokenText = textOf(broken);
+    let brokenText = textOf(broken);
+    const yieldedSession = brokenText.match(/Process running with session ID (\d+)/)?.[1];
+    if (yieldedSession) {
+      // A cold Windows/MXC command can legitimately consume the response budget before the
+      // second batch command exits. Yielding is production behavior, not a failed batch, so
+      // follow the managed session exactly as a client would instead of making this regression
+      // depend on hosted-runner startup speed.
+      for (let attempt = 0; attempt < 3 && !brokenText.includes('--- exit code 3 ---'); attempt++) {
+        const drained = await core('tools/call', {
+          name: 'write_stdin',
+          arguments: { session_id: Number(yieldedSession), yield_time_ms: 5_000 }
+        });
+        brokenText += `\n${textOf(drained)}`;
+      }
+    }
     expect(brokenText).toContain('--- exit code 3 ---');
     expect(brokenText).not.toContain('is a result, not a failure');
   }, 60_000);

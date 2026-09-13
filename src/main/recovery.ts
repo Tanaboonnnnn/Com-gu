@@ -1,4 +1,4 @@
-import { currentRunAuthorityGuard } from './agents.js';
+import { currentRunAuthorityGuard } from './bridge-optional-runtime.js';
 
 export type RecoveryOperation =
   | 'reconnect-bridge'

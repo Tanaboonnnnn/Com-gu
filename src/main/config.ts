@@ -12,6 +12,7 @@ import { z } from 'zod';
 import {
   BROWSER_FAMILIES,
   CAPABILITIES,
+  DESKTOP_CAPABILITIES,
   DEFAULT_CAPABILITIES,
   GOAL_REASONING_LEVELS,
   WRITE_CAPABILITIES,
@@ -37,8 +38,8 @@ import { capabilitiesForPlatform } from './platform.js';
  * Defaults for the newer sections, in one place so the schema and defaultConfig()
  * cannot drift apart.
  *
- * Recording starts ON. Everything the app is actually for — the readable timeline, Compact
- * & resume, and agent attribution — reads the recorded history, so an install that starts
+ * Recording starts ON. Everything the app is actually for โ€” the readable timeline, Compact
+ * & resume, and agent attribution โ€” reads the recorded history, so an install that starts
  * with it off is an install where the main features silently do nothing. It writes only to
  * this app's own data folder and uploads nothing. Note this changes the default for *new*
  * configs only: an existing config already carries an explicit `record`, and a user who
@@ -52,14 +53,14 @@ import { capabilitiesForPlatform } from './platform.js';
 /**
  * Where the pressure meter turns amber and red.
  *
- * These are measured in *this app's* units — `estimateTokens`, four characters to a token,
- * over the events it kept — and not in whatever ChatGPT counts. The two are not the same
+ * These are measured in *this app's* units โ€” `estimateTokens`, four characters to a token,
+ * over the events it kept โ€” and not in whatever ChatGPT counts. The two are not the same
  * number and never will be: the app cannot see the system prompt, the memory, the file
  * attachments or the model's own reasoning, and ChatGPT's counter is private.
  *
  * So the thresholds are calibrated against observed behaviour rather than a published
  * context window. The first pair (180k/200k) was set from the published figure, and a real
- * session then ran past 400k of these units before ChatGPT would take no more — meaning the
+ * session then ran past 400k of these units before ChatGPT would take no more โ€” meaning the
  * meter had been demanding a compaction since roughly the halfway mark, for hours, on a
  * chat that was fine. A warning that cries wolf at half the real capacity is a warning
  * people learn to click past, which costs more than having no warning at all.
@@ -79,7 +80,7 @@ const DEFAULT_SESSIONS: SessionSettings = {
   record: true,
   retainDays: 30,
   advisoryTokens: DEFAULT_CONTEXT_WINDOW,
-  // Derived, never typed. The Chat panel writes `limit = threshold × 4/3` on every save,
+  // Derived, never typed. The Chat panel writes `limit = threshold ร— 4/3` on every save,
   // so a default that did not already satisfy that relation would be a state the UI cannot
   // produce: the red line would move the first time anyone opened the panel and saved.
   limitTokens: Math.round((DEFAULT_CONTEXT_WINDOW * 4) / 3)
@@ -90,8 +91,8 @@ const DEFAULT_SESSIONS: SessionSettings = {
  *
  * Raising a default only helps a fresh install: every existing config was written with the
  * old figures spelled out, so it would keep the too-early warning forever. A stored pair
- * that is *exactly* the old defaults was never a decision — it is what the app wrote for
- * itself — so it moves. Anything else the user typed, and it stays put.
+ * that is *exactly* the old defaults was never a decision โ€” it is what the app wrote for
+ * itself โ€” so it moves. Anything else the user typed, and it stays put.
  */
 const OLD_TOKEN_DEFAULTS = [
   { advisoryTokens: 180_000, limitTokens: 200_000 },
@@ -101,7 +102,7 @@ const DEFAULT_COMPACTION: CompactionSettings = {
   // On, at the advisory line.
   //
   // Automatic compaction is edge-triggered since 1.8: an old chat that merely opens above
-  // this number does nothing. That is what makes the advisory line usable as the trigger —
+  // this number does nothing. That is what makes the advisory line usable as the trigger โ€”
   // the crossing turn still finishes and still writes its handoff, rather than the app
   // waiting for a chat that is already over the line and compacting it on sight.
   auto: true,
@@ -118,7 +119,7 @@ const DEFAULT_COMPACTION: CompactionSettings = {
 /**
  * The `~` prefix is OpenRouter's marker for a family alias: this one always resolves to the
  * newest DeepSeek V4 Flash, so the default does not quietly rot into a snapshot from months
- * ago the way a pinned id does. `deepseek/deepseek-v4-flash` was such a pin — it reads like
+ * ago the way a pinned id does. `deepseek/deepseek-v4-flash` was such a pin โ€” it reads like
  * "the flash model" but OpenRouter publishes it as V4 Flash 0423, and by August there were
  * two newer revisions the default would never have reached. The alias is also the cheaper
  * of the two: $0.04/M prompt against the pin's $0.057/M.
@@ -206,7 +207,7 @@ const capabilitiesSchema = z
   .transform((caps) => ({ ...DEFAULT_CAPABILITIES, ...caps }) as Capabilities);
 
 const configSchema = z.object({
-  // A config written by hand — or by a build before `/skills` was reserved — must not be
+  // A config written by hand โ€” or by a build before `/skills` was reserved โ€” must not be
   // able to claim a reserved virtual root. Renamed rather than rejected: a single bad root
   // name is not a reason to throw away the whole config and every other approved folder.
   roots: z
@@ -223,7 +224,7 @@ const configSchema = z.object({
     kind: z.enum(['openai', 'cloudflared', 'manual']),
     tunnelId: z.string().max(128),
     // Optional with an empty default, so a config written before the connector split
-    // loads unchanged and simply has no Desktop tunnel yet — which is also the correct
+    // loads unchanged and simply has no Desktop tunnel yet โ€” which is also the correct
     // state for it, since the user has not created that connector in ChatGPT either.
     desktopTunnelId: z.string().max(128).optional().default(''),
     binaryPath: z.string().max(4096)
@@ -233,7 +234,7 @@ const configSchema = z.object({
     autoConnect: z.boolean(),
     privacyScreenshots: z.boolean().optional().default(false),
     // Dark is the design the app is drawn for, and a config written before the theme
-    // existed has no stored answer to override — so it is the default rather than the
+    // existed has no stored answer to override โ€” so it is the default rather than the
     // fallback. An explicit `light` is somebody's own choice and is never touched.
     theme: z.enum(['light', 'dark']).optional().default('dark'),
     locale: z.enum(['en', 'th']).optional().default('en').catch('en')
@@ -293,7 +294,7 @@ const configSchema = z.object({
       // Repaired for the same reason, and one this section is specifically exposed to: the
       // set of levels is a provider's vocabulary, so a config written by a version that
       // knows one more of them than this one does is a config this app will meet. Rejecting
-      // it would send the whole file — every root, every permission — through conservative
+      // it would send the whole file โ€” every root, every permission โ€” through conservative
       // recovery over a word in one field nobody would miss.
       reasoning: z
         .enum(GOAL_REASONING_LEVELS)
@@ -332,7 +333,11 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform): Con
     // Computer use is intentionally not part of the macOS/Linux port. Fresh installs on those
     // hosts should therefore never present Windows-only permissions as granted, even though the
     // stored schema remains cross-platform so one config can still be moved between machines.
-    capabilities: capabilitiesForPlatform({ ...ALL_FIRST_LAUNCH_CAPABILITIES }, platform),
+    capabilities: (() => {
+      const capabilities = capabilitiesForPlatform({ ...ALL_FIRST_LAUNCH_CAPABILITIES }, platform);
+      if (platform === 'linux') for (const capability of DESKTOP_CAPABILITIES) capabilities[capability] = false;
+      return capabilities;
+    })(),
     readOnly: false,
     browser: { preference: 'prime' },
     tunnel: { kind: 'openai', tunnelId: '', desktopTunnelId: '', binaryPath: '' },
@@ -434,7 +439,7 @@ export async function loadConfig(): Promise<Config> {
   return current;
 }
 
-/** Applies any superseded pair in OLD_TOKEN_DEFAULTS → DEFAULT_SESSIONS, untouched pairs only. */
+/** Applies any superseded pair in OLD_TOKEN_DEFAULTS โ’ DEFAULT_SESSIONS, untouched pairs only. */
 function recalibrateTokens(config: Config): Config {
   const { advisoryTokens, limitTokens } = config.sessions;
   const untouched = OLD_TOKEN_DEFAULTS.some(
@@ -458,7 +463,7 @@ function recalibrateTokens(config: Config): Config {
  *
  * A config written before 1.7.5 spells the old answer out, so raising the default alone
  * would only ever reach a fresh install. A stored pair that is *exactly* the old default
- * was never a decision — it is what the app wrote for itself — so it moves. Anything the
+ * was never a decision โ€” it is what the app wrote for itself โ€” so it moves. Anything the
  * user actually chose is left alone, including switching it off on purpose, which is why
  * `auto: true` with the old threshold is not touched: that is somebody's own setting.
  */
@@ -479,7 +484,7 @@ function adoptAutoCompaction(config: Config): Config {
  * This is the third time a stored number that was never chosen has had to follow a default,
  * and it is the one case where the file's own rule is uncomfortable. `adoptAutoCompaction`
  * above deliberately leaves `auto: true` at the old threshold alone, on the grounds that
- * switching it on was a decision — but that was written when `auto: false` was the shipped
+ * switching it on was a decision โ€” but that was written when `auto: false` was the shipped
  * default. Since 1.8 the app writes `auto: true` at 300k for itself, so the two populations
  * are no longer distinguishable in the file, and the larger of them never decided anything.
  *

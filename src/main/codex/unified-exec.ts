@@ -564,7 +564,41 @@ class UnifiedExecProcess {
     }
   }
 
+  /**
+   * Waits for Node to observe the spawned process and its stdio handles as closed.
+   *
+   * `taskkill /T /F` returning only proves Windows accepted/completed the tree-kill helper.
+   * Under load the ChildProcess `close` event can trail that helper: unlike `exit`, `close`
+   * also waits for the stdio handles inherited by descendants to be released. Returning from
+   * terminate before that boundary lets a caller immediately remove the old cwd while Windows
+   * still reports it EBUSY. The ceiling keeps shutdown bounded if a native handle misbehaves;
+   * the common path resolves from the event without sleeping.
+   */
+  private async waitForChildCloseAfterTermination(timeoutMs = 10_000): Promise<void> {
+    const child = this.child;
+    if (!child) return;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      // A process can have emitted `exit` while inherited stdio is still draining, so do not
+      // use this as the completion condition. It only tells us to keep waiting for `close`.
+    }
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        child.off('close', finish);
+        resolve();
+      };
+      child.once('close', finish);
+      timer = setTimeout(finish, Math.max(50, timeoutMs));
+      timer.unref?.();
+    });
+  }
+
   async terminate(): Promise<void> {
+    const childClose = this.child ? this.waitForChildCloseAfterTermination() : null;
     if (this.pty) {
       try {
         this.pty.kill();
@@ -578,6 +612,7 @@ class UnifiedExecProcess {
     } else if (this.child?.pid !== undefined) {
       await terminateProcessTree(this.child.pid, true);
     }
+    if (childClose) await childClose;
     this.signalExit(this.exit);
     this.closeOutput();
   }

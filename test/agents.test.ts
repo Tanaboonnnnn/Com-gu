@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
 }));
 
 const { defaultConfig, getConfig, initConfigPath, saveConfig } = await import('../src/main/config.js');
+const agentsRuntime = await import('../src/main/agents.js');
 const {
   AgentError,
   PRIME_ID,
@@ -89,8 +90,9 @@ const {
   workerConversationGone,
   workerRevivalClaimed,
   workspaceScopeForCaller
-} = await import('../src/main/agents.js');
+} = agentsRuntime;
 const { startMcpServer } = await import('../src/main/mcp/server.js');
+const { installOptionalAgentsRuntime } = await import('../src/main/mcp/optional-runtime.js');
 const { runningToolCalls } = await import('../src/main/mcp/call-context.js');
 const { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } = await import('../src/main/durable.js');
 const { findSessionByConversation, initSessionStore, readRecentEvents, resetSessionStoreForTests } = await import(
@@ -145,6 +147,10 @@ afterAll(async () => {
 
 beforeEach(() => {
   resetAgentsForTests();
+  // Production startup loads this adapter through the lazy Agents RuntimeFeature before
+  // exposing agent tools. This suite imports the broker directly, so mirror that one wiring
+  // step explicitly instead of relying on the retired eager Agents import from MCP startup.
+  installOptionalAgentsRuntime(agentsRuntime);
   resetRecorderForTests();
   resetWorkspaces();
   resetChatWorkspaceScopesForTests();

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(() => {
@@ -16,14 +16,17 @@ vi.mock('electron', () => ({
   }
 }));
 
-import { act } from '../src/main/computer/index.js';
+import { act, configureComputerClipboard } from '../src/main/computer/index.js';
 
 describe('desktop local-only action path', () => {
   beforeEach(() => {
     mocks.spawn.mockClear();
     mocks.readText.mockClear();
     mocks.writeText.mockClear();
+    configureComputerClipboard({ readText: mocks.readText, writeText: mocks.writeText });
   });
+
+  afterEach(() => configureComputerClipboard(null));
 
   it('runs clipboard-only work without starting the PowerShell desktop helper', async () => {
     const result = await act([

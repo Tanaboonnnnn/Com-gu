@@ -6,22 +6,28 @@ authoritative; `src/main/mcp/surfaces.ts`, `src/main/mcp/tools-core.ts`,
 
 ## Connectors
 
-ComGu publishes Core on Windows, macOS and Linux. Windows additionally publishes the
-optional Desktop connector. They are separate discovery and permission boundaries and use
-separate secret tokenized local paths.
+ComGu publishes Core on Windows, macOS and Linux. Windows and supported Linux graphical
+sessions may additionally publish the optional Desktop connector when the host adapter proves the
+required capability. They are separate discovery and permission boundaries and use separate
+secret tokenized local paths.
 
 | Connector | Purpose | Possible tools |
 | --- | --- | --- |
 | **ComGu Core** | Approved files, patches, terminal, recorded-session lookup, workers | `read`, `view_image`, `find`, `apply_patch`, `exec_command`, `write_stdin`, `session`, `agents` |
-| **ComGu Desktop** | **Windows only:** screen, windows, mouse/keyboard and clipboard | `observe`, `computer` |
+| **ComGu Desktop** | Capability-gated screen/window/input/clipboard operations | `observe`, `computer` |
 
-The Desktop connector is optional and Windows-only. Core is the main connector everywhere.
+The Desktop connector is optional. Core is the main connector everywhere. Windows provides the
+full native Desktop path; Linux X11/Wayland expose only capabilities proven by the active adapter.
+The connection runtime owns that adapter generation. Crossing the Desktop permission OFF↔ON
+boundary rebuilds the local MCP connection so permission, live capability, driver ownership and
+Desktop tool registration cannot describe different runtime states. Wayland portal revocation
+invalidates the active generation's model-facing capability immediately.
+macOS is Core-only in this release.
 
 On a fresh current config, all Core tool permissions, session recording and multi-agent mode are
-enabled, while read-only mode is off. Windows also enables Desktop permissions. macOS/Linux mask
-Desktop permissions off at runtime while preserving stored choices for a config later reopened on
-Windows. Existing configs keep explicit choices during upgrades; missing legacy permissions are
-not silently widened.
+enabled, while read-only mode is off. Desktop permissions are still subject to runtime capability
+projection, so stored permission does not imply the host can execute that action. Existing configs
+keep explicit choices during upgrades; missing legacy permissions are not silently widened.
 
 With the fresh all-on capability snapshot, Core advertises seven schemas:
 `read`, `view_image`, `apply_patch`, `exec_command`, `write_stdin`, `session`, and `agents`.
@@ -128,7 +134,10 @@ cannot be proven.
 
 ## Desktop tools
 
-This section exists only on Windows. macOS/Linux do not advertise or execute these schemas.
+This section applies when the host publishes the Desktop connector. Windows provides the complete
+native implementation. Linux support is adapter/capability-gated; Wayland coordinate pointer
+actions require a current authoritative frame from the selected stream. macOS does not publish
+Desktop in this release.
 
 ### `observe`
 

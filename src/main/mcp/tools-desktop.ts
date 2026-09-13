@@ -3,32 +3,24 @@
  *
  * Two tools, and they are deliberately not on Core. Desktop control is gated on permissions
  * most users leave off, its schemas are the largest this app publishes, and the majority of
- * coding sessions never touch the desktop — so folding it into Core would put its weight
+ * coding sessions never touch the desktop โ€” so folding it into Core would put its weight
  * into every no-query discovery of the coding surface for a capability nobody asked for.
- * Separate connector, separate discovery boundary (`docs/tool-surface.md` §6.4).
+ * Separate connector, separate discovery boundary (`docs/tool-surface.md` ยง6.4).
  *
  * The split between the two is looking versus touching, and it is load-bearing rather than
  * cosmetic: `observe` never requires the foreground and can never fail for lack of it, while
  * `computer` is the only tool allowed to demand focus. That asymmetry is what makes the
- * recovery path work — when something else steals focus, you can still look, see what took
+ * recovery path work โ€” when something else steals focus, you can still look, see what took
  * it, and act on that.
  */
 
 import { z } from 'zod';
+import type { Action, VerificationSpec } from '../computer/index.js';
 import {
-  ComputerError,
   DEFAULT_SCREENSHOT_WIDTH,
   MAX_SCREENSHOT_WIDTH,
-  actAndCapture,
-  activeWindow,
-  findUi,
-  getWindowState,
-  listWindows,
-  screenshot,
-  waitForWindow,
-  type Action,
-  type VerificationSpec
-} from '../computer/index.js';
+  type DesktopDriver
+} from '../desktop/driver.js';
 import { logInfo } from '../logger.js';
 import { noteCount, noteDetail } from './call-context.js';
 import {
@@ -54,7 +46,7 @@ const computerActionArg = z.discriminatedUnion('type', [
   z
     .object({ type: z.literal('set_value'), ref: z.string().min(1).max(64), text: z.string().max(20_000) })
     .strict()
-    .describe('Set a text control’s value directly by ref.'),
+    .describe('Set a text controlโ€s value directly by ref.'),
   z
     .object({ type: z.literal('click'), x: imageCoordinateArg, y: imageCoordinateArg, button: mouseButtonArg.optional() })
     .strict()
@@ -108,7 +100,7 @@ const verificationArg = z
   })
   .strict();
 
-export function registerDesktopTools(reg: SurfaceRegistrar): void {
+export function registerDesktopTools(reg: SurfaceRegistrar, driver: DesktopDriver): void {
   const { ctx, caps, exposedCaps } = reg;
 
   // ---------------------------------------------------------------- observe
@@ -181,11 +173,12 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           let target = input.window;
           let waited: string | null = null;
           if (input.wait_for) {
-            const found = await waitForWindow({
+            const found = (await driver.observe({
+              kind: 'wait-window',
               title: input.wait_for,
               foreground: false,
               timeoutMs: input.timeout_ms
-            });
+            })).window;
             target = found.id;
             waited = `Found "${found.title}" (${found.process}) as window ${found.id}.`;
           }
@@ -193,7 +186,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           const what = input.wait_for ? (input.what ?? 'window') : (input.what ?? 'active');
 
           if (what === 'windows') {
-            const { windows, screen } = await listWindows();
+            const { windows, screen } = await driver.observe({ kind: 'windows' });
             const needle = input.match?.toLowerCase() ?? null;
             const matching = needle
               ? windows.filter(
@@ -209,7 +202,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
               (w) => `${w.id}  ${w.process}  ${w.x},${w.y}  ${w.width}x${w.height}  ${w.state}  ${w.title}`
             );
             if (shown.length < matching.length) {
-              lines.push(`… showing ${shown.length} of ${matching.length} matching windows; narrow match or raise max_elements`);
+              lines.push(`โ€ฆ showing ${shown.length} of ${matching.length} matching windows; narrow match or raise max_elements`);
             }
             return ok(
               prefix(
@@ -220,7 +213,12 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           }
 
           if (what === 'ui' && input.match) {
-            const result = await findUi({ window: target, query: input.match, maxResults: input.max_elements });
+            const result = await driver.observe({
+              kind: 'ui',
+              window: target,
+              query: input.match,
+              maxResults: input.max_elements
+            });
             noteCount(result.elements.length);
             if (result.elements.length === 0) {
               return ok(prefix(waited, `No controls in window ${result.window} match "${input.match}".`));
@@ -238,15 +236,16 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           // A bare "what is on screen right now" with no window at all: cheapest possible
           // answer, and the only one that still works when there is no foreground window.
           if (what === 'active' && target === undefined && input.screenshot === false) {
-            const { window, screen } = await activeWindow();
+            const { window, screen } = await driver.observe({ kind: 'active' });
             if (!window) return ok(prefix(waited, `Desktop ${screen.width}x${screen.height}\nNo foreground window.`));
             return ok(prefix(waited, describeWindow(window)));
           }
 
           const wantsShot = what === 'ui' ? false : input.screenshot !== false;
-          let state: Awaited<ReturnType<typeof getWindowState>>;
+          let state: Extract<Awaited<ReturnType<DesktopDriver['observe']>>, { kind: 'state' }>;
           try {
-            state = await getWindowState({
+            state = await driver.observe({
+              kind: 'state',
               window: target,
               maxWidth: input.max_width,
               maxElements: input.max_elements,
@@ -254,24 +253,24 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
               includeUi: true
             });
           } catch (err) {
-            // "There is no foreground window" is a real state of a Windows desktop — a
-            // locked screen, a shell restart, everything minimised — and it is not a reason
+            // "There is no foreground window" is a real state of a Windows desktop โ€” a
+            // locked screen, a shell restart, everything minimised โ€” and it is not a reason
             // to refuse to look. Fall back to the monitor, which is the honest answer.
             if (
               target !== undefined ||
-              !(err instanceof ComputerError) ||
+              !(err instanceof Error) ||
               !err.message.startsWith('WINDOW_NOT_FOUND:')
             ) {
               throw err;
             }
-            const shot = await screenshot({ maxWidth: input.max_width });
+            const shot = (await driver.observe({ kind: 'screenshot', maxWidth: input.max_width })).screenshot;
             return {
               content: [
                 {
                   type: 'text',
                   text: prefix(
                     waited,
-                    `No foreground window, so this is the whole primary monitor.\nframe: ${shot.frameId}  ${shot.width}x${shot.height} — pass frameId ${shot.frameId} with any coordinates you read off it`
+                    `No foreground window, so this is the whole primary monitor.\nframe: ${shot.frameId}  ${shot.width}x${shot.height} โ€” pass frameId ${shot.frameId} with any coordinates you read off it`
                   )
                 } as ToolContent,
                 { type: 'image', data: shot.data, mimeType: 'image/png' } as ToolContent
@@ -288,7 +287,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           if (state.snapshotId !== null) lines.push(`snapshot: ${state.snapshotId}`);
           if (state.screenshot) {
             lines.push(
-              `frame: ${state.screenshot.frameId}  ${state.screenshot.width}x${state.screenshot.height} — pass frameId ${state.screenshot.frameId} with any coordinates you read off it`
+              `frame: ${state.screenshot.frameId}  ${state.screenshot.width}x${state.screenshot.height} โ€” pass frameId ${state.screenshot.frameId} with any coordinates you read off it`
             );
             if (state.screenshot.captureMode === 'screen_fallback') {
               lines.push(
@@ -330,7 +329,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
       {
         title: 'Control mouse and keyboard',
         description:
-          'Run ordered desktop actions. Prefer refs from observe; pixels require frameId and target geometry is rechecked. ' +
+          'Run ordered desktop actions. Prefer refs from observe for app/sidebar navigation; refs do not require frameId. Pixel coordinate actions require frameId and target geometry is rechecked. ' +
           'verify waits for a postcondition. Capture and clipboard steps stay in the batch.',
         inputSchema: z
           .object({
@@ -412,6 +411,19 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
                 'Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
             );
           }
+          const hasCoordinateAction = actions.some((action) =>
+            action.type === 'click' ||
+            action.type === 'double_click' ||
+            action.type === 'move' ||
+            action.type === 'drag' ||
+            action.type === 'scroll'
+          );
+          if (hasCoordinateAction && frameId === undefined) {
+            return fail(
+              'INVALID_ARGUMENT: frameId is required for coordinate actions. ' +
+                'Call observe first and use the returned frameId, or prefer a semantic ref action such as click_ref when available.'
+            );
+          }
           const parsed: Action[] = [];
           for (const a of actions) {
             switch (a.type) {
@@ -485,7 +497,8 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
             : undefined;
           // One lock, one operation: the picture that verifies these actions must be taken
           // before anyone else can touch the desktop.
-          const result = await actAndCapture(parsed, {
+          const result = await driver.act({
+            actions: parsed,
             frameId,
             verify: parsedVerify,
             capture:
@@ -511,7 +524,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
           let clipboardBudget = MAX_CLIPBOARD_OUTPUT_CHARS;
           for (const [index, text] of result.clipboard.entries()) {
             if (clipboardBudget <= 0) {
-              clipboardLines.push(`… ${result.clipboard.length - index} more clipboard read(s) omitted by the output cap`);
+              clipboardLines.push(`โ€ฆ ${result.clipboard.length - index} more clipboard read(s) omitted by the output cap`);
               break;
             }
             const prefixText = `Clipboard read ${index + 1}: `;
@@ -520,7 +533,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar): void {
             const payload =
               rendered.length <= payloadCap
                 ? rendered
-                : `${rendered.slice(0, payloadCap)}… [truncated; ${text.length} chars original]`;
+                : `${rendered.slice(0, payloadCap)}โ€ฆ [truncated; ${text.length} chars original]`;
             const line = `${prefixText}${payload}`.slice(0, clipboardBudget);
             clipboardLines.push(line);
             clipboardBudget -= line.length + 1;

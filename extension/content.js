@@ -7894,7 +7894,7 @@
       // The message already crossed the browser's irreversible boundary. A lost ACK may make
       // the app re-offer it, including after a content-script reload; only retry the receipt.
       goalDraft = null;
-      await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+      await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'sent' }).catch(() => undefined);
       return;
     }
     if (!goalUsable()) {
@@ -7903,14 +7903,14 @@
       // on the very poll that carries the new setting.
       goalPhase = '';
       goalDraft = null;
-      await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+      await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'retired' }).catch(() => undefined);
       return;
     }
     if (draft.stage === 'failed') {
       goalPhase = 'drafting';
       goalError = draft.error || 'OpenRouter did not answer';
       goalDraft = null;
-      await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+      await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'retired' }).catch(() => undefined);
       return;
     }
     if (draft.stage === 'no-reply') {
@@ -7919,7 +7919,7 @@
       goalPhase = 'done';
       goalError = '';
       goalDraft = null;
-      await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+      await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'retired' }).catch(() => undefined);
       return;
     }
     if (draft.stage !== 'ready' || !draft.reply) return;
@@ -7928,7 +7928,7 @@
     if (generating || CLF_DOM.generating() || compactCapture || nativeBusy || (job && job.busy)) {
       goalPhase = '';
       goalDraft = null;
-      await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+      await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'retired' }).catch(() => undefined);
       return;
     }
     goalBusy = true;
@@ -7944,14 +7944,14 @@
         goalPhase = 'sending';
         goalError = 'the message box was in use, so nothing was sent';
         goalDraft = null;
-        await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+        await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'retired' }).catch(() => undefined);
         return;
       }
       await sleep(200);
       const sent = await CLF_DOM.send();
       goalDraft = null;
       if (!sent) {
-        await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+        await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'retired' }).catch(() => undefined);
         goalPhase = 'sending';
         goalError = 'ChatGPT would not send the message';
         return;
@@ -7959,7 +7959,7 @@
       // Sending is the irreversible step. Record it before the fallible ACK hop so a lost
       // receipt can never turn the same ready draft into a second user message.
       rememberGoalSpent(conversationId, draft.token);
-      await ask({ type: 'goal_ack', conversationId, token: draft.token }).catch(() => undefined);
+      await ask({ type: 'goal_ack', conversationId, token: draft.token, receipt: 'sent' }).catch(() => undefined);
       goalPhase = '';
       goalError = '';
     } finally {

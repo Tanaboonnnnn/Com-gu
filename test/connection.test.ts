@@ -34,11 +34,16 @@ const mocks = vi.hoisted(() => {
     endpointStop: vi.fn(async (_options?: { forceAfterMs?: number }) => undefined),
     endpointStartGate: null as Promise<void> | null,
     endpointStartReached: vi.fn(),
+    endpointStartError: null as Error | null,
     tunnelStartGate: null as Promise<void> | null,
     tunnelStartReached: vi.fn(),
+    tunnelStartError: null as Error | null,
     tunnelStop: vi.fn(async () => undefined),
     secretGate: null as Promise<void> | null,
-    secretReached: vi.fn()
+    secretReached: vi.fn(),
+    desktopDriverSeen: null as unknown,
+    contextCapsSeen: null as unknown,
+    contextGetter: null as null | (() => { caps: Record<string, boolean> })
   };
 });
 
@@ -49,14 +54,18 @@ vi.mock('../src/main/config.js', () => ({
   effectiveCapabilities: () => mocks.caps
 }));
 
-vi.mock('../src/main/logger.js', () => ({ logError: vi.fn(), logInfo: vi.fn() }));
+vi.mock('../src/main/logger.js', () => ({ logError: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn() }));
 
 vi.mock('../src/main/mcp/server.js', () => ({
   lastRequestAt: () => null,
   tunnelProbeHeaders: () => ({}),
-  startMcpServer: vi.fn(async () => {
+  startMcpServer: vi.fn(async (getContext: () => { caps: unknown }, _machine: unknown, _profile: unknown, desktopDriver: unknown) => {
+    mocks.desktopDriverSeen = desktopDriver;
+    mocks.contextGetter = getContext as never;
+    mocks.contextCapsSeen = getContext().caps;
     mocks.endpointStartReached();
     if (mocks.endpointStartGate) await mocks.endpointStartGate;
+    if (mocks.endpointStartError) throw mocks.endpointStartError;
     return {
       port: 45678,
       url: 'http://127.0.0.1:45678/mcp/core/core-token',
@@ -78,11 +87,13 @@ vi.mock('../src/main/secrets.js', () => ({
   })
 }));
 vi.mock('../src/main/tunnel/index.js', () => ({
+  TunnelError: class TunnelError extends Error {},
   startTunnel: vi.fn(async (options: { report: (report: Record<string, unknown>) => void }) => {
     mocks.starts += 1;
     mocks.report = options.report;
     mocks.tunnelStartReached();
     if (mocks.tunnelStartGate) await mocks.tunnelStartGate;
+    if (mocks.tunnelStartError) throw mocks.tunnelStartError;
     options.report({
       state: 'connected',
       detail: 'Connected.',
@@ -100,11 +111,16 @@ describe('connection surface state', () => {
     mocks.endpointStop.mockClear();
     mocks.endpointStartReached.mockClear();
     mocks.endpointStartGate = null;
+    mocks.endpointStartError = null;
     mocks.tunnelStartReached.mockClear();
     mocks.tunnelStartGate = null;
+    mocks.tunnelStartError = null;
     mocks.tunnelStop.mockClear();
     mocks.secretReached.mockClear();
     mocks.secretGate = null;
+    mocks.desktopDriverSeen = null;
+    mocks.contextCapsSeen = null;
+    mocks.contextGetter = null;
     Object.assign(mocks.caps, {
       browse: true,
       search: true,
@@ -258,6 +274,18 @@ describe('connection surface state', () => {
   it('prewarms the helper only when a native Desktop capability is published', async () => {
     mocks.caps.screen = true;
     const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => process.platform === 'win32',
+      desktopDriver: async () => process.platform === 'win32'
+        ? ({
+            capabilities: async () => ({
+              available: true, capture: true, pointer: true, keyboard: true,
+              clipboardRead: true, clipboardWrite: true, windows: true, uiElements: true, focus: true
+            }),
+            dispose: async () => undefined
+          }) as never
+        : null
+    });
     await connection.connect();
     // The helper is a Windows-only native executable. On macOS/Linux the same stored Desktop
     // preference is masked from the live surface, so a native cross-platform CI run must not
@@ -298,6 +326,258 @@ describe('connection surface state', () => {
     expect(connection.getStatus().detail).toBe('Add a folder before connecting.');
   });
 
+  it('passes a profile-selected DesktopDriver into the MCP server without importing a platform default there', async () => {
+    mocks.caps.screen = true;
+    const fakeDriver = { capabilities: async () => ({ available: true }) };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(mocks.desktopDriverSeen).toBe(fakeDriver);
+  });
+
+  it('reconnects when Desktop permissions cross from off to on so a real driver generation is published', async () => {
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose: vi.fn(async () => undefined)
+    };
+    const createDriver = vi.fn(async () => fakeDriver as never);
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: createDriver, desktopSupported: () => true });
+
+    await connection.connect();
+    expect(createDriver).not.toHaveBeenCalled();
+
+    mocks.caps.screen = true;
+    await connection.applySettings();
+
+    expect(mocks.endpointStop).toHaveBeenCalledTimes(1);
+    expect(createDriver).toHaveBeenCalledTimes(1);
+    expect(mocks.desktopDriverSeen).toBe(fakeDriver);
+    expect(connection.getStatus().state).toBe('connected');
+  });
+
+  it('does not reconnect repeatedly when Desktop remains requested but the adapter is unavailable', async () => {
+    mocks.caps.screen = true;
+    const createDriver = vi.fn(async () => null);
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: createDriver, desktopSupported: () => true });
+
+    await connection.connect();
+    expect(createDriver).toHaveBeenCalledTimes(1);
+
+    await connection.applySettings();
+
+    expect(mocks.endpointStop).not.toHaveBeenCalled();
+    expect(createDriver).toHaveBeenCalledTimes(1);
+    expect(connection.getStatus().state).toBe('connected');
+  });
+
+  it('never advertises configured Desktop permission without a proven active driver', async () => {
+    mocks.caps.screen = true;
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => null, desktopSupported: () => true });
+
+    await connection.connect();
+
+    expect(mocks.contextGetter?.().caps).toMatchObject({ screen: false, control: false, clipboardRead: false, clipboardWrite: false });
+  });
+
+  it('invalidates model-facing Desktop capability when the active driver generation is revoked', async () => {
+    mocks.caps.screen = true;
+    const capabilityHook: { listener?: (caps: Record<string, boolean>) => void } = {};
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: false, uiElements: false, focus: false
+      }),
+      onCapabilitiesChanged(listener: (caps: Record<string, boolean>) => void) {
+        capabilityHook.listener = listener;
+        return () => { delete capabilityHook.listener; };
+      },
+      dispose: vi.fn(async () => undefined)
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(mocks.contextGetter?.().caps.screen).toBe(true);
+
+    capabilityHook.listener?.({
+      available: false, capture: false, pointer: false, keyboard: false,
+      clipboardRead: false, clipboardWrite: false, windows: false, uiElements: false, focus: false
+    });
+
+    expect(mocks.contextGetter?.().caps.screen).toBe(false);
+    expect(connection.getStatus().surfaces.find((surface) => surface.id === 'desktop')?.available).toBe(false);
+  });
+
+  it('disposes the active DesktopDriver exactly once after MCP admission has drained on disconnect', async () => {
+    mocks.caps.screen = true;
+    const order: string[] = [];
+    mocks.endpointStop.mockImplementationOnce(async () => { order.push('endpoint-stop'); });
+    const dispose = vi.fn(async () => { order.push('driver-dispose'); });
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    await connection.disconnect();
+    await connection.disconnect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['endpoint-stop', 'driver-dispose']);
+  });
+
+  it('disposes an unpublished DesktopDriver candidate when MCP startup fails', async () => {
+    mocks.caps.screen = true;
+    mocks.endpointStartError = new Error('mcp startup failed');
+    const dispose = vi.fn(async () => undefined);
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(connection.getStatus().state).toBe('disconnected');
+  });
+
+  it('disposes the promoted DesktopDriver when tunnel startup fails', async () => {
+    mocks.caps.screen = true;
+    mocks.tunnelStartError = new Error('tunnel startup failed');
+    const dispose = vi.fn(async () => undefined);
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(mocks.endpointStop).toHaveBeenCalledTimes(1);
+    expect(connection.getStatus().state).toBe('disconnected');
+  });
+
+  it('disposes the DesktopDriver candidate when final shutdown invalidates an in-flight endpoint startup', async () => {
+    mocks.caps.screen = true;
+    let releaseEndpoint!: () => void;
+    mocks.endpointStartGate = new Promise<void>((resolve) => { releaseEndpoint = resolve; });
+    const dispose = vi.fn(async () => undefined);
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    const connecting = connection.connect();
+    await vi.waitFor(() => expect(mocks.endpointStartReached).toHaveBeenCalledTimes(1));
+    const shutdown = connection.shutdownConnection();
+    releaseEndpoint();
+    await Promise.all([connecting, shutdown]);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes generation N before generation N+1 DesktopDriver becomes active', async () => {
+    mocks.caps.screen = true;
+    const events: string[] = [];
+    let generation = 0;
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => true,
+      desktopDriver: async () => {
+        generation += 1;
+        const id = generation;
+        events.push(`create-${id}`);
+        return {
+          capabilities: async () => ({
+            available: true, capture: true, pointer: true, keyboard: true,
+            clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+          }),
+          dispose: async () => { events.push(`dispose-${id}`); }
+        } as never;
+      }
+    });
+    await connection.connect();
+    await connection.disconnect();
+    await connection.connect();
+    expect(events).toEqual(['create-1', 'dispose-1', 'create-2']);
+    await connection.disconnect();
+  });
+
+  it('disposes the old DesktopDriver before settings-triggered reconnect publishes the next generation', async () => {
+    mocks.caps.screen = true;
+    const events: string[] = [];
+    let generation = 0;
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => true,
+      desktopDriver: async () => {
+        generation += 1;
+        const id = generation;
+        events.push(`create-${id}`);
+        return {
+          capabilities: async () => ({
+            available: true, capture: true, pointer: true, keyboard: true,
+            clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+          }),
+          dispose: async () => { events.push(`dispose-${id}`); }
+        } as never;
+      }
+    });
+    await connection.connect();
+    mocks.config.tunnel.kind = 'manual';
+    await connection.applySettings();
+    expect(events).toEqual(['create-1', 'dispose-1', 'create-2']);
+    await connection.disconnect();
+  });
+
+  it('disposes the active DesktopDriver during final shutdown', async () => {
+    mocks.caps.screen = true;
+    const dispose = vi.fn(async () => undefined);
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => true,
+      desktopDriver: async () => ({
+        capabilities: async () => ({
+          available: true, capture: true, pointer: true, keyboard: true,
+          clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+        }),
+        dispose
+      }) as never
+    });
+    await connection.connect();
+    await connection.shutdownConnection();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+  it('masks configured Desktop permissions to what the selected driver can actually satisfy', async () => {
+    Object.assign(mocks.caps, { screen: true, control: true, clipboardRead: true, clipboardWrite: true });
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: false, keyboard: false,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: false, focus: false
+      })
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(mocks.contextCapsSeen).toMatchObject({ screen: true, control: false, clipboardRead: false, clipboardWrite: false });
+  });
   it('keeps genuinely rootless Desktop and clipboard setups connectable', async () => {
     mocks.config.roots = [];
     Object.assign(mocks.caps, {
@@ -318,5 +598,24 @@ describe('connection surface state', () => {
     await desktop.connect();
     expect(desktop.getStatus().state).toBe('connected');
     expect(mocks.starts).toBe(2);
+  });
+
+  it('lets a CLI owner inject credential and Desktop hooks without loading the Electron defaults', async () => {
+    const connection = await import('../src/main/connection.js');
+    const getApiKey = vi.fn(async () => 'cli-key');
+    const prewarmDesktop = vi.fn(async () => undefined);
+    connection.configureConnectionRuntime({
+      profile: 'cli',
+      getApiKey,
+      prewarmDesktop,
+      desktopSupported: () => false
+    });
+
+    await connection.connect();
+
+    expect(getApiKey).toHaveBeenCalledTimes(1);
+    expect(prewarmDesktop).not.toHaveBeenCalled();
+    expect(mocks.secretReached).not.toHaveBeenCalled();
+    expect(mocks.prewarm).not.toHaveBeenCalled();
   });
 });

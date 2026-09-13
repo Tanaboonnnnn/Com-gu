@@ -2,7 +2,7 @@
   <img src="extension/icons/icon128.png" width="96" alt="ComGu logo" />
   <h1>ComGu</h1>
   <p><strong>ให้ ChatGPT ทำงานกับเครื่องของเราได้จริง โดยยังคุมสิทธิ์และขอบเขตไว้ที่เครื่องเรา</strong></p>
-  <p>Files · Terminal · Session history · Compact & Resume · Goal loop · Multi-agent · Windows desktop control</p>
+  <p>Files · Terminal · Durable Run · Compact & Resume · Multi-machine CLI · Desktop control</p>
   <p>
     <a href="../../releases/latest"><strong>Download</strong></a>
     · <a href="#quick-start">Quick start</a>
@@ -21,7 +21,7 @@ ComGu คือ desktop bridge ที่เราใช้ให้ ChatGPT เ�
 
 ## Download
 
-Release ปัจจุบันคือ **ComGu v3.1.0** โดย GitHub release workflow จะสร้าง native packages บน runner ของแต่ละ OS/CPU ก่อนเผยแพร่
+Release ชุดนี้คือ **ComGu v3.2.0** โดย GitHub release workflow จะสร้าง native packages บน runner ของแต่ละ OS/CPU ก่อนเผยแพร่
 
 | Platform | x64 | ARM64 |
 | --- | --- | --- |
@@ -29,13 +29,22 @@ Release ปัจจุบันคือ **ComGu v3.1.0** โดย GitHub rele
 | **macOS** | — | [DMG](../../releases/latest/download/ComGu-macOS-arm64.dmg) · [ZIP](../../releases/latest/download/ComGu-macOS-arm64.zip) |
 | **Linux** | [AppImage](../../releases/latest/download/ComGu-Linux-x64.AppImage) · [DEB](../../releases/latest/download/ComGu-Linux-x64.deb) | [AppImage](../../releases/latest/download/ComGu-Linux-arm64.AppImage) · [DEB](../../releases/latest/download/ComGu-Linux-arm64.deb) |
 
+### ComGu CLI
+
+CLI เป็น standalone runtime/admin client สำหรับ Windows และ Linux เหมาะกับเครื่อง server/VM ที่ไม่ต้องการเปิด Desktop UI และใช้ profile ownership/control channel ชุดเดียวกับ Desktop เพื่อป้องกันการมี runtime สองตัวเขียน profile เดียวกันพร้อมกัน
+
+| CLI | x64 | ARM64 |
+| --- | --- | --- |
+| **Windows** | [ZIP](../../releases/download/v3.2.0/ComGu-CLI-windows-x64.zip) | [ZIP](../../releases/download/v3.2.0/ComGu-CLI-windows-arm64.zip) |
+| **Linux** | [TAR.GZ](../../releases/download/v3.2.0/ComGu-CLI-linux-x64.tar.gz) | [TAR.GZ](../../releases/download/v3.2.0/ComGu-CLI-linux-arm64.tar.gz) |
+
+CLI ต้องใช้ **Node.js 22+**. แตกไฟล์แล้วรัน `comgu.cmd` บน Windows หรือ `./comgu` บน Linux; ใช้ `comgu setup` สำหรับตั้งค่า profile ครั้งแรก และ `comgu status` เพื่อตรวจ runtime ที่กำลังถือ profile อยู่. หากเครื่องดับระหว่าง stale-owner recovery จน `.comgu-control.recovery` ค้าง ให้ใช้ `comgu doctor --repair-ownership` ซึ่งจะลบ marker เฉพาะเมื่อยืนยันแล้วว่า endpoint, owner และ recovery contender ไม่ได้มีชีวิตอยู่
+
 ทุก release มี `SHA256SUMS.txt` สำหรับตรวจ hash และมี `ComGu-Extension.zip` สำหรับโหลด companion extension แยกต่างหาก
 
 > Release binaries ตอนนี้ยัง **unsigned** และ macOS ยัง **unnotarized** ดังนั้น Windows SmartScreen / macOS Gatekeeper อาจเตือน นี่เป็น build สำหรับใช้งานในกลุ่ม ไม่ใช่ signed commercial distribution
 
-macOS builds ต้องใช้ **macOS 12 Monterey or newer**. สำหรับ Linux, AppImage ใช้ static launcher เพื่อไม่ผูกกับ legacy FUSE2; ถ้าเครื่องปิด **unprivileged user namespaces** launcher อาจ fallback ไปเปิด Chromium ด้วย `--no-sandbox` ดังนั้นบน Debian/Ubuntu ที่จำกัด namespace แนะนำใช้ `.deb` แทน AppImage ถ้าไม่ต้องการ fallback นี้
-
-Linux AppImage ใช้ static launcher ของ electron-builder; ถ้าเครื่องปิด **unprivileged user namespaces** ตัว launcher อาจ fallback ไปเปิด Chromium ด้วย `--no-sandbox` ดังนั้นบน Debian/Ubuntu ที่จำกัด sandbox แนะนำใช้ DEB แทน ส่วน macOS build รองรับ **macOS 12 Monterey or newer**
+macOS builds ต้องใช้ **macOS 12 Monterey or newer**. สำหรับ Linux, AppImage ใช้ static launcher ของ electron-builder; ถ้าเครื่องปิด **unprivileged user namespaces** launcher อาจ fallback ไปเปิด Chromium ด้วย `--no-sandbox` ดังนั้นบน Debian/Ubuntu ที่จำกัด sandbox แนะนำใช้ DEB แทน
 
 ## จุดเด่นของเวอร์ชันนี้
 
@@ -43,6 +52,8 @@ Linux AppImage ใช้ static launcher ของ electron-builder; ถ้า�
 - **English / ไทย** สลับภาษาได้ในตัวแอปและ extension
 - **Core tools** สำหรับอ่าน/ค้น/patch ไฟล์และใช้ terminal ใน approved folders
 - **Durable sessions** เก็บประวัติและ tool activity ไว้ฝั่งเครื่อง
+- **Durable Run + Checkpoint + Recovery** ให้งานยาว recover ต่อได้หลัง turn จบ, browser reconnect หรือ app restart โดยไม่ replay mutation ที่ผลลัพธ์ยังไม่แน่ชัด
+- **Standalone multi-machine CLI** สำหรับ Windows/Linux พร้อม profile ownership ร่วมกับ Desktop, machine identity ที่เสถียร และ admin control channel
 - **Compact & Resume** ย้ายงานยาวไปแชตใหม่พร้อม handoff
 - **Safe auto-compaction** ถึง threshold แล้วจะ arm ไว้ก่อน ไม่กด Stop ตัด ChatGPT กลาง turn; รอ turn และ local tools จบก่อนค่อย compact
 - **Goal loop** ให้โมเดลช่วยส่งข้อความต่อจนถึงเป้าหมายที่กำหนด
@@ -50,14 +61,14 @@ Linux AppImage ใช้ static launcher ของ electron-builder; ถ้า�
 - **Safe Workspace Runtime** ให้แต่ละ Run เลือก Primary/Shared folders จาก approved roots เดิม Worker รับสิทธิ์เท่ากันหรือน้อยกว่า Prime เท่านั้น และหน้า Chat แสดง scope ที่มีผลจริง
 - **Windows Run command sandbox** ใช้ MXC ProcessContainer จำกัด process tree ให้อยู่ใน WorkspaceScope; ถ้ายืนยัน confinement ไม่ได้ ระบบจะปิด Run-scoped commands แบบ fail closed แทนการรัน unrestricted
 - **System Health v1** แยกสถานะ Desktop, MCP Core, Tunnel, Browser bridge, Extension, Prime และ Workers ออกจากกัน
-- **Desktop automation บน Windows** สำหรับ screen, windows, mouse/keyboard และ clipboard เมื่อเปิด permission
+- **Desktop automation แบบ capability-gated** — Windows รองรับ screen/windows/input/clipboard เต็มชุด; Linux มี X11 และ Wayland adapter ที่ fail closed เมื่อยังพิสูจน์ capture/coordinate authority ไม่ได้
 
 ## Quick start
 
 1. ดาวน์โหลด build ให้ตรง OS/CPU แล้วเปิด **ComGu**
 2. ตรวจ permission ในหน้า Home และเพิ่มเฉพาะ project folders ที่ต้องการให้เข้าถึง
 3. ตั้งค่า OpenAI Secure MCP Tunnel หรือ HTTPS tunnel ที่ต้องการ
-4. ใน ChatGPT เปิด Developer mode แล้วเพิ่ม **ComGu Core**; บน Windows เพิ่ม **ComGu Desktop** ถ้าจะใช้ screen/input/clipboard
+4. ใน ChatGPT เปิด Developer mode แล้วเพิ่ม **ComGu Core**; เพิ่ม **ComGu Desktop** เมื่อ host/runtime รายงาน Desktop capability ที่ใช้งานได้
 5. ใน ComGu กด **Open extension folder** แล้วไป `chrome://extensions`
 6. เปิด Developer mode → **Load unpacked** → เลือกโฟลเดอร์ extension ที่ ComGu เปิดให้
 7. หลังอัปเดต ComGu ตัวแอปจะ sync extension folder และ extension จะ reload ตัวเองเมื่อไฟล์รุ่นใหม่พร้อม; ถ้าต้องการบังคับซ่อมเองใช้ **Reload extension** ใน popup
@@ -67,9 +78,9 @@ Linux AppImage ใช้ static launcher ของ electron-builder; ถ้า�
 | Connector | ใช้ทำอะไร | Tools |
 | --- | --- | --- |
 | **ComGu Core** | files, search, patch, terminal, sessions, workers | `read`, `view_image`, `find`, `apply_patch`, `exec_command`, `write_stdin`, `session`, `agents` |
-| **ComGu Desktop** | Windows desktop automation | `observe`, `computer` |
+| **ComGu Desktop** | capability-gated desktop observation/control | `observe`, `computer` |
 
-`ComGu Desktop` มีเฉพาะ Windows ส่วน macOS/Linux จะ expose เฉพาะ Core
+`ComGu Desktop` พร้อมใช้งานบน Windows และบน Linux graphical sessions ที่ adapter พิสูจน์ capability ได้จริง. Wayland จะยอมให้ coordinate pointer action เฉพาะเมื่อมี authoritative frame เดียวกับ input stream; ถ้าพิสูจน์ไม่ได้จะ fail closed. macOS ใช้ Core เท่านั้นในรุ่นนี้
 
 ## Compact & Resume
 
@@ -82,6 +93,15 @@ ComGu ประเมิน context pressure จาก session ที่บั�
 Goal loop เป็นฟีเจอร์ optional ที่ใช้โมเดลอีกตัวช่วยตัดสินว่าควรส่งข้อความอะไรต่อให้ ChatGPT หรือควรหยุด สามารถตั้ง goal ต่อแชตได้ และ goal จะตามไปยังแชตใหม่เมื่อ Compact & Resume สำเร็จ
 
 ฟีเจอร์นี้ต้องใช้ OpenRouter API key และมีค่าใช้จ่ายตาม provider/model ที่เลือก
+
+### Durable long-running goals
+
+Specific goals use a **Durable Run** control record. The run survives ComGu restarts and
+Compact & Resume chat replacement by following the stable local session identity rather than a
+single browser tab. ComGu checkpoints control state before exposing a continuation to the browser.
+If a user-message send may have happened but its acknowledgement is lost, the run enters
+`needs-reconciliation`; ComGu does not draft or replay another mutation until the existing outcome
+is proven. This is recoverable orchestration, not one HTTP/model request kept open for hours.
 
 ## Multi-agent
 
@@ -98,7 +118,7 @@ ComGu ไม่ใช่ VM เต็มรูปแบบ สิทธิ์พ
 - File operations ถูกจำกัดด้วย approved roots และ canonical path checks
 - ใน active Run บน Windows, terminal process และ descendants ถูกจำกัดด้วย MXC ProcessContainer ให้อยู่ใน effective WorkspaceScope ถ้า backend/host preparation ยังยืนยันไม่ได้ Run-scoped command จะ fail closed
 - คำสั่งที่รันนอก active Run ยังเป็นสิทธิ์ของ user account ปัจจุบันและไม่ได้รับ WorkspaceScope confinement ของ Run
-- Windows desktop control ไม่ได้ถูกจำกัดด้วย project folder
+- Desktop control เป็นสิทธิ์ระดับ desktop/session และไม่ได้ถูกจำกัดด้วย project folder; capability ที่ expose ขึ้นกับ host adapter และ permission ปัจจุบัน
 - MCP server และ browser bridge bind บน loopback และแยก threat boundary ออกจากกัน
 - Secrets ใช้ Electron `safeStorage` / OS credential backend
 - Read-only mode เป็น kill switch สำหรับ mutation หลัก เช่น file write, command execution และ desktop input
