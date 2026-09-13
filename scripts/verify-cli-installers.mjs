@@ -14,6 +14,7 @@ assert(bootstrap.version === root.version, `npm bootstrap ${bootstrap.version} !
 assert(bootstrap.bin?.comgu === 'bin/comgu-bootstrap.mjs', 'npm bootstrap must expose bin.comgu');
 assert(bootstrap.engines?.node === '>=22', 'npm bootstrap must require Node.js >=22');
 assert(!bootstrap.dependencies || Object.keys(bootstrap.dependencies).length === 0, 'npm bootstrap must not add runtime dependencies');
+assert(!bootstrap.scripts, 'npm bootstrap must not require lifecycle scripts');
 assert(Array.isArray(bootstrap.files) && bootstrap.files.every((entry) => ['bin/', 'lib/', 'README.md'].includes(entry)), 'npm files allowlist is broader than expected');
 assert(shell.includes('SHA256SUMS.txt') && shell.includes('sha256sum'), 'install.sh must verify SHA256SUMS.txt');
 assert(powershell.includes('SHA256SUMS.txt') && powershell.includes('Get-FileHash'), 'install.ps1 must verify SHA256SUMS.txt');

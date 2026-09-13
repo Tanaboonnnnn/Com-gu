@@ -26,13 +26,6 @@ async function ensurePayload() {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args[0] === '--bootstrap-install') {
-    if (process.env.COMGU_SKIP_BOOTSTRAP === '1') return;
-    const installed = await ensurePayload();
-    console.log(`ComGu CLI ${installed.version} ready (${installed.target}).`);
-    return;
-  }
-
   if (args[0] === 'update') {
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     console.log('Updating npm-managed ComGu CLI through npm...');

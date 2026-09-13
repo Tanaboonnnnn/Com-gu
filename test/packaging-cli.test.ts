@@ -41,6 +41,7 @@ describe('CLI packaging contract', () => {
     expect(bootstrapPackage.bin).toEqual({ comgu: 'bin/comgu-bootstrap.mjs' });
     expect(bootstrapPackage.engines).toEqual({ node: '>=22' });
     expect(bootstrapPackage).not.toHaveProperty('dependencies');
+    expect(bootstrapPackage).not.toHaveProperty('scripts');
     expect(bootstrapPackage.files).toEqual(['bin/', 'lib/', 'README.md']);
   });
 });

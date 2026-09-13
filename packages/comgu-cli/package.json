@@ -24,9 +24,6 @@
     "lib/",
     "README.md"
   ],
-  "scripts": {
-    "postinstall": "node ./bin/comgu-bootstrap.mjs --bootstrap-install"
-  },
   "publishConfig": {
     "access": "public",
     "provenance": true
