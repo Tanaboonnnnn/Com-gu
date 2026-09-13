@@ -224,4 +224,125 @@ describe('CLI runtime owner', () => {
     await sendRuntimeControlRequest(dir, 'shutdown');
     await first;
   });
+  it('keeps lifecycle mutations fenced while initialization is still starting', async () => {
+    const events: string[] = [];
+    let releaseInit!: () => void;
+    const initGate = new Promise<void>((resolve) => { releaseInit = resolve; });
+    const initialize = vi.fn(async () => {
+      events.push('init-begin');
+      await initGate;
+      events.push('init-end');
+    });
+    const reload = vi.fn(async () => { events.push('reload'); });
+    const runtime = fakeRuntime(events);
+    const owner = runCliOwner({
+      profileDir: dir,
+      machine: () => null,
+      runtime,
+      initialize,
+      reload,
+      installSignalHandlers: false
+    });
+
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    expect(await sendRuntimeControlRequest(dir, 'status')).toMatchObject({
+      runtime: 'starting',
+      mode: 'cli',
+      machine: null
+    });
+    await expect(sendRuntimeControlRequest(dir, 'connect')).rejects.toThrow(/still starting/i);
+    await expect(sendRuntimeControlRequest(dir, 'disconnect')).rejects.toThrow(/still starting/i);
+    await expect(sendRuntimeControlRequest(dir, 'reload')).rejects.toThrow(/still starting/i);
+    expect(events).toEqual(['init-begin']);
+    expect(reload).not.toHaveBeenCalled();
+
+    releaseInit();
+    await vi.waitFor(async () => {
+      expect(await sendRuntimeControlRequest(dir, 'status')).toMatchObject({ runtime: 'running' });
+    }, { timeout: 10_000 });
+    await sendRuntimeControlRequest(dir, 'connect');
+    await sendRuntimeControlRequest(dir, 'reload');
+    expect(events).toEqual(['init-begin', 'init-end', 'start', 'connect', 'reload']);
+    await sendRuntimeControlRequest(dir, 'shutdown');
+    await owner;
+  });
+
+  it('retains profile ownership until blocked initialization settles after shutdown intent', async () => {
+    const events: string[] = [];
+    let releaseInit!: () => void;
+    const initGate = new Promise<void>((resolve) => { releaseInit = resolve; });
+    const runtime = fakeRuntime(events);
+    const initialize = vi.fn(async () => {
+      events.push('init-begin');
+      await initGate;
+      events.push('init-write');
+    });
+    const owner = runCliOwner({
+      profileDir: dir,
+      machine: () => null,
+      runtime,
+      initialize,
+      installSignalHandlers: false
+    });
+
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    await sendRuntimeControlRequest(dir, 'shutdown');
+    expect(events).toEqual(['init-begin']);
+
+    const contenderInit = vi.fn(async () => undefined);
+    await expect(runCliOwner({
+      profileDir: dir,
+      machine: () => null,
+      runtime: fakeRuntime([]),
+      initialize: contenderInit,
+      installSignalHandlers: false
+    })).rejects.toThrow(/already has an owner/i);
+    expect(contenderInit).not.toHaveBeenCalled();
+
+    releaseInit();
+    await owner;
+    expect(events).toEqual(['init-begin', 'init-write']);
+
+    const nextEvents: string[] = [];
+    const next = runCliOwner({
+      profileDir: dir,
+      machine: () => null,
+      runtime: fakeRuntime(nextEvents),
+      installSignalHandlers: false
+    });
+    await vi.waitFor(async () => {
+      expect(await sendRuntimeControlRequest(dir, 'status')).toMatchObject({ runtime: 'running' });
+    }, { timeout: 10_000 });
+    expect(nextEvents).toEqual(['start']);
+    await sendRuntimeControlRequest(dir, 'shutdown');
+    await next;
+  });
+
+  it('does not start the runtime or install signal handlers after shutdown during initialization', async () => {
+    const events: string[] = [];
+    let releaseInit!: () => void;
+    const initGate = new Promise<void>((resolve) => { releaseInit = resolve; });
+    const initialize = vi.fn(async () => {
+      events.push('init-begin');
+      await initGate;
+      events.push('init-end');
+    });
+    const beforeInt = process.listenerCount('SIGINT');
+    const beforeTerm = process.listenerCount('SIGTERM');
+    const owner = runCliOwner({
+      profileDir: dir,
+      machine: () => null,
+      runtime: fakeRuntime(events),
+      initialize
+    });
+
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+    await sendRuntimeControlRequest(dir, 'shutdown');
+    releaseInit();
+    await owner;
+
+    expect(events).toEqual(['init-begin', 'init-end']);
+    expect(process.listenerCount('SIGINT')).toBe(beforeInt);
+    expect(process.listenerCount('SIGTERM')).toBe(beforeTerm);
+  });
 });

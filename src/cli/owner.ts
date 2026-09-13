@@ -40,6 +40,12 @@ interface RunCliOwnerOptions {
  * profile. Shutdown replies over the control channel before the listener is retired.
  */
 export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
+  type OwnerLifecycle = 'starting' | 'ready' | 'stopping' | 'stopped';
+  let lifecycle: OwnerLifecycle = 'starting';
+  let shutdownRequested = false;
+  let runtimeStarted = false;
+  let runtimeShutdownPromise: Promise<void> | null = null;
+  let adminTail: Promise<void> = Promise.resolve();
   let finished = false;
   let resolveFinished!: () => void;
   const finishedPromise = new Promise<void>((resolve) => {
@@ -49,21 +55,51 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
   const machine = (): MachineIdentity | null =>
     typeof options.machine === 'function' ? options.machine() : options.machine;
 
+  const ensureReady = (): void => {
+    if (lifecycle === 'starting') throw new Error('ComGu runtime is still starting');
+    if (lifecycle !== 'ready') throw new Error('ComGu runtime is stopping');
+  };
+
+  const runReadyMutation = async (operation: () => Promise<void>): Promise<void> => {
+    ensureReady();
+    const scheduled = adminTail.then(async () => {
+      ensureReady();
+      await operation();
+    });
+    adminTail = scheduled.catch(() => undefined);
+    await scheduled;
+  };
+
+  const shutdownRuntime = async (): Promise<void> => {
+    if (!runtimeStarted) return;
+    runtimeShutdownPromise ??= (async () => {
+      await adminTail.catch(() => undefined);
+      await options.runtime.shutdown();
+    })();
+    await runtimeShutdownPromise;
+  };
+
   const server = createRuntimeControlServer({
     profileDir: options.profileDir,
     handlers: {
       status: async () => ({
-        runtime: 'running',
+        runtime: lifecycle === 'ready' ? 'running' : lifecycle,
         mode: 'cli',
         machine: machine(),
         connection: options.runtime.status(),
-        durableRuns: await options.durableRunStatus?.() ?? []
+        durableRuns: lifecycle === 'ready' ? await options.durableRunStatus?.() ?? [] : []
       }),
-      connect: () => options.runtime.connect(),
-      disconnect: () => options.runtime.disconnect(),
-      reload: () => options.reload?.() ?? Promise.resolve(),
+      connect: () => runReadyMutation(() => options.runtime.connect()),
+      disconnect: () => runReadyMutation(() => options.runtime.disconnect()),
+      reload: () => runReadyMutation(() => options.reload?.() ?? Promise.resolve()),
       shutdown: async () => {
-        await options.runtime.shutdown();
+        shutdownRequested = true;
+        if (lifecycle === 'starting') {
+          lifecycle = 'stopping';
+          return;
+        }
+        if (lifecycle === 'ready') lifecycle = 'stopping';
+        await shutdownRuntime();
         // Let the control server serialize and flush the successful response first. Closing the
         // listener inside this handler would wait on the very socket whose reply is still pending.
         setImmediate(() => void finish());
@@ -74,30 +110,52 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
   const finish = async (): Promise<void> => {
     if (finished) return;
     finished = true;
+    lifecycle = 'stopping';
     if (signalHandler) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
       signalHandler = null;
     }
+    await shutdownRuntime().catch(() => undefined);
     await server.close();
+    lifecycle = 'stopped';
     resolveFinished();
   };
 
   try {
     await server.start();
     await options.initialize?.();
+    if (shutdownRequested) {
+      await finish();
+      return;
+    }
+
     await options.runtime.start();
+    runtimeStarted = true;
+    if (shutdownRequested) {
+      await finish();
+      return;
+    }
+
+    const autoConnect = typeof options.autoConnect === 'function' ? options.autoConnect() : options.autoConnect;
+    if (autoConnect) await options.runtime.connect();
+    if (shutdownRequested) {
+      await finish();
+      return;
+    }
+
+    lifecycle = 'ready';
     if (options.installSignalHandlers !== false) {
       signalHandler = () => {
-        void options.runtime.shutdown().finally(() => finish());
+        shutdownRequested = true;
+        lifecycle = 'stopping';
+        void shutdownRuntime().finally(() => finish());
       };
       process.once('SIGINT', signalHandler);
       process.once('SIGTERM', signalHandler);
     }
-    const autoConnect = typeof options.autoConnect === 'function' ? options.autoConnect() : options.autoConnect;
-    if (autoConnect) await options.runtime.connect();
   } catch (error) {
-    await server.close().catch(() => undefined);
+    await finish().catch(() => undefined);
     throw error;
   }
 
