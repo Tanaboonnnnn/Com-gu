@@ -67,7 +67,7 @@ export const WRITE_CAPABILITIES: readonly Capability[] = [
 
 export type Capabilities = Record<Capability, boolean>;
 
-/** Host family reported to the renderer. Desktop automation is intentionally Windows-only. */
+/** Host family reported to the renderer. Desktop automation is capability-gated per host/session. */
 export type PlatformFamily = 'windows' | 'macos' | 'linux' | 'other';
 
 export interface PlatformInfo {

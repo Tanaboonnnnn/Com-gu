@@ -150,7 +150,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, machine?:
 
 function desktopInstructions(ctx: ToolContext, machine?: MachineIdentity | null): string {
   const lines = [
-    'Local Windows desktop control: look at this PC’s screen and windows, and drive its mouse and keyboard.',
+    'Local desktop control when the host adapter proves it: look at this PC’s screen/windows and use permitted input/clipboard actions.',
     '',
     'observe first, then computer. A bare observe() returns the foreground window, a screenshot and its',
     'controls with refs; refs beat pixel coordinates because they resolve the real control again when acted on.',
