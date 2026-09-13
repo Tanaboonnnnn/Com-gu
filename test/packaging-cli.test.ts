@@ -32,6 +32,7 @@ describe('CLI packaging contract', () => {
     }
     expect(release).toContain('needs: [package, cli-package]');
     expect(release).toContain('node scripts/smoke-cli.mjs --dir .cli-build/${{ matrix.platform }}-${{ matrix.arch }}/ComGu-CLI');
+    expect(release).toContain('node scripts/smoke-cli-installer-channel.mjs --artifact ${{ matrix.file }}');
   });
 
   it('keeps the public npm bootstrapper thin and version-aligned', () => {

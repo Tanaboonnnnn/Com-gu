@@ -8,7 +8,8 @@ describe('professional CLI install scripts', () => {
     expect(source).toContain('sha256sum');
     expect(source).toContain('SHA256SUMS.txt');
     expect(source).toContain('.local/share/comgu-cli');
-    expect(source).toContain('.local/bin/comgu');
+    expect(source).toContain('COMGU_BIN_DIR');
+    expect(source).toContain('.local/bin');
     expect(source).toContain('COMGU_VERSION');
     expect(source).not.toMatch(/\bsudo\b/);
   });
@@ -24,4 +25,3 @@ describe('professional CLI install scripts', () => {
     expect(source).not.toMatch(/Start-Process[^\n]+-Verb\s+RunAs/i);
   });
 });
-

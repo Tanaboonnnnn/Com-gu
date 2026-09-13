@@ -33,4 +33,3 @@ export function installRelease(options: {
 export function removeInstallerPayload(installRoot: string): Promise<void>;
 export function defaultNpmInstallRoot(packageRoot: string): string;
 export function defaultUserInstallRoot(platform?: string): string;
-

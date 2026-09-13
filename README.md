@@ -33,12 +33,32 @@ Release ชุดนี้คือ **ComGu v3.2.0** โดย GitHub release wo
 
 CLI เป็น standalone runtime/admin client สำหรับ Windows และ Linux เหมาะกับเครื่อง server/VM ที่ไม่ต้องการเปิด Desktop UI และใช้ profile ownership/control channel ชุดเดียวกับ Desktop เพื่อป้องกันการมี runtime สองตัวเขียน profile เดียวกันพร้อมกัน
 
+ติดตั้งแบบแนะนำ:
+
+```sh
+npm install -g comgu-cli
+```
+
+Linux แบบไม่ต้องใช้ npm package installer:
+
+```sh
+curl -fsSL https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.ps1 | iex
+```
+
+ทั้ง npm, shell และ PowerShell ใช้ CLI artifact ชุดเดียวกับที่ GitHub Release workflow build/smoke และตรวจ SHA-256 แล้ว ไม่ได้มี CLI implementation แยกกัน. ใช้ `comgu update` เพื่ออัปเดตตาม channel ที่ติดตั้ง และ `comgu uninstall` สำหรับ one-line installs; npm-managed install ใช้ `npm uninstall -g comgu-cli`.
+
 | CLI | x64 | ARM64 |
 | --- | --- | --- |
 | **Windows** | [ZIP](../../releases/download/v3.2.0/ComGu-CLI-windows-x64.zip) | [ZIP](../../releases/download/v3.2.0/ComGu-CLI-windows-arm64.zip) |
 | **Linux** | [TAR.GZ](../../releases/download/v3.2.0/ComGu-CLI-linux-x64.tar.gz) | [TAR.GZ](../../releases/download/v3.2.0/ComGu-CLI-linux-arm64.tar.gz) |
 
-CLI ต้องใช้ **Node.js 22+**. แตกไฟล์แล้วรัน `comgu.cmd` บน Windows หรือ `./comgu` บน Linux; ใช้ `comgu setup` สำหรับตั้งค่า profile ครั้งแรก และ `comgu status` เพื่อตรวจ runtime ที่กำลังถือ profile อยู่. หากเครื่องดับระหว่าง stale-owner recovery จน `.comgu-control.recovery` ค้าง ให้ใช้ `comgu doctor --repair-ownership` ซึ่งจะลบ marker เฉพาะเมื่อยืนยันแล้วว่า endpoint, owner และ recovery contender ไม่ได้มีชีวิตอยู่
+CLI ต้องใช้ **Node.js 22+**. ใช้ `comgu --version` ตรวจรุ่น, `comgu setup` สำหรับตั้งค่า profile ครั้งแรก และ `comgu status` เพื่อตรวจ runtime ที่กำลังถือ profile อยู่. หากเครื่องดับระหว่าง stale-owner recovery จน `.comgu-control.recovery` ค้าง ให้ใช้ `comgu doctor --repair-ownership` ซึ่งจะลบ marker เฉพาะเมื่อยืนยันแล้วว่า endpoint, owner และ recovery contender ไม่ได้มีชีวิตอยู่. Direct ZIP/TAR.GZ ด้านล่างยังคงไว้เป็น manual fallback.
 
 ทุก release มี `SHA256SUMS.txt` สำหรับตรวจ hash และมี `ComGu-Extension.zip` สำหรับโหลด companion extension แยกต่างหาก
 

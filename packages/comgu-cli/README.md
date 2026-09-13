@@ -8,4 +8,3 @@ comgu setup
 ```
 
 The npm package does not bundle a second ComGu runtime. It downloads the matching GitHub Release CLI artifact, verifies it against that release's `SHA256SUMS.txt`, and delegates to those verified bytes. Node.js 22+ is required.
-

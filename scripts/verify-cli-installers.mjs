@@ -20,4 +20,3 @@ assert(powershell.includes('SHA256SUMS.txt') && powershell.includes('Get-FileHas
 assert(shell.includes('releases/latest/download/install.sh'), 'shell update must use a release-pinned installer asset');
 assert(powershell.includes('releases/latest/download/install.ps1'), 'PowerShell update must use a release-pinned installer asset');
 console.log(`ComGu CLI installer contract verified for ${root.version}.`);
-

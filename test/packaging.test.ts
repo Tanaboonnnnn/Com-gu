@@ -651,6 +651,8 @@ Load command 11
       'ComGu-Linux-arm64.AppImage',
       'ComGu-Linux-arm64.deb',
       'ComGu-Extension.zip',
+      'install.sh',
+      'install.ps1',
       'SHA256SUMS.txt'
     ];
     const checksumStep = release.slice(
@@ -667,6 +669,8 @@ Load command 11
     for (const artifact of artifacts.filter((artifact) => artifact !== 'SHA256SUMS.txt')) {
       expect(checksumStep).toContain(artifact);
     }
+    expect(publish).toContain('npm publish ./packages/comgu-cli --access public --provenance');
+    expect(publish).toContain('id-token: write');
     for (const retiredArtifact of ['ComGu-macOS-x64.dmg', 'ComGu-macOS-x64.zip']) {
       expect(notes).not.toContain(`\`${retiredArtifact}\``);
       expect(checksumStep).not.toContain(retiredArtifact);

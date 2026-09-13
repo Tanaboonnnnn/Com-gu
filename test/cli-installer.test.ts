@@ -7,10 +7,10 @@ import { execFileSync } from 'node:child_process';
 
 import {
   assetNameForTarget,
+  installRelease,
   normalizeVersion,
   parseSha256Sums,
   verifySha256
-  ,installRelease
 } from '../packages/comgu-cli/lib/install.mjs';
 import { resolveCliTarget } from '../packages/comgu-cli/lib/platform.mjs';
 
@@ -96,6 +96,17 @@ describe('ComGu CLI installer core', () => {
     expect(result.version).toBe('3.2.0');
     expect(await fs.readFile(profileSentinel, 'utf8')).toBe('keep');
     expect(JSON.parse(await fs.readFile(path.join(installRoot, 'install.json'), 'utf8'))).toMatchObject({ sha256: hash, channel: 'test' });
+    await fs.access(result.launcher);
+
+    const badRelease = path.join(dir, 'release', 'v3.2.1');
+    await fs.mkdir(badRelease, { recursive: true });
+    await fs.copyFile(path.join(releaseRoot, asset), path.join(badRelease, asset));
+    await fs.writeFile(path.join(badRelease, 'SHA256SUMS.txt'), `${'0'.repeat(64)}  ${asset}\n`, 'utf8');
+    await expect(installRelease({
+      version: '3.2.1', installRoot, channel: 'test',
+      releaseBaseUrl: 'https://fixture.invalid/release', fetchImpl: fileFetch as typeof originalFetch
+    })).rejects.toThrow(/checksum mismatch/i);
+    expect(JSON.parse(await fs.readFile(path.join(installRoot, 'install.json'), 'utf8'))).toMatchObject({ version: '3.2.0', sha256: hash });
     await fs.access(result.launcher);
     await fs.rm(dir, { recursive: true, force: true });
   });

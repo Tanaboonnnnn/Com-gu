@@ -5,6 +5,7 @@ REPO="Tanaboonnnnn/Com-gu"
 ROOT="${COMGU_INSTALL_ROOT:-$HOME/.local/share/comgu-cli}"
 BIN_DIR="${COMGU_BIN_DIR:-$HOME/.local/bin}"
 VERSION_INPUT="${COMGU_VERSION:-}"
+TEST_BASE="${COMGU_INSTALLER_TEST_BASE_URL:-}"
 
 fail() { printf 'ComGu installer: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"; }
@@ -33,6 +34,7 @@ if [ -n "$VERSION_INPUT" ]; then
   case "$TAG" in *[!0-9.]*|'') fail "COMGU_VERSION must be an exact version such as 3.2.0" ;; esac
   TAG="v$TAG"
 else
+  [ -z "$TEST_BASE" ] || fail "COMGU_VERSION is required with the test release source"
   EFFECTIVE="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")"
   TAG="${EFFECTIVE##*/}"
 fi
@@ -43,7 +45,11 @@ case "$VERSION" in
 esac
 
 ASSET="ComGu-CLI-linux-$ARCH.tar.gz"
-BASE="https://github.com/$REPO/releases/download/$TAG"
+if [ -n "$TEST_BASE" ]; then
+  BASE="${TEST_BASE%/}/$TAG"
+else
+  BASE="https://github.com/$REPO/releases/download/$TAG"
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
@@ -82,7 +88,7 @@ cat > "$BIN_DIR/comgu" <<'EOF'
 #!/bin/sh
 set -eu
 ROOT="${COMGU_INSTALL_ROOT:-$HOME/.local/share/comgu-cli}"
-SELF="$HOME/.local/bin/comgu"
+SELF="${COMGU_BIN_DIR:-$HOME/.local/bin}/comgu"
 case "${1:-}" in
   update)
     curl -fsSL https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.sh | sh

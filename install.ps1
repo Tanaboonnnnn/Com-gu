@@ -4,6 +4,7 @@ $ProgressPreference = 'SilentlyContinue'
 $Repo = 'Tanaboonnnnn/Com-gu'
 $Root = if ($env:COMGU_INSTALL_ROOT) { $env:COMGU_INSTALL_ROOT } else { Join-Path $env:LOCALAPPDATA 'ComGu\CLI' }
 $BinDir = if ($env:COMGU_BIN_DIR) { $env:COMGU_BIN_DIR } else { Join-Path $env:LOCALAPPDATA 'ComGu\bin' }
+$TestBase = $env:COMGU_INSTALLER_TEST_BASE_URL
 
 function Fail([string]$Message) { throw "ComGu installer: $Message" }
 
@@ -22,6 +23,7 @@ if ($env:COMGU_VERSION) {
   if ($Version -notmatch '^\d+\.\d+\.\d+$') { Fail 'COMGU_VERSION must be an exact version such as 3.2.0' }
   $Tag = "v$Version"
 } else {
+  if ($TestBase) { Fail 'COMGU_VERSION is required with the test release source' }
   $release = Invoke-RestMethod -Headers @{ 'User-Agent' = 'ComGu-Installer' } -Uri "https://api.github.com/repos/$Repo/releases/latest"
   $Tag = [string]$release.tag_name
   if ($Tag -notmatch '^v\d+\.\d+\.\d+$') { Fail 'could not resolve a stable ComGu release' }
@@ -29,7 +31,7 @@ if ($env:COMGU_VERSION) {
 }
 
 $Asset = "ComGu-CLI-windows-$Arch.zip"
-$Base = "https://github.com/$Repo/releases/download/$Tag"
+$Base = if ($TestBase) { "$($TestBase.TrimEnd('/'))/$Tag" } else { "https://github.com/$Repo/releases/download/$Tag" }
 $Temp = Join-Path ([IO.Path]::GetTempPath()) ("comgu-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Temp | Out-Null
 
@@ -76,8 +78,9 @@ if /I "%~1"=="update" (
   exit /b %ERRORLEVEL%
 )
 if /I "%~1"=="uninstall" (
-  powershell.exe -NoLogo -NoProfile -Command "Remove-Item -LiteralPath '$Root' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '$BinDir\comgu.cmd' -Force -ErrorAction SilentlyContinue; Write-Host 'ComGu CLI program files removed. Profile data was preserved.'"
-  exit /b %ERRORLEVEL%
+  start "" /b powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Milliseconds 500; Remove-Item -LiteralPath '$Root' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '$BinDir\comgu.cmd' -Force -ErrorAction SilentlyContinue"
+  echo ComGu CLI uninstall scheduled. Profile data will be preserved.
+  exit /b 0
 )
 set /p COMGU_VERSION=<"$Root\current"
 call "$Root\versions\%COMGU_VERSION%\ComGu-CLI\comgu.cmd" %*

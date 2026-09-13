@@ -6,8 +6,8 @@ Make ComGu CLI easy to install through two first-class channels without creating
 
 ```text
 npm install -g comgu-cli
-curl -fsSL https://raw.githubusercontent.com/Tanaboonnnnn/Com-gu/main/install.sh | sh
-irm https://raw.githubusercontent.com/Tanaboonnnnn/Com-gu/main/install.ps1 | iex
+curl -fsSL https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.sh | sh
+irm https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.ps1 | iex
 ```
 
 All installation paths must install the same platform CLI artifact produced and smoke-tested by the GitHub release pipeline. GitHub Release remains the executable-byte authority.
@@ -286,8 +286,8 @@ README becomes install-first:
 
 ```text
 npm install -g comgu-cli
-curl -fsSL https://raw.githubusercontent.com/Tanaboonnnnn/Com-gu/main/install.sh | sh
-irm https://raw.githubusercontent.com/Tanaboonnnnn/Com-gu/main/install.ps1 | iex
+curl -fsSL https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.sh | sh
+irm https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.ps1 | iex
 ```
 
 Direct ZIP/TAR.GZ links remain available as advanced/manual fallback.

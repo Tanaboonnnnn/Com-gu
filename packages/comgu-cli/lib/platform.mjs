@@ -5,4 +5,3 @@ export function resolveCliTarget(platform = process.platform, arch = process.arc
   }
   return target;
 }
-

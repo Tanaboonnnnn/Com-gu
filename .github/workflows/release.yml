@@ -291,6 +291,9 @@ jobs:
       - name: Smoke CLI owner and admin channel
         run: node scripts/smoke-cli.mjs --dir .cli-build/${{ matrix.platform }}-${{ matrix.arch }}/ComGu-CLI
 
+      - name: Smoke professional CLI installer channel
+        run: node scripts/smoke-cli-installer-channel.mjs --artifact ${{ matrix.file }}
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -307,6 +310,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Verify professional CLI installer contract
+        run: node scripts/verify-cli-installers.mjs
+
+      - name: Audit npm bootstrap package contents
+        run: npm pack ./packages/comgu-cli --dry-run
 
       - name: Download packages
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -327,6 +336,8 @@ jobs:
           set -euo pipefail
           (cd extension && zip -qr ../release/ComGu-Extension.zip . -x '*.map')
           zip -q release/ComGu-Extension.zip LICENSE
+          cp install.sh release/install.sh
+          cp install.ps1 release/install.ps1
           node -e "const m=require('./extension/manifest.json'),p=require('./package.json');if(m.version!==p.version)throw new Error('Extension '+m.version+' does not match app '+p.version)"
           for required in manifest.json background.js chatgpt-dom.js content.js fiber.js overlay.css popup.html popup.css popup.js icons/icon16.png icons/icon32.png icons/icon48.png icons/icon128.png LICENSE; do
             unzip -Z1 release/ComGu-Extension.zip | grep -Fxq "$required" || { echo "Extension zip missing $required" >&2; exit 1; }
@@ -349,6 +360,8 @@ jobs:
             release/ComGu-CLI-linux-x64.tar.gz
             release/ComGu-CLI-linux-arm64.tar.gz
             release/ComGu-Extension.zip
+            release/install.sh
+            release/install.ps1
           )
           for file in "${files[@]}"; do test -f "$file" || { echo "Missing $file" >&2; exit 1; }; done
           (cd release && sha256sum \
@@ -364,7 +377,9 @@ jobs:
             ComGu-CLI-windows-arm64.zip \
             ComGu-CLI-linux-x64.tar.gz \
             ComGu-CLI-linux-arm64.tar.gz \
-            ComGu-Extension.zip > SHA256SUMS.txt)
+            ComGu-Extension.zip \
+            install.sh \
+            install.ps1 > SHA256SUMS.txt)
           cat release/SHA256SUMS.txt
 
       - name: Upload release candidate
@@ -387,6 +402,8 @@ jobs:
             release/ComGu-CLI-linux-x64.tar.gz
             release/ComGu-CLI-linux-arm64.tar.gz
             release/ComGu-Extension.zip
+            release/install.sh
+            release/install.ps1
             release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
