@@ -1,0 +1,31 @@
+{
+  "name": "comgu-cli",
+  "version": "3.2.0",
+  "description": "Verified bootstrapper for the ComGu standalone CLI",
+  "license": "MIT",
+  "author": "ComGu",
+  "homepage": "https://github.com/Tanaboonnnnn/Com-gu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tanaboonnnnn/Com-gu.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Tanaboonnnnn/Com-gu/issues"
+  },
+  "type": "module",
+  "bin": {
+    "comgu": "bin/comgu-bootstrap.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

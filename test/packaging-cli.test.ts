@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { CLI_FORBIDDEN_SOURCE_FRAGMENTS, CLI_TARGETS, cliArtifactName } from '../scripts/cli-package.mjs';
+import rootPackage from '../package.json';
+import bootstrapPackage from '../packages/comgu-cli/package.json';
 
 describe('CLI packaging contract', () => {
   it('publishes exactly the four V1 artifact names', () => {
@@ -30,5 +32,16 @@ describe('CLI packaging contract', () => {
     }
     expect(release).toContain('needs: [package, cli-package]');
     expect(release).toContain('node scripts/smoke-cli.mjs --dir .cli-build/${{ matrix.platform }}-${{ matrix.arch }}/ComGu-CLI');
+    expect(release).toContain('node scripts/smoke-cli-installer-channel.mjs --artifact ${{ matrix.file }}');
+  });
+
+  it('keeps the public npm bootstrapper thin and version-aligned', () => {
+    expect(bootstrapPackage.name).toBe('comgu-cli');
+    expect(bootstrapPackage.version).toBe(rootPackage.version);
+    expect(bootstrapPackage.bin).toEqual({ comgu: 'bin/comgu-bootstrap.mjs' });
+    expect(bootstrapPackage.engines).toEqual({ node: '>=22' });
+    expect(bootstrapPackage).not.toHaveProperty('dependencies');
+    expect(bootstrapPackage).not.toHaveProperty('scripts');
+    expect(bootstrapPackage.files).toEqual(['bin/', 'lib/', 'README.md']);
   });
 });
