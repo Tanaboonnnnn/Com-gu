@@ -44,4 +44,10 @@ describe('CLI packaging contract', () => {
     expect(bootstrapPackage).not.toHaveProperty('scripts');
     expect(bootstrapPackage.files).toEqual(['bin/', 'lib/', 'README.md']);
   });
+
+  it('does not make GitHub Release publication depend on an npm registry token', () => {
+    const publish = readFileSync('.github/workflows/publish.yml', 'utf8');
+    const npmStep = publish.slice(publish.indexOf('      - name: Publish comgu-cli to npm'));
+    expect(npmStep).toContain("if: ${{ secrets.NPM_TOKEN != '' }}");
+  });
 });
