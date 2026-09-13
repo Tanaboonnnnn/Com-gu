@@ -59,8 +59,10 @@ import {
   loadedDesktopAgentsModule,
   loadedDesktopGoalModule
 } from './runtime/desktop-features.js';
-import { initMachineProfile } from './machine/profile.js';
+import { currentMachineProfile, initMachineProfile } from './machine/profile.js';
+import { createRuntimeControlServer } from './runtime/control.js';
 import {
+  applySettings as applyConnectionSettings,
   connect as connectConnection,
   disconnect as disconnectConnection,
   getStatus as connectionStatus,
@@ -92,6 +94,7 @@ let quitting = false;
 let shutdownStarted = false;
 let shutdownComplete = false;
 let stopSessionRetention: (() => void) | null = null;
+let desktopControlReady = false;
 
 // Ask Electron for GNOME Secret Service explicitly before safeStorage/OSCrypt initialises. A
 // user-supplied --password-store remains authoritative, and KDE stays on Electron's native
@@ -120,6 +123,48 @@ if (!hasSingleInstanceLock) {
   quitting = true;
   app.quit();
 }
+
+// Electron's single-instance lock only arbitrates Desktop vs Desktop. The profile control
+// channel is the frontend-independent authority shared with the standalone CLI, and is acquired
+// before machine/config/secrets/durable initialization. A losing Desktop process therefore never
+// reaches mutable ComGu profile bootstrap.
+const desktopControlServer = createRuntimeControlServer({
+  profileDir: compatibleUserData,
+  handlers: {
+    status: async () => ({
+      runtime: desktopControlReady ? 'running' : 'starting',
+      mode: 'desktop',
+      machine: currentMachineProfile(),
+      connection: desktopRuntime.status()
+    }),
+    connect: async () => {
+      if (!desktopControlReady) throw new Error('Desktop runtime is still starting');
+      await desktopRuntime.connect();
+    },
+    disconnect: async () => {
+      if (!desktopControlReady) throw new Error('Desktop runtime is still starting');
+      await desktopRuntime.disconnect();
+    },
+    reload: async () => {
+      if (!desktopControlReady) throw new Error('Desktop runtime is still starting');
+      await loadConfig();
+      await applyConnectionSettings();
+    },
+    shutdown: async () => {
+      setImmediate(() => app.quit());
+    }
+  }
+});
+let desktopControlStartError: Error | null = null;
+const desktopControlStart = hasSingleInstanceLock
+  ? desktopControlServer.start().then(
+      () => true,
+      (error) => {
+        desktopControlStartError = error instanceof Error ? error : new Error(String(error));
+        return false;
+      }
+    )
+  : Promise.resolve(false);
 
 function createWindow(): void {
   const layout = windowLayoutForWorkArea(screen.getPrimaryDisplay().workArea);
@@ -263,6 +308,12 @@ void app.whenReady().then(async () => {
   // This guard is intentionally before even app.getPath/init* calls. A secondary instance, or a
   // primary that was told to quit before ready, must never touch the primary's shared userData.
   if (!shouldBeginAppBootstrap(hasSingleInstanceLock, quitting)) return;
+  if (!(await desktopControlStart)) {
+    logWarn(`profile already owned; Desktop runtime will not start: ${desktopControlStartError?.message ?? 'unknown owner'}`);
+    quitting = true;
+    app.quit();
+    return;
+  }
   const userData = app.getPath('userData');
   // Machine identity is non-secret and must exist before any connector metadata is constructed.
   // New/upgraded installs remain on legacy connector names until the user confirms an alias.
@@ -286,6 +337,7 @@ void app.whenReady().then(async () => {
   await loadConfig();
   if (windowActivation.isDisabled()) return;
   await desktopRuntime.start();
+  desktopControlReady = true;
   if (windowActivation.isDisabled()) return;
   // Keep Chrome's stable unpacked folder synchronized with the installed ComGu release before
   // the bridge can tell an older running service worker which app version it is talking to.
@@ -442,6 +494,7 @@ void app.whenReady().then(async () => {
 app.on('before-quit', () => {
   if (!ownsAppRuntime(hasSingleInstanceLock)) return;
   quitting = true;
+  desktopControlReady = false;
   // From this point `will-quit` owns a bounded teardown. A Dock click/relaunch arriving while
   // that sequence drains must not recreate or reveal a window after the tray has disappeared.
   windowActivation.disable();
@@ -485,7 +538,10 @@ app.on('will-quit', (event) => {
       // Phase 3: recorder work can enqueue both session projections and named durable state.
       { name: 'recorder flush', budgetMs: 10_000, run: () => [flushRecorder()] },
       // These are independent writers. One rejection must never skip the other flush.
-      { name: 'durable flush', budgetMs: 10_000, run: () => [flushSessions(), flushDurable()] }
+      { name: 'durable flush', budgetMs: 10_000, run: () => [flushSessions(), flushDurable()] },
+      // Release frontend-independent profile ownership only after every mutable writer is done.
+      // Otherwise a CLI could acquire the same profile while Desktop is still flushing state.
+      { name: 'profile ownership release', budgetMs: 5_000, run: () => [desktopControlServer.close()] }
     ],
     {
       info: logInfo,

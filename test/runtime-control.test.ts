@@ -19,11 +19,88 @@ afterEach(async () => {
 });
 
 describe('runtime local control channel', () => {
+  it.runIf(process.platform !== 'win32')('never treats a paused live ownership generation as stale before publication completes', async () => {
+    let reachedClaim!: () => void;
+    const claimed = new Promise<void>((resolve) => { reachedClaim = resolve; });
+    let resumeOwner!: () => void;
+    const ownerMayFinish = new Promise<void>((resolve) => { resumeOwner = resolve; });
+    const identities = new Map<number, string | null>([[41001, 'start-a'], [41002, 'start-b']]);
+
+    const firstPending = acquireRuntimeControlOwnershipGate(dir, 2_000, {
+      pid: 41001,
+      processIdentity: async (pid) => identities.get(pid) ?? null,
+      afterClaimPublished: async () => {
+        reachedClaim();
+        await ownerMayFinish;
+      }
+    });
+    await claimed;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    await expect(acquireRuntimeControlOwnershipGate(dir, 100, {
+      pid: 41002,
+      processIdentity: async (pid) => identities.get(pid) ?? null
+    })).rejects.toThrow(/already has an owner/i);
+
+    resumeOwner();
+    const release = await firstPending;
+    const ownerRecord = JSON.parse(await fs.readFile(`${dir}/.comgu-control.owner`, 'utf8')) as { pid: number };
+    expect(ownerRecord.pid).toBe(41001);
+    await release();
+  });
+
+  it.runIf(process.platform !== 'win32')('cannot let an older stale reaper publish into or release a newer ownership generation', async () => {
+    const identities = new Map<number, string | null>([
+      [42001, 'start-old'],
+      [42002, 'start-reaper'],
+      [42003, 'start-winner'],
+      [42004, 'start-loser']
+    ]);
+    const identity = async (pid: number) => identities.get(pid) ?? null;
+    const oldRelease = await acquireRuntimeControlOwnershipGate(dir, 2_000, {
+      pid: 42001,
+      processIdentity: identity
+    });
+    identities.set(42001, null);
+
+    let staleRemoved!: () => void;
+    const removed = new Promise<void>((resolve) => { staleRemoved = resolve; });
+    let resumeReaper!: () => void;
+    const reaperMayContinue = new Promise<void>((resolve) => { resumeReaper = resolve; });
+    const reaper = acquireRuntimeControlOwnershipGate(dir, 2_000, {
+      pid: 42002,
+      processIdentity: identity,
+      afterStaleOwnerRemoved: async () => {
+        staleRemoved();
+        await reaperMayContinue;
+      }
+    });
+    await removed;
+
+    const winnerRelease = await acquireRuntimeControlOwnershipGate(dir, 2_000, {
+      pid: 42003,
+      processIdentity: identity
+    });
+    resumeReaper();
+    await expect(reaper).rejects.toThrow(/already has an owner/i);
+
+    // The old owner's delayed cleanup must not unlink the winner's generation.
+    await oldRelease();
+    await expect(acquireRuntimeControlOwnershipGate(dir, 100, {
+      pid: 42004,
+      processIdentity: identity
+    })).rejects.toThrow(/already has an owner/i);
+    const ownerRecord = JSON.parse(await fs.readFile(`${dir}/.comgu-control.owner`, 'utf8')) as { pid: number };
+    expect(ownerRecord.pid).toBe(42003);
+    await winnerRelease();
+  });
+
   it('holds the atomic Unix ownership gate for the owner lifetime and allows reacquisition after release', async () => {
-    const first = await acquireRuntimeControlOwnershipGate(dir);
-    await expect(acquireRuntimeControlOwnershipGate(dir, 100)).rejects.toThrow(/already has an owner/i);
+    const identity = async (pid: number) => `test:${pid}`;
+    const first = await acquireRuntimeControlOwnershipGate(dir, 2_000, { processIdentity: identity });
+    await expect(acquireRuntimeControlOwnershipGate(dir, 100, { processIdentity: identity })).rejects.toThrow(/already has an owner/i);
     await first();
-    const second = await acquireRuntimeControlOwnershipGate(dir);
+    const second = await acquireRuntimeControlOwnershipGate(dir, 2_000, { processIdentity: identity });
     await second();
   });
 
@@ -116,5 +193,23 @@ describe('runtime local control channel', () => {
     } finally {
       await server.close();
     }
+  });
+
+  it('releases profile ownership when control authentication bootstrap fails', async () => {
+    await fs.writeFile(`${dir}/control.auth`, 'not-a-valid-control-token\n', 'utf8');
+    const handlers = {
+      status: async () => ({ state: 'disconnected' }),
+      connect: async () => undefined,
+      disconnect: async () => undefined,
+      shutdown: async () => undefined,
+      reload: async () => undefined
+    };
+    const failed = createRuntimeControlServer({ profileDir: dir, handlers });
+    await expect(failed.start()).rejects.toThrow(/authentication.*invalid/i);
+    await fs.rm(`${dir}/control.auth`, { force: true });
+
+    const next = createRuntimeControlServer({ profileDir: dir, handlers });
+    await expect(next.start()).resolves.toBeUndefined();
+    await next.close();
   });
 });

@@ -1717,6 +1717,20 @@ describe('desktop capabilities', () => {
     expect(textOf(written)).toContain('Replace clipboard text permission');
   });
 
+  it('requires a fresh frame identity for pixel coordinates after control permission is proven', async () => {
+    ctx.readOnly = false;
+    ctx.caps = withCaps({ screen: true, control: true });
+    expect(toolNames(await desktop('tools/list'))).toContain('computer');
+
+    const clicked = await desktop('tools/call', {
+      name: 'computer',
+      arguments: { actions: [{ type: 'click', x: 5, y: 5 }] }
+    });
+    expect(clicked.body.result?.isError).toBe(true);
+    expect(textOf(clicked)).toContain('frameId is required for coordinate actions');
+    expect(textOf(clicked)).toContain('click_ref');
+  });
+
   it('marks observing read-only and control destructive', async () => {
     ctx.caps = withCaps({ screen: true, control: true });
     ctx.readOnly = false;

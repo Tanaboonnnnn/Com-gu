@@ -20,8 +20,9 @@ describe('Wayland portal DesktopDriver', () => {
 
   it('maps coordinates and keyboard only through the portal session', async () => {
     const portal = session(); const driver = createWaylandDesktopDriver(portal);
-    await driver.act({ actions: [{ type: 'move', x: 10, y: 20 }, { type: 'click', x: 30, y: 40 }, { type: 'type', text: 'A' }] });
-    expect(portal.move).toHaveBeenCalledWith(10, 20); expect(portal.move).toHaveBeenCalledWith(30, 40);
+    const frame = await driver.observe({ kind: 'screenshot' });
+    await driver.act({ frameId: frame.screenshot.frameId, actions: [{ type: 'move', x: 10, y: 20 }, { type: 'click', x: 30, y: 40 }, { type: 'type', text: 'A' }] });
+    expect(portal.move).toHaveBeenCalledTimes(2);
     expect(portal.button).toHaveBeenCalledWith('left', true); expect(portal.button).toHaveBeenCalledWith('left', false); expect(portal.keysym).toHaveBeenCalled();
   });
 
@@ -60,6 +61,45 @@ describe('Wayland portal DesktopDriver', () => {
     expect(portal.button).not.toHaveBeenCalled();
   });
 
+  it('keeps keyboard control available while withholding frame-coordinate pointer authority without capture', async () => {
+    const portal = session({
+      grants: () => ({ active: true, capture: false, pointer: true, keyboard: true, clipboardRead: false, clipboardWrite: false, width: 1920, height: 1080 })
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    expect(await driver.capabilities()).toMatchObject({ capture: false, pointer: false, keyboard: true, available: true });
+
+    await driver.act({ actions: [{ type: 'keypress', keys: ['CTRL', 'L'] }, { type: 'type', text: 'hello' }] });
+    expect(portal.keysym).toHaveBeenCalled();
+
+    for (const action of [
+      { type: 'click', x: 1, y: 2 } as const,
+      { type: 'double_click', x: 1, y: 2 } as const,
+      { type: 'move', x: 1, y: 2 } as const,
+      { type: 'drag', path: [{ x: 1, y: 2 }, { x: 3, y: 4 }] } as const,
+      { type: 'scroll', x: 1, y: 2, scroll_y: 1 } as const
+    ]) {
+      await expect(driver.act({ frameId: 1, actions: [action] as never })).rejects.toThrow(/authoritative.*capture|capture.*author/i);
+    }
+    expect(portal.move).not.toHaveBeenCalled();
+    expect(portal.button).not.toHaveBeenCalled();
+    expect(portal.scroll).not.toHaveBeenCalled();
+  });
+
+  it('rejects omitted and stale Wayland frame ids before any coordinate side effect', async () => {
+    const portal = session();
+    const driver = createWaylandDesktopDriver(portal);
+    const frame = await driver.observe({ kind: 'screenshot' });
+
+    await expect(driver.act({ actions: [{ type: 'click', x: 10, y: 20 }] })).rejects.toThrow(/frameId.*required/i);
+    await expect(driver.act({ frameId: frame.screenshot.frameId + 1, actions: [{ type: 'move', x: 10, y: 20 }] })).rejects.toThrow(/STALE_FRAME/i);
+    expect(portal.move).not.toHaveBeenCalled();
+    expect(portal.button).not.toHaveBeenCalled();
+
+    await driver.act({ frameId: frame.screenshot.frameId, actions: [{ type: 'click', x: 10, y: 20 }] });
+    expect(portal.move).toHaveBeenCalledTimes(1);
+    expect(portal.button).toHaveBeenCalledWith('left', true);
+  });
+
   it('reports exact partial execution metadata when a Wayland batch action fails', async () => {
     let moves = 0;
     const portal = session({
@@ -69,7 +109,8 @@ describe('Wayland portal DesktopDriver', () => {
       })
     });
     const driver = createWaylandDesktopDriver(portal);
-    await expect(driver.act({ actions: [
+    const frame = await driver.observe({ kind: 'screenshot' });
+    await expect(driver.act({ frameId: frame.screenshot.frameId, actions: [
       { type: 'move', x: 1, y: 1 },
       { type: 'move', x: 2, y: 2 },
       { type: 'move', x: 3, y: 3 }
@@ -85,7 +126,8 @@ describe('Wayland portal DesktopDriver', () => {
       })
     });
     const driver = createWaylandDesktopDriver(portal);
-    await expect(driver.act({ actions: [{ type: 'drag', path: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }] })).rejects.toThrow();
+    const frame = await driver.observe({ kind: 'screenshot' });
+    await expect(driver.act({ frameId: frame.screenshot.frameId, actions: [{ type: 'drag', path: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }] })).rejects.toThrow();
     expect(portal.button).toHaveBeenCalledWith('left', false);
   });
 

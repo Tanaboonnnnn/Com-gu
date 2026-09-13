@@ -357,7 +357,7 @@ export function registerDesktopTools(reg: SurfaceRegistrar, driver: DesktopDrive
       {
         title: 'Control mouse and keyboard',
         description:
-          'Run ordered desktop actions. Prefer refs from observe; pixels require frameId and target geometry is rechecked. ' +
+          'Run ordered desktop actions. Prefer refs from observe for app/sidebar navigation; refs do not require frameId. Pixel coordinate actions require frameId and target geometry is rechecked. ' +
           'verify waits for a postcondition. Capture and clipboard steps stay in the batch.',
         inputSchema: z
           .object({
@@ -437,6 +437,19 @@ export function registerDesktopTools(reg: SurfaceRegistrar, driver: DesktopDrive
             return fail(
               'TOOL_DISABLED: mouse and keyboard control is disabled by the current ComGu permissions. ' +
                 'Ask the user to enable "Control mouse and keyboard" in the app, then retry.'
+            );
+          }
+          const hasCoordinateAction = actions.some((action) =>
+            action.type === 'click' ||
+            action.type === 'double_click' ||
+            action.type === 'move' ||
+            action.type === 'drag' ||
+            action.type === 'scroll'
+          );
+          if (hasCoordinateAction && frameId === undefined) {
+            return fail(
+              'INVALID_ARGUMENT: frameId is required for coordinate actions. ' +
+                'Call observe first and use the returned frameId, or prefer a semantic ref action such as click_ref when available.'
             );
           }
           const parsed: Action[] = [];

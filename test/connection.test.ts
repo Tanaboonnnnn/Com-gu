@@ -34,8 +34,10 @@ const mocks = vi.hoisted(() => {
     endpointStop: vi.fn(async (_options?: { forceAfterMs?: number }) => undefined),
     endpointStartGate: null as Promise<void> | null,
     endpointStartReached: vi.fn(),
+    endpointStartError: null as Error | null,
     tunnelStartGate: null as Promise<void> | null,
     tunnelStartReached: vi.fn(),
+    tunnelStartError: null as Error | null,
     tunnelStop: vi.fn(async () => undefined),
     secretGate: null as Promise<void> | null,
     secretReached: vi.fn(),
@@ -61,6 +63,7 @@ vi.mock('../src/main/mcp/server.js', () => ({
     mocks.contextCapsSeen = getContext().caps;
     mocks.endpointStartReached();
     if (mocks.endpointStartGate) await mocks.endpointStartGate;
+    if (mocks.endpointStartError) throw mocks.endpointStartError;
     return {
       port: 45678,
       url: 'http://127.0.0.1:45678/mcp/core/core-token',
@@ -82,11 +85,13 @@ vi.mock('../src/main/secrets.js', () => ({
   })
 }));
 vi.mock('../src/main/tunnel/index.js', () => ({
+  TunnelError: class TunnelError extends Error {},
   startTunnel: vi.fn(async (options: { report: (report: Record<string, unknown>) => void }) => {
     mocks.starts += 1;
     mocks.report = options.report;
     mocks.tunnelStartReached();
     if (mocks.tunnelStartGate) await mocks.tunnelStartGate;
+    if (mocks.tunnelStartError) throw mocks.tunnelStartError;
     options.report({
       state: 'connected',
       detail: 'Connected.',
@@ -104,8 +109,10 @@ describe('connection surface state', () => {
     mocks.endpointStop.mockClear();
     mocks.endpointStartReached.mockClear();
     mocks.endpointStartGate = null;
+    mocks.endpointStartError = null;
     mocks.tunnelStartReached.mockClear();
     mocks.tunnelStartGate = null;
+    mocks.tunnelStartError = null;
     mocks.tunnelStop.mockClear();
     mocks.secretReached.mockClear();
     mocks.secretGate = null;
@@ -311,6 +318,159 @@ describe('connection surface state', () => {
     connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
     await connection.connect();
     expect(mocks.desktopDriverSeen).toBe(fakeDriver);
+  });
+
+  it('disposes the active DesktopDriver exactly once after MCP admission has drained on disconnect', async () => {
+    mocks.caps.screen = true;
+    const order: string[] = [];
+    mocks.endpointStop.mockImplementationOnce(async () => { order.push('endpoint-stop'); });
+    const dispose = vi.fn(async () => { order.push('driver-dispose'); });
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    await connection.disconnect();
+    await connection.disconnect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['endpoint-stop', 'driver-dispose']);
+  });
+
+  it('disposes an unpublished DesktopDriver candidate when MCP startup fails', async () => {
+    mocks.caps.screen = true;
+    mocks.endpointStartError = new Error('mcp startup failed');
+    const dispose = vi.fn(async () => undefined);
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(connection.getStatus().state).toBe('disconnected');
+  });
+
+  it('disposes the promoted DesktopDriver when tunnel startup fails', async () => {
+    mocks.caps.screen = true;
+    mocks.tunnelStartError = new Error('tunnel startup failed');
+    const dispose = vi.fn(async () => undefined);
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    await connection.connect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(mocks.endpointStop).toHaveBeenCalledTimes(1);
+    expect(connection.getStatus().state).toBe('disconnected');
+  });
+
+  it('disposes the DesktopDriver candidate when final shutdown invalidates an in-flight endpoint startup', async () => {
+    mocks.caps.screen = true;
+    let releaseEndpoint!: () => void;
+    mocks.endpointStartGate = new Promise<void>((resolve) => { releaseEndpoint = resolve; });
+    const dispose = vi.fn(async () => undefined);
+    const fakeDriver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      dispose
+    };
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({ desktopDriver: async () => fakeDriver as never, desktopSupported: () => true });
+    const connecting = connection.connect();
+    await vi.waitFor(() => expect(mocks.endpointStartReached).toHaveBeenCalledTimes(1));
+    const shutdown = connection.shutdownConnection();
+    releaseEndpoint();
+    await Promise.all([connecting, shutdown]);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes generation N before generation N+1 DesktopDriver becomes active', async () => {
+    mocks.caps.screen = true;
+    const events: string[] = [];
+    let generation = 0;
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => true,
+      desktopDriver: async () => {
+        generation += 1;
+        const id = generation;
+        events.push(`create-${id}`);
+        return {
+          capabilities: async () => ({
+            available: true, capture: true, pointer: true, keyboard: true,
+            clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+          }),
+          dispose: async () => { events.push(`dispose-${id}`); }
+        } as never;
+      }
+    });
+    await connection.connect();
+    await connection.disconnect();
+    await connection.connect();
+    expect(events).toEqual(['create-1', 'dispose-1', 'create-2']);
+    await connection.disconnect();
+  });
+
+  it('disposes the old DesktopDriver before settings-triggered reconnect publishes the next generation', async () => {
+    mocks.caps.screen = true;
+    const events: string[] = [];
+    let generation = 0;
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => true,
+      desktopDriver: async () => {
+        generation += 1;
+        const id = generation;
+        events.push(`create-${id}`);
+        return {
+          capabilities: async () => ({
+            available: true, capture: true, pointer: true, keyboard: true,
+            clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+          }),
+          dispose: async () => { events.push(`dispose-${id}`); }
+        } as never;
+      }
+    });
+    await connection.connect();
+    mocks.config.tunnel.kind = 'manual';
+    await connection.applySettings();
+    expect(events).toEqual(['create-1', 'dispose-1', 'create-2']);
+    await connection.disconnect();
+  });
+
+  it('disposes the active DesktopDriver during final shutdown', async () => {
+    mocks.caps.screen = true;
+    const dispose = vi.fn(async () => undefined);
+    const connection = await import('../src/main/connection.js');
+    connection.configureConnectionRuntime({
+      desktopSupported: () => true,
+      desktopDriver: async () => ({
+        capabilities: async () => ({
+          available: true, capture: true, pointer: true, keyboard: true,
+          clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+        }),
+        dispose
+      }) as never
+    });
+    await connection.connect();
+    await connection.shutdownConnection();
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
   it('masks configured Desktop permissions to what the selected driver can actually satisfy', async () => {
     Object.assign(mocks.caps, { screen: true, control: true, clipboardRead: true, clipboardWrite: true });

@@ -45,4 +45,56 @@ describe('Desktop MCP driver seam', () => {
     expect(result.content[0].text).toContain('Injected Window');
     expect(result.content[0].text).toContain('fake.exe');
   });
+
+  it('requires frameId at the MCP handler boundary for pixels but keeps ref navigation frame-free', async () => {
+    const configs = new Map<string, any>();
+    const handlers = new Map<string, (input: any) => Promise<any>>();
+    const caps = { ...DEFAULT_CAPABILITIES, screen: true, control: true };
+    const reg = {
+      ctx: { roots: [], caps, readOnly: false },
+      caps,
+      exposedCaps: caps,
+      sessionToolsLive: false,
+      sessionToolsExposed: false,
+      agentToolsLive: false,
+      agentToolsExposed: false,
+      findExposed: false,
+      register: (name: string, config: unknown, handler: (input: any) => Promise<any>) => {
+        configs.set(name, config);
+        handlers.set(name, handler);
+      },
+      guarded: async (_cap: string, _name: string, fn: () => Promise<any>) => fn(),
+      featureDisabled: () => ({ content: [{ type: 'text', text: 'disabled' }], isError: true }),
+      registered: () => [...configs.keys()]
+    };
+    const calls: any[] = [];
+    const driver = {
+      capabilities: async () => ({
+        available: true, capture: true, pointer: true, keyboard: true,
+        clipboardRead: false, clipboardWrite: false, windows: true, uiElements: true, focus: true
+      }),
+      observe: async () => { throw new Error('not used'); },
+      act: async (request: unknown) => {
+        calls.push(request);
+        return { cursor: null, clipboard: [], screenshot: null, verification: null, routes: ['uia'], completedCount: 1 };
+      },
+      dispose: async () => undefined
+    } as unknown as DesktopDriver;
+    (registerDesktopTools as unknown as (reg: any, driver: DesktopDriver) => void)(reg, driver);
+    const schema = configs.get('computer').inputSchema;
+
+    expect(schema.safeParse({ actions: [{ type: 'click', x: 10, y: 20 }] }).success).toBe(true);
+    expect(schema.safeParse({ actions: [{ type: 'move', x: 10, y: 20 }], frameId: 7 }).success).toBe(true);
+    expect(schema.safeParse({ actions: [{ type: 'click_ref', ref: 'snapshot:button:1' }] }).success).toBe(true);
+    expect(schema.safeParse({ actions: [{ type: 'keypress', keys: ['ctrl', 'l'] }] }).success).toBe(true);
+
+    const missingFrame = await handlers.get('computer')!({ actions: [{ type: 'click', x: 10, y: 20 }] });
+    expect(missingFrame.isError).toBe(true);
+    expect(missingFrame.content[0].text).toContain('frameId is required for coordinate actions');
+    expect(calls).toHaveLength(0);
+
+    const refNavigation = await handlers.get('computer')!({ actions: [{ type: 'click_ref', ref: 'snapshot:button:1' }] });
+    expect(refNavigation.isError).not.toBe(true);
+    expect(calls).toHaveLength(1);
+  });
 });

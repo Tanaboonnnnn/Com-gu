@@ -25,11 +25,12 @@ export interface CliOwnerRuntime {
 
 interface RunCliOwnerOptions {
   profileDir: string;
-  machine: MachineIdentity;
+  machine: MachineIdentity | (() => MachineIdentity | null);
   runtime: CliOwnerRuntime;
+  initialize?: () => Promise<void>;
   durableRunStatus?: () => Promise<unknown[]>;
   reload?: () => Promise<void>;
-  autoConnect?: boolean;
+  autoConnect?: boolean | (() => boolean);
   installSignalHandlers?: boolean;
 }
 
@@ -45,6 +46,8 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
     resolveFinished = resolve;
   });
   let signalHandler: (() => void) | null = null;
+  const machine = (): MachineIdentity | null =>
+    typeof options.machine === 'function' ? options.machine() : options.machine;
 
   const server = createRuntimeControlServer({
     profileDir: options.profileDir,
@@ -52,7 +55,7 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
       status: async () => ({
         runtime: 'running',
         mode: 'cli',
-        machine: options.machine,
+        machine: machine(),
         connection: options.runtime.status(),
         durableRuns: await options.durableRunStatus?.() ?? []
       }),
@@ -82,6 +85,7 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
 
   try {
     await server.start();
+    await options.initialize?.();
     await options.runtime.start();
     if (options.installSignalHandlers !== false) {
       signalHandler = () => {
@@ -90,7 +94,8 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
       process.once('SIGINT', signalHandler);
       process.once('SIGTERM', signalHandler);
     }
-    if (options.autoConnect) await options.runtime.connect();
+    const autoConnect = typeof options.autoConnect === 'function' ? options.autoConnect() : options.autoConnect;
+    if (autoConnect) await options.runtime.connect();
   } catch (error) {
     await server.close().catch(() => undefined);
     throw error;
@@ -104,25 +109,6 @@ export async function runCliOwner(options: RunCliOwnerOptions): Promise<void> {
  * clients do not load the MCP/tunnel/native dependency graph merely to inspect an owner.
  */
 export async function startCliOwner(options: { profileDir: string }): Promise<void> {
-  await initMachineProfile(options.profileDir);
-  const machine = currentMachineProfile();
-  if (!machine) throw new Error('ComGu machine identity did not initialize');
-
-  initConfigPath(options.profileDir);
-  await loadConfig();
-  const vault = createCliCredentialVault(options.profileDir, machine);
-  if (process.platform === 'win32') {
-    const [{ configureComputerClipboard }, { createWindowsCliClipboard }] = await Promise.all([
-      import('../main/computer/index.js'),
-      import('../main/desktop/windows-clipboard.js')
-    ]);
-    configureComputerClipboard(createWindowsCliClipboard());
-  }
-  configureConnectionRuntime({
-    profile: 'cli',
-    getApiKey: () => vault.get('openaiApiKey')
-  });
-
   const runtime = createComGuRuntime(runtimeProfile('cli'), {
     connect,
     disconnect,
@@ -130,6 +116,7 @@ export async function startCliOwner(options: { profileDir: string }): Promise<vo
     subscribe: onStatusChange,
     shutdown: shutdownConnection
   });
+  let machine: MachineIdentity | null = null;
 
   let durableRunStore: import('../main/run/durable-run.js').DurableRunStore | null = null;
   const durableRunStatus = async () => {
@@ -157,10 +144,28 @@ export async function startCliOwner(options: { profileDir: string }): Promise<vo
 
   await runCliOwner({
     profileDir: options.profileDir,
-    machine,
+    machine: () => machine,
     runtime,
+    initialize: async () => {
+      machine = await initMachineProfile(options.profileDir);
+      if (!currentMachineProfile()) throw new Error('ComGu machine identity did not initialize');
+      initConfigPath(options.profileDir);
+      await loadConfig();
+      const vault = createCliCredentialVault(options.profileDir, machine);
+      if (process.platform === 'win32') {
+        const [{ configureComputerClipboard }, { createWindowsCliClipboard }] = await Promise.all([
+          import('../main/computer/index.js'),
+          import('../main/desktop/windows-clipboard.js')
+        ]);
+        configureComputerClipboard(createWindowsCliClipboard());
+      }
+      configureConnectionRuntime({
+        profile: 'cli',
+        getApiKey: () => vault.get('openaiApiKey')
+      });
+    },
     durableRunStatus,
-    autoConnect: getConfig().ui.autoConnect,
+    autoConnect: () => getConfig().ui.autoConnect,
     reload: async () => {
       await loadConfig();
       await applySettings();

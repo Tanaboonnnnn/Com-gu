@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { spawn } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 
 const AUTH_FILE = 'control.auth';
-const OWNERSHIP_GATE_DIR = '.comgu-control.acquire';
+const OWNERSHIP_OWNER_FILE = '.comgu-control.owner';
+const OWNERSHIP_RECOVERY_FILE = '.comgu-control.recovery';
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const CONTROL_METHODS = new Set(['status', 'connect', 'disconnect', 'shutdown', 'reload']);
 
@@ -42,97 +44,253 @@ function authFile(profileDir: string): string {
   return path.join(profileDir, AUTH_FILE);
 }
 
-function ownershipGatePath(profileDir: string): string {
-  return path.join(profileDir, OWNERSHIP_GATE_DIR);
+function ownershipOwnerPath(profileDir: string): string {
+  return path.join(profileDir, OWNERSHIP_OWNER_FILE);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+interface RuntimeOwnerRecord {
+  version: 1;
+  pid: number;
+  processIdentity: string;
+  nonce: string;
+}
+
+export interface RuntimeOwnershipDependencies {
+  pid?: number;
+  processIdentity?: (pid: number) => Promise<string | null>;
+  afterClaimPublished?: () => Promise<void>;
+  afterStaleOwnerRemoved?: () => Promise<void>;
+}
+
+async function psProcessIdentity(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      const child = spawn('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => { stdout += chunk; });
+      child.once('error', () => finish(null));
+      child.once('close', (code) => finish(code === 0 && stdout.trim() ? stdout.trim() : null));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+async function processStartIdentity(pid: number): Promise<string | null> {
+  if (process.platform === 'win32') {
+    const powershell = path.join(
+      process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe'
+    );
+    return new Promise((resolve) => {
+      let stdout = '';
+      let settled = false;
+      const finish = (value: string | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      try {
+        const script = `$p = Get-Process -Id ${pid} -ErrorAction Stop; [Console]::Out.Write($p.StartTime.ToUniversalTime().ToString('o'))`;
+        const child = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore']
+        });
+        child.stdout?.setEncoding('utf8');
+        child.stdout?.on('data', (chunk: string) => { stdout += chunk; });
+        child.once('error', () => finish(null));
+        child.once('close', (code) => finish(code === 0 && stdout.trim() ? `win32:${stdout.trim()}` : null));
+      } catch {
+        finish(null);
+      }
+    });
+  }
+  if (process.platform === 'linux') {
+    try {
+      const raw = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+      const tail = raw.slice(raw.lastIndexOf(')') + 2).trim().split(/\s+/);
+      const startTicks = tail[19];
+      return startTicks ? `linux:${startTicks}` : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      return null;
+    }
+  }
+  if (process.platform === 'darwin') {
+    const started = await psProcessIdentity(pid);
+    return started ? `darwin:${started}` : null;
+  }
+  return null;
+}
+
+let ownProcessIdentityPromise: Promise<string | null> | null = null;
+
+function cachedProcessStartIdentity(pid: number): Promise<string | null> {
+  if (pid !== process.pid) return processStartIdentity(pid);
+  ownProcessIdentityPromise ??= processStartIdentity(pid);
+  return ownProcessIdentityPromise;
+}
+
+function parseOwnerRecord(raw: string): RuntimeOwnerRecord | null {
+  try {
+    const value = JSON.parse(raw) as Partial<RuntimeOwnerRecord>;
+    if (
+      value.version !== 1 ||
+      !Number.isInteger(value.pid) ||
+      Number(value.pid) <= 0 ||
+      typeof value.processIdentity !== 'string' ||
+      value.processIdentity.length === 0 ||
+      typeof value.nonce !== 'string' ||
+      !/^[a-f0-9]{32}$/.test(value.nonce)
+    ) return null;
+    return value as RuntimeOwnerRecord;
+  } catch {
+    return null;
+  }
+}
+
+async function publishOwnerRecord(
+  profileDir: string,
+  ownerPath: string,
+  record: RuntimeOwnerRecord
+): Promise<boolean> {
+  const temp = path.join(profileDir, `.comgu-control.owner-${record.nonce}.tmp`);
+  try {
+    await fs.writeFile(temp, `${JSON.stringify(record)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    try {
+      // The hard-link publication is atomic: the visible owner path never exists with partial
+      // or empty contents, so there is no mkdir -> marker publication gap to age out.
+      await fs.link(temp, ownerPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+  } finally {
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+async function ownerStillMatches(ownerPath: string, expected: RuntimeOwnerRecord): Promise<boolean> {
+  try {
+    const current = parseOwnerRecord(await fs.readFile(ownerPath, 'utf8'));
+    return Boolean(current && current.nonce === expected.nonce);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function acquireRecoveryElection(profileDir: string, contender: RuntimeOwnerRecord): Promise<() => Promise<void>> {
+  const recovery = path.join(profileDir, OWNERSHIP_RECOVERY_FILE);
+  const payload = `${JSON.stringify(contender)}\n`;
+  try {
+    const handle = await fs.open(recovery, 'wx', 0o600);
+    try {
+      await handle.writeFile(payload, 'utf8');
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      // Deliberately fail closed. Auto-reaping a crashed stale-recovery election would need
+      // another recovery election and recreates the same generation problem recursively.
+      throw new Error('ComGu profile ownership recovery is already in progress; remove the stale recovery marker only after verifying no ComGu runtime is active');
+    }
+    throw error;
+  }
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    const current = await fs.readFile(recovery, 'utf8').catch(() => '');
+    const parsed = parseOwnerRecord(current);
+    if (parsed?.nonce === contender.nonce) await fs.rm(recovery, { force: true }).catch(() => undefined);
+  };
 }
 
 /**
- * Acquires the Unix runtime owner lease for one profile with an atomic mkdir.
+ * Acquires the frontend-independent runtime owner lease for one profile.
  *
- * The lease is held for the whole runtime lifetime, not merely around bind. That means no
- * second ComGu process can ever reach stale-socket cleanup while a live owner exists. Crash
- * recovery removes only the exact owner file whose pid was proven dead; a contender that
- * observed an older generation therefore cannot delete a newer owner's lease.
+ * The visible owner record is published atomically as a hard link to a complete generation.
+ * Stale cleanup is serialized by a separate fail-closed recovery election, and liveness is
+ * keyed by both pid and process-start identity so pid reuse cannot impersonate the old owner.
  */
 export async function acquireRuntimeControlOwnershipGate(
   profileDir: string,
-  timeoutMs = 2_000
+  timeoutMs = 2_000,
+  dependencies: RuntimeOwnershipDependencies = {}
 ): Promise<() => Promise<void>> {
   await fs.mkdir(profileDir, { recursive: true });
-  const gate = ownershipGatePath(profileDir);
+  const ownerPath = ownershipOwnerPath(profileDir);
   const deadline = Date.now() + Math.max(0, timeoutMs);
-  const ownerPattern = /^owner-(\d+)-([a-f0-9]{16})$/;
-  const processAlive = (pid: number): boolean => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === 'EPERM';
-    }
+  const pid = dependencies.pid ?? process.pid;
+  const identityOf = dependencies.processIdentity ?? cachedProcessStartIdentity;
+  const ownIdentity = await identityOf(pid);
+  if (!ownIdentity) throw new Error('ComGu could not establish a stable process identity for profile ownership');
+  const contender: RuntimeOwnerRecord = {
+    version: 1,
+    pid,
+    processIdentity: ownIdentity,
+    nonce: randomBytes(16).toString('hex')
   };
+
   for (;;) {
-    try {
-      await fs.mkdir(gate, { mode: 0o700 });
-      const ownerName = `owner-${process.pid}-${randomBytes(8).toString('hex')}`;
-      const ownerPath = path.join(gate, ownerName);
-      await fs.writeFile(ownerPath, `${process.pid}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    if (await publishOwnerRecord(profileDir, ownerPath, contender)) {
+      await dependencies.afterClaimPublished?.();
       let released = false;
       return async () => {
         if (released) return;
         released = true;
-        const removedOwnMarker = await fs.unlink(ownerPath).then(
-          () => true,
-          () => false
-        );
-        // Never remove the directory if our exact generation marker is already gone: the path
-        // may now belong to a newer owner generation.
-        if (removedOwnMarker) await fs.rmdir(gate).catch(() => undefined);
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-
-      const entries = await fs.readdir(gate).catch((readError: NodeJS.ErrnoException) => {
-        if (readError.code === 'ENOENT') return null;
-        throw readError;
-      });
-      if (entries === null) continue;
-      const ownerName = entries.find((entry) => ownerPattern.test(entry));
-      if (ownerName) {
-        const match = ownerName.match(ownerPattern)!;
-        const pid = Number(match[1]);
-        if (Number.isInteger(pid) && pid > 0 && processAlive(pid)) {
-          throw new Error('This ComGu profile already has an owner');
+        if (await ownerStillMatches(ownerPath, contender)) {
+          await fs.rm(ownerPath, { force: true }).catch(() => undefined);
         }
-        // Compare-by-name cleanup: if another contender already replaced this stale generation,
-        // this exact unlink returns ENOENT and we deliberately do not rmdir the new generation.
-        const removedStaleMarker = await fs.unlink(path.join(gate, ownerName)).then(
-          () => true,
-          (unlinkError: NodeJS.ErrnoException) => {
-            if (unlinkError.code === 'ENOENT') return false;
-            throw unlinkError;
-          }
-        );
-        if (removedStaleMarker) await fs.rmdir(gate).catch(() => undefined);
-        continue;
-      }
-
-      // A creator may have completed mkdir but not yet written its marker. Give that bounded
-      // critical section time to finish. An old empty directory is safe to remove because no
-      // owner generation exists inside it to be confused with a newer one.
-      const stat = await fs.stat(gate).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs >= 1_000) {
-        await fs.rmdir(gate).catch(() => undefined);
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error('ComGu profile ownership acquisition is busy');
-      }
-      await sleep(20);
+      };
     }
+
+    let observed: RuntimeOwnerRecord | null = null;
+    try {
+      observed = parseOwnerRecord(await fs.readFile(ownerPath, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!observed) throw new Error('ComGu profile ownership record is malformed; refusing automatic recovery');
+    const liveIdentity = await identityOf(observed.pid);
+    if (liveIdentity === observed.processIdentity) throw new Error('This ComGu profile already has an owner');
+
+    const releaseRecovery = await acquireRecoveryElection(profileDir, contender);
+    try {
+      // Re-read under the recovery election. Another contender may have completed recovery
+      // before we won this election; never delete a generation we did not actually inspect.
+      const currentRaw = await fs.readFile(ownerPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (currentRaw === null) continue;
+      const current = parseOwnerRecord(currentRaw);
+      if (!current) throw new Error('ComGu profile ownership record is malformed; refusing automatic recovery');
+      if (current.nonce !== observed.nonce) continue;
+      const currentIdentity = await identityOf(current.pid);
+      if (currentIdentity === current.processIdentity) throw new Error('This ComGu profile already has an owner');
+      await fs.rm(ownerPath, { force: true });
+      await dependencies.afterStaleOwnerRemoved?.();
+    } finally {
+      await releaseRecovery();
+    }
+    if (Date.now() >= deadline) throw new Error('ComGu profile ownership acquisition is busy');
   }
 }
 
@@ -230,96 +388,95 @@ export function createRuntimeControlServer(options: {
     authPath,
     async start() {
       if (started) return;
-      const token = await ensureToken(authPath);
-      let acquiredOwnership = platform !== 'win32'
-        ? await acquireRuntimeControlOwnershipGate(options.profileDir)
-        : null;
-
-      const candidate = net.createServer((socket) => {
-        let bytes = 0;
-        let body = '';
-        let handled = false;
-        const respond = (reply: unknown): void => {
-          if (handled) return;
-          handled = true;
-          socket.end(`${JSON.stringify(reply)}\n`);
-        };
-        socket.setEncoding('utf8');
-        socket.on('data', (chunk: string) => {
-          if (handled) return;
-          bytes += Buffer.byteLength(chunk, 'utf8');
-          if (bytes > MAX_MESSAGE_BYTES) {
-            respond({ ok: false, error: 'Control request is too large' });
-            return;
-          }
-          body += chunk;
-          const newline = body.indexOf('\n');
-          if (newline === -1) return;
-          const row = body.slice(0, newline);
-          void (async () => {
-            try {
-              const request = JSON.parse(row) as Record<string, unknown>;
-              if (request['token'] !== token) throw new Error('Local control authentication failed');
-              const method = request['method'];
-              if (typeof method !== 'string' || !CONTROL_METHODS.has(method)) {
-                throw new Error('Unsupported control method');
-              }
-              switch (method as RuntimeControlMethod) {
-                case 'status':
-                  respond({ ok: true, data: await options.handlers.status() });
-                  return;
-                case 'connect':
-                  await options.handlers.connect();
-                  break;
-                case 'disconnect':
-                  await options.handlers.disconnect();
-                  break;
-                case 'shutdown':
-                  await options.handlers.shutdown();
-                  break;
-                case 'reload':
-                  await options.handlers.reload();
-                  break;
-              }
-              respond({ ok: true, data: null });
-            } catch (error) {
-              respond({ ok: false, error: safeControlError(error) });
-            }
-          })();
-        });
-      });
-
+      let acquiredOwnership: (() => Promise<void>) | null = await acquireRuntimeControlOwnershipGate(options.profileDir);
       try {
-        if (await endpointAccepting(endpoint)) throw new Error('This ComGu profile already has an owner');
-        if (platform !== 'win32') {
-          // The ownership gate serializes this stale-path recovery with every other start/close.
-          // No second ComGu process can bind this pathname between the failed probe and unlink.
-          await fs.rm(endpoint, { force: true }).catch(() => {});
-        }
-        await new Promise<void>((resolve, reject) => {
-          candidate.once('error', reject);
-          candidate.listen(
-            platform === 'win32'
-              ? { path: endpoint, readableAll: false, writableAll: false }
-              : { path: endpoint },
-            resolve
-          );
+        const token = await ensureToken(authPath);
+        const candidate = net.createServer((socket) => {
+          let bytes = 0;
+          let body = '';
+          let handled = false;
+          const respond = (reply: unknown): void => {
+            if (handled) return;
+            handled = true;
+            socket.end(`${JSON.stringify(reply)}\n`);
+          };
+          socket.setEncoding('utf8');
+          socket.on('data', (chunk: string) => {
+            if (handled) return;
+            bytes += Buffer.byteLength(chunk, 'utf8');
+            if (bytes > MAX_MESSAGE_BYTES) {
+              respond({ ok: false, error: 'Control request is too large' });
+              return;
+            }
+            body += chunk;
+            const newline = body.indexOf('\n');
+            if (newline === -1) return;
+            const row = body.slice(0, newline);
+            void (async () => {
+              try {
+                const request = JSON.parse(row) as Record<string, unknown>;
+                if (request['token'] !== token) throw new Error('Local control authentication failed');
+                const method = request['method'];
+                if (typeof method !== 'string' || !CONTROL_METHODS.has(method)) {
+                  throw new Error('Unsupported control method');
+                }
+                switch (method as RuntimeControlMethod) {
+                  case 'status':
+                    respond({ ok: true, data: await options.handlers.status() });
+                    return;
+                  case 'connect':
+                    await options.handlers.connect();
+                    break;
+                  case 'disconnect':
+                    await options.handlers.disconnect();
+                    break;
+                  case 'shutdown':
+                    await options.handlers.shutdown();
+                    break;
+                  case 'reload':
+                    await options.handlers.reload();
+                    break;
+                }
+                respond({ ok: true, data: null });
+              } catch (error) {
+                respond({ ok: false, error: safeControlError(error) });
+              }
+            })();
+          });
         });
-        if (platform !== 'win32') {
-          await fs.chmod(endpoint, 0o600);
-          const stat = await fs.stat(endpoint);
-          ownedEndpointIdentity = { dev: stat.dev, ino: stat.ino };
+
+        try {
+          if (await endpointAccepting(endpoint)) throw new Error('This ComGu profile already has an owner');
+          if (platform !== 'win32') {
+            // The ownership gate serializes this stale-path recovery with every other start/close.
+            // No second ComGu process can bind this pathname between the failed probe and unlink.
+            await fs.rm(endpoint, { force: true }).catch(() => {});
+          }
+          await new Promise<void>((resolve, reject) => {
+            candidate.once('error', reject);
+            candidate.listen(
+              platform === 'win32'
+                ? { path: endpoint, readableAll: false, writableAll: false }
+                : { path: endpoint },
+              resolve
+            );
+          });
+          if (platform !== 'win32') {
+            await fs.chmod(endpoint, 0o600);
+            const stat = await fs.stat(endpoint);
+            ownedEndpointIdentity = { dev: stat.dev, ino: stat.ino };
+          }
+          server = candidate;
+          started = true;
+          releaseOwnershipGate = acquiredOwnership;
+          acquiredOwnership = null;
+        } catch (error) {
+          candidate.close();
+          if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+            throw new Error('This ComGu profile already has an owner');
+          }
+          throw error;
         }
-        server = candidate;
-        started = true;
-        releaseOwnershipGate = acquiredOwnership;
-        acquiredOwnership = null;
-      } catch (error) {
-        candidate.close();
-        if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-          throw new Error('This ComGu profile already has an owner');
-        }
-        throw error;
       } finally {
         await acquiredOwnership?.();
       }

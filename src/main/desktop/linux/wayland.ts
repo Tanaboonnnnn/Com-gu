@@ -66,7 +66,11 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
   const capabilities = async (): Promise<DesktopCapabilities> => {
     const g = portal.grants();
     if (!g.active) return { available: false, capture: false, pointer: false, keyboard: false, clipboardRead: false, clipboardWrite: false, windows: false, uiElements: false, focus: false, reason: 'Wayland portal session is closed or permission was revoked.' };
-    return { available: g.capture || g.pointer || g.keyboard || g.clipboardRead || g.clipboardWrite, capture: g.capture, pointer: g.pointer, keyboard: g.keyboard, clipboardRead: g.clipboardRead, clipboardWrite: g.clipboardWrite, windows: false, uiElements: false, focus: false };
+    // Raw portal pointer permission is not enough for model-facing coordinate authority. Pixel
+    // input is only meaningful when it can be tied to an authoritative frame from the exact
+    // selected stream, so expose pointer capability only when capture authority exists too.
+    const pointer = g.pointer && g.capture;
+    return { available: g.capture || pointer || g.keyboard || g.clipboardRead || g.clipboardWrite, capture: g.capture, pointer, keyboard: g.keyboard, clipboardRead: g.clipboardRead, clipboardWrite: g.clipboardWrite, windows: false, uiElements: false, focus: false };
   };
   const capture = async (maxWidth?: number): Promise<Screenshot> => {
     const g = requireActive(); if (!g.capture) fail('Wayland screenshot permission was not granted by the portal.');
@@ -137,8 +141,27 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
     capabilities,
     observe: observe as DesktopDriver['observe'],
     async act(request) {
-      if (request.frameId !== undefined && request.frameId !== frame) fail('STALE_FRAME: the Wayland screenshot frame is no longer current.');
+      // Verification is wholly unsupported on the portal driver. Reject it before validating or
+      // executing any action so an invalid postcondition can never allow a partial side effect.
       if (request.verify) fail('Wayland semantic verification is unsupported by the granted portal interface.');
+      const coordinateAction = request.actions.some((action) =>
+        action.type === 'click' ||
+        action.type === 'double_click' ||
+        action.type === 'move' ||
+        action.type === 'drag' ||
+        action.type === 'scroll'
+      );
+      if (coordinateAction) {
+        const grants = requireActive();
+        if (!grants.capture) {
+          fail('Wayland frame-coordinate pointer control requires authoritative capture from the selected portal stream.');
+        }
+        if (!grants.pointer) fail('Wayland pointer permission was not granted by the portal.');
+        if (request.frameId === undefined) fail('frameId is required for Wayland coordinate actions.');
+        if (frame === 0 || request.frameId !== frame) fail('STALE_FRAME: the Wayland screenshot frame is no longer current.');
+      } else if (request.frameId !== undefined && request.frameId !== frame) {
+        fail('STALE_FRAME: the Wayland screenshot frame is no longer current.');
+      }
       const clipboard: string[] = []; const routes: Array<'sendinput' | 'local'> = []; let completedCount = 0;
       for (let index = 0; index < request.actions.length; index++) {
         const action = request.actions[index]!;

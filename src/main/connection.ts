@@ -51,6 +51,7 @@ const defaultConnectionRuntime = (): ConnectionRuntimeDependencies => ({
 
 let runtimeDependencies = defaultConnectionRuntime();
 let activeDesktopCapabilities: DesktopCapabilities | undefined;
+let activeDesktopDriver: DesktopDriver | null = null;
 
 function runtimeCapabilities(config: Parameters<typeof effectiveCapabilities>[0]) {
   const base = effectiveCapabilities(config);
@@ -58,7 +59,9 @@ function runtimeCapabilities(config: Parameters<typeof effectiveCapabilities>[0]
   if (!desktop) return base;
   const next = { ...base };
   next.screen = base.screen && desktop.available && desktop.capture;
-  next.control = base.control && desktop.available && desktop.pointer && desktop.keyboard;
+  // Keep keyboard-only Wayland control usable even when frame-authorized pointer control is
+  // intentionally withheld. The driver still gates each concrete action by its own authority.
+  next.control = base.control && desktop.available && (desktop.pointer || desktop.keyboard);
   next.clipboardRead = base.clipboardRead && desktop.available && desktop.clipboardRead;
   next.clipboardWrite = base.clipboardWrite && desktop.available && desktop.clipboardWrite;
   return next;
@@ -191,7 +194,7 @@ function describeSurfaces(): SurfaceStatus[] {
 
 function desktopUnavailableDetail(id: SurfaceId): string {
   if (id === 'desktop' && !runtimeDependencies.desktopSupported()) {
-    return 'Desktop automation is Windows-only. Core files, terminal, sessions and sub-agents remain available.';
+    return 'Desktop automation is unavailable on this platform or graphical session. Core files, terminal, sessions and sub-agents remain available.';
   }
   return id === 'desktop'
     ? 'Turn on "See the screen", "Control mouse and keyboard" or a clipboard permission to use this connector.'
@@ -292,15 +295,15 @@ async function connectImpl(): Promise<void> {
   const config = getConfig();
   const requestedCaps = effectiveCapabilities(config);
   const wantsDesktop = requestedCaps.screen || requestedCaps.control || requestedCaps.clipboardRead || requestedCaps.clipboardWrite;
-  const desktopDriver = wantsDesktop && runtimeDependencies.desktopSupported()
+  let candidateDesktopDriver = wantsDesktop && runtimeDependencies.desktopSupported()
     ? await runtimeDependencies.desktopDriver().catch((error) => {
         logWarn(`desktop driver unavailable: ${error instanceof Error ? error.message : String(error)}`);
         return null;
       })
     : null;
   activeDesktopCapabilities = wantsDesktop
-    ? desktopDriver
-      ? await desktopDriver.capabilities().catch((error) => unavailableDesktopCapabilities(error instanceof Error ? error.message : String(error)))
+    ? candidateDesktopDriver
+      ? await candidateDesktopDriver.capabilities().catch((error) => unavailableDesktopCapabilities(error instanceof Error ? error.message : String(error)))
       : process.platform === 'linux'
         ? unavailableDesktopCapabilities('Desktop driver is unavailable in this graphical session.')
         : undefined
@@ -310,6 +313,9 @@ async function connectImpl(): Promise<void> {
   // not by the mere presence or absence of Desktop. Otherwise enabling screen/clipboard
   // could accidentally waive the root needed by Core's file or command semantics.
   if (config.roots.length === 0 && requiresApprovedFilesystemRoot(config)) {
+    await candidateDesktopDriver?.dispose().catch(() => undefined);
+    candidateDesktopDriver = null;
+    activeDesktopCapabilities = undefined;
     setStatus({ state: 'disconnected', detail: 'Add a folder before connecting.' });
     return;
   }
@@ -324,12 +330,17 @@ async function connectImpl(): Promise<void> {
         readOnly: live.readOnly,
         privacyScreenshots: live.ui.privacyScreenshots
       };
-    }, currentMachineProfile(), runtimeDependencies.profile, desktopDriver);
+    }, currentMachineProfile(), runtimeDependencies.profile, candidateDesktopDriver);
     if (shutdownRequested || generation !== connectionGeneration) {
       await startedEndpoint.stop({ forceAfterMs: 30_000 }).catch(() => {});
+      await candidateDesktopDriver?.dispose().catch(() => undefined);
+      candidateDesktopDriver = null;
+      activeDesktopCapabilities = undefined;
       return;
     }
     endpoint = startedEndpoint;
+    activeDesktopDriver = candidateDesktopDriver;
+    candidateDesktopDriver = null;
     setStatus({ localUrl: endpoint.url, surfaces: describeSurfaces() });
     void writePerfMcpEndpointMarker(process.env, endpoint.url).catch((error) =>
       logError(`performance MCP endpoint marker failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -387,6 +398,8 @@ async function connectImpl(): Promise<void> {
 
     await startDesktopTunnel(generation, config.tunnel, apiKey);
   } catch (err) {
+    await candidateDesktopDriver?.dispose().catch(() => undefined);
+    candidateDesktopDriver = null;
     if (shutdownRequested || generation !== connectionGeneration) {
       await disconnectImpl(30_000);
       return;
@@ -526,6 +539,8 @@ export function applySettings(): Promise<void> {
 async function disconnectImpl(endpointForceAfterMs?: number): Promise<void> {
   // Invalidate callbacks first; stopping a child can itself cause exit/health events.
   connectionGeneration += 1;
+  const stoppingDriver = activeDesktopDriver;
+  activeDesktopDriver = null;
   // Stop local admission first and let accepted MCP calls finish recording before any
   // command process or durable writer is retired by the app-wide shutdown sequence.
   // The public tunnel may briefly see the now-closed loopback endpoint, which is preferable
@@ -536,6 +551,11 @@ async function disconnectImpl(endpointForceAfterMs?: number): Promise<void> {
     if (endpointForceAfterMs === undefined) await stopping.stop().catch(() => {});
     else await stopping.stop({ forceAfterMs: endpointForceAfterMs }).catch(() => {});
   }
+  // MCP admission is stopped/drained before revoking the platform driver. Accepted requests keep
+  // a direct reference to this generation's driver while the endpoint drains, so disposing it
+  // any earlier can tear down a portal/helper in the middle of an already accepted action.
+  await stoppingDriver?.dispose().catch(() => {});
+  activeDesktopCapabilities = undefined;
   if (desktopTunnel) {
     await desktopTunnel.stop().catch(() => {});
     desktopTunnel = null;
