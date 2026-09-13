@@ -17,6 +17,15 @@ function io() {
 }
 
 describe('ComGu CLI', () => {
+  it('prints the packaged CLI version without starting a runtime', async () => {
+    const output = io();
+    const deps = { profileDir: 'ignored', request: vi.fn(async () => null), startOwner: vi.fn(async () => undefined) };
+    expect(await runCli(['--version'], deps, output.value)).toBe(0);
+    expect(output.stdout.join('')).toMatch(/^3\.2\.0\n$/);
+    expect(deps.startOwner).not.toHaveBeenCalled();
+    expect(deps.request).not.toHaveBeenCalled();
+  });
+
   it('parses a profile override as a global option instead of passing it to the command', () => {
     expect(parseCliInvocation(['start', '--profile', 'C:\\profiles\\server', '--json'])).toEqual({
       command: 'start',

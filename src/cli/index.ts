@@ -3,6 +3,7 @@ import { defaultComGuProfileDir } from './profile-dir.js';
 import { renderPlainStatus } from './commands/status.js';
 import type { RuntimeControlMethod } from '../main/runtime/control.js';
 import type { ServiceAction } from './service-linux.js';
+import { APP_VERSION } from '../main/version.js';
 
 export interface CliIo {
   writeOut(text: string): void;
@@ -101,6 +102,11 @@ export async function runCli(
     const args = parsed.args;
     const json = parsed.json;
     switch (command) {
+      case '--version':
+      case '-v':
+      case 'version':
+        io.writeOut(`${APP_VERSION}\n`);
+        return 0;
       case 'status': {
         const status = await deps.request('status');
         io.writeOut(json ? `${JSON.stringify(status)}\n` : `${renderPlainStatus(status)}\n`);
@@ -168,7 +174,7 @@ export async function runCli(
       case 'help':
       case '--help':
       case '-h':
-        io.writeOut('Usage: comgu <setup|start|stop|connect|disconnect|status|doctor|logs|roots|permissions|machine|dashboard|service> [--profile <path>] [--json]\n');
+        io.writeOut('Usage: comgu <setup|start|stop|connect|disconnect|status|doctor|logs|roots|permissions|machine|dashboard|service|version> [--profile <path>] [--json]\n');
         return 0;
       default:
         io.writeErr(`Unknown command: ${command}\n`);
