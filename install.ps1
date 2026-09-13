@@ -45,7 +45,20 @@ try {
   $entry = Get-Content -LiteralPath $sumsPath | Where-Object { $_ -match "^([a-fA-F0-9]{64})\s+\*?$([regex]::Escape($Asset))$" } | Select-Object -First 1
   if (-not $entry) { Fail "SHA256SUMS.txt has no valid entry for $Asset" }
   $expected = ([regex]::Match($entry, '^([a-fA-F0-9]{64})').Groups[1].Value).ToLowerInvariant()
-  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+  $stream = [System.IO.File]::OpenRead($archivePath)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hashBytes = $sha256.ComputeHash($stream)
+    }
+    finally {
+      $sha256.Dispose()
+    }
+  }
+  finally {
+    $stream.Dispose()
+  }
+  $actual = -join ($hashBytes | ForEach-Object { $_.ToString('x2') })
   if ($actual -ne $expected) { Fail "SHA-256 mismatch for $Asset" }
 
   $versionsDir = Join-Path $Root 'versions'

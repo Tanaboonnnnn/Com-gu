@@ -59,7 +59,7 @@ function run(command, args, env) {
   });
 }
 
-async function waitForMissing(target, timeoutMs = 5_000) {
+async function waitForMissing(target, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {

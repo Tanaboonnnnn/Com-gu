@@ -17,7 +17,12 @@ assert(!bootstrap.dependencies || Object.keys(bootstrap.dependencies).length ===
 assert(!bootstrap.scripts, 'npm bootstrap must not require lifecycle scripts');
 assert(Array.isArray(bootstrap.files) && bootstrap.files.every((entry) => ['bin/', 'lib/', 'README.md'].includes(entry)), 'npm files allowlist is broader than expected');
 assert(shell.includes('SHA256SUMS.txt') && shell.includes('sha256sum'), 'install.sh must verify SHA256SUMS.txt');
-assert(powershell.includes('SHA256SUMS.txt') && powershell.includes('Get-FileHash'), 'install.ps1 must verify SHA256SUMS.txt');
+assert(
+  powershell.includes('SHA256SUMS.txt')
+    && powershell.includes('[System.Security.Cryptography.SHA256]::Create()')
+    && !powershell.includes('Get-FileHash'),
+  'install.ps1 must verify SHA256SUMS.txt with the built-in .NET SHA256 implementation'
+);
 assert(shell.includes('releases/latest/download/install.sh'), 'shell update must use a release-pinned installer asset');
 assert(powershell.includes('releases/latest/download/install.ps1'), 'PowerShell update must use a release-pinned installer asset');
 console.log(`ComGu CLI installer contract verified for ${root.version}.`);
