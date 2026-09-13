@@ -38,7 +38,7 @@ CLI เป็น standalone runtime/admin client สำหรับ Windows แ�
 | **Windows** | [ZIP](../../releases/download/v3.2.0/ComGu-CLI-windows-x64.zip) | [ZIP](../../releases/download/v3.2.0/ComGu-CLI-windows-arm64.zip) |
 | **Linux** | [TAR.GZ](../../releases/download/v3.2.0/ComGu-CLI-linux-x64.tar.gz) | [TAR.GZ](../../releases/download/v3.2.0/ComGu-CLI-linux-arm64.tar.gz) |
 
-CLI ต้องใช้ **Node.js 22+**. แตกไฟล์แล้วรัน `comgu.cmd` บน Windows หรือ `./comgu` บน Linux; ใช้ `comgu setup` สำหรับตั้งค่า profile ครั้งแรก และ `comgu status` เพื่อตรวจ runtime ที่กำลังถือ profile อยู่
+CLI ต้องใช้ **Node.js 22+**. แตกไฟล์แล้วรัน `comgu.cmd` บน Windows หรือ `./comgu` บน Linux; ใช้ `comgu setup` สำหรับตั้งค่า profile ครั้งแรก และ `comgu status` เพื่อตรวจ runtime ที่กำลังถือ profile อยู่. หากเครื่องดับระหว่าง stale-owner recovery จน `.comgu-control.recovery` ค้าง ให้ใช้ `comgu doctor --repair-ownership` ซึ่งจะลบ marker เฉพาะเมื่อยืนยันแล้วว่า endpoint, owner และ recovery contender ไม่ได้มีชีวิตอยู่
 
 ทุก release มี `SHA256SUMS.txt` สำหรับตรวจ hash และมี `ComGu-Extension.zip` สำหรับโหลด companion extension แยกต่างหาก
 

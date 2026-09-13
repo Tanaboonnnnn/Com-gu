@@ -9,6 +9,7 @@ export interface WaylandPortalGrants {
 
 export interface WaylandPortalSession {
   grants(): WaylandPortalGrants;
+  onGrantsChanged?(listener: () => void): () => void;
   screenshot(): Promise<Buffer>;
   move(x: number, y: number): Promise<void>;
   button(button: 'left' | 'middle' | 'right', pressed: boolean): Promise<void>;
@@ -114,7 +115,13 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
         for (let i = 0; i < count; i++) { await portal.button(b, true); await portal.button(b, false); }
         return 'sendinput';
       }
-      case 'scroll': if (!g.pointer) fail('Wayland pointer permission was not granted by the portal.'); await portal.scroll(action.scroll_x ?? 0, action.scroll_y ?? 0); return 'sendinput';
+      case 'scroll': {
+        if (!g.pointer) fail('Wayland pointer permission was not granted by the portal.');
+        const p = point(action.x, action.y);
+        await portal.move(p.x, p.y);
+        await portal.scroll(action.scroll_x ?? 0, action.scroll_y ?? 0);
+        return 'sendinput';
+      }
       case 'drag': {
         if (!g.pointer) fail('Wayland pointer permission was not granted by the portal.'); const [first, ...rest] = action.path; if (!first) return 'sendinput';
         const mouseButton = (action.button ?? 'left') as 'left' | 'middle' | 'right';
@@ -139,6 +146,9 @@ export function createWaylandDesktopDriver(portal: WaylandPortalSession): Deskto
 
   return {
     capabilities,
+    onCapabilitiesChanged(listener) {
+      return portal.onGrantsChanged?.(() => { void capabilities().then(listener); }) ?? (() => undefined);
+    },
     observe: observe as DesktopDriver['observe'],
     async act(request) {
       // Verification is wholly unsupported on the portal driver. Reject it before validating or

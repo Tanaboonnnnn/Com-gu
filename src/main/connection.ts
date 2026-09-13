@@ -41,6 +41,10 @@ const defaultConnectionRuntime = (): ConnectionRuntimeDependencies => ({
   },
   desktopSupported: () => desktopAutomationSupported(),
   desktopDriver: async () => {
+    if (process.platform === 'win32') {
+      const { createWindowsDesktopDriver } = await import('./desktop/windows.js');
+      return createWindowsDesktopDriver();
+    }
     if (process.platform === 'linux') {
       const { probeLinuxDesktop } = await import('./desktop/linux/index.js');
       return (await probeLinuxDesktop()).driver;
@@ -52,11 +56,15 @@ const defaultConnectionRuntime = (): ConnectionRuntimeDependencies => ({
 let runtimeDependencies = defaultConnectionRuntime();
 let activeDesktopCapabilities: DesktopCapabilities | undefined;
 let activeDesktopDriver: DesktopDriver | null = null;
+let activeDesktopRequested = false;
+let stopDesktopCapabilityListener: (() => void) | null = null;
 
 function runtimeCapabilities(config: Parameters<typeof effectiveCapabilities>[0]) {
   const base = effectiveCapabilities(config);
   const desktop = activeDesktopCapabilities;
-  if (!desktop) return base;
+  if (!desktop) {
+    return { ...base, screen: false, control: false, clipboardRead: false, clipboardWrite: false };
+  }
   const next = { ...base };
   next.screen = base.screen && desktop.available && desktop.capture;
   // Keep keyboard-only Wayland control usable even when frame-authorized pointer control is
@@ -304,10 +312,8 @@ async function connectImpl(): Promise<void> {
   activeDesktopCapabilities = wantsDesktop
     ? candidateDesktopDriver
       ? await candidateDesktopDriver.capabilities().catch((error) => unavailableDesktopCapabilities(error instanceof Error ? error.message : String(error)))
-      : process.platform === 'linux'
-        ? unavailableDesktopCapabilities('Desktop driver is unavailable in this graphical session.')
-        : undefined
-    : undefined;
+      : unavailableDesktopCapabilities('Desktop driver is unavailable in this graphical session.')
+    : unavailableDesktopCapabilities('Desktop permissions are disabled for this connection generation.');
   const caps = runtimeCapabilities(config);
   // A root is required by the capabilities that actually cross the filesystem boundary,
   // not by the mere presence or absence of Desktop. Otherwise enabling screen/clipboard
@@ -339,7 +345,14 @@ async function connectImpl(): Promise<void> {
       return;
     }
     endpoint = startedEndpoint;
+    activeDesktopRequested = wantsDesktop;
     activeDesktopDriver = candidateDesktopDriver;
+    stopDesktopCapabilityListener?.();
+    stopDesktopCapabilityListener = activeDesktopDriver?.onCapabilitiesChanged?.((capabilities) => {
+      if (generation !== connectionGeneration || activeDesktopDriver === null) return;
+      activeDesktopCapabilities = capabilities;
+      setStatus({ surfaces: describeSurfaces() });
+    }) ?? null;
     candidateDesktopDriver = null;
     setStatus({ localUrl: endpoint.url, surfaces: describeSurfaces() });
     void writePerfMcpEndpointMarker(process.env, endpoint.url).catch((error) =>
@@ -496,6 +509,14 @@ async function applySettingsImpl(): Promise<void> {
   if (shutdownRequested) return;
   if (!endpoint) return;
   const config = getConfig();
+  const requested = effectiveCapabilities(config);
+  const wantsDesktop = requested.screen || requested.control || requested.clipboardRead || requested.clipboardWrite;
+  if (wantsDesktop !== activeDesktopRequested) {
+    logInfo('desktop permission boundary changed; reconnecting to rebuild Desktop capability generation');
+    await disconnectImpl();
+    await connectImpl();
+    return;
+  }
   const desiredCoreTransport = coreTransport(config.tunnel);
   if (activeCoreTransport && !sameCoreTransport(activeCoreTransport, desiredCoreTransport)) {
     logInfo('core connection settings changed; reconnecting');
@@ -541,6 +562,9 @@ async function disconnectImpl(endpointForceAfterMs?: number): Promise<void> {
   connectionGeneration += 1;
   const stoppingDriver = activeDesktopDriver;
   activeDesktopDriver = null;
+  activeDesktopRequested = false;
+  stopDesktopCapabilityListener?.();
+  stopDesktopCapabilityListener = null;
   // Stop local admission first and let accepted MCP calls finish recording before any
   // command process or durable writer is retired by the app-wide shutdown sequence.
   // The public tunnel may briefly see the now-closed loopback endpoint, which is preferable
@@ -555,7 +579,7 @@ async function disconnectImpl(endpointForceAfterMs?: number): Promise<void> {
   // a direct reference to this generation's driver while the endpoint drains, so disposing it
   // any earlier can tear down a portal/helper in the middle of an already accepted action.
   await stoppingDriver?.dispose().catch(() => {});
-  activeDesktopCapabilities = undefined;
+  activeDesktopCapabilities = unavailableDesktopCapabilities('Desktop connection generation is not active.');
   if (desktopTunnel) {
     await desktopTunnel.stop().catch(() => {});
     desktopTunnel = null;

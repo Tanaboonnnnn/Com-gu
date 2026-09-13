@@ -33,6 +33,40 @@ describe('Wayland portal DesktopDriver', () => {
     await driver.act({ frameId: frame.screenshot.frameId, actions: [{ type: 'move', x: 480, y: 270 }] });
     expect(portal.move).toHaveBeenCalledWith(960, 540);
   });
+
+  it('moves to the requested mapped point before scrolling on Wayland', async () => {
+    const events: string[] = [];
+    const image = await (await import('sharp')).default({ create: { width: 1920, height: 1080, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+    const portal = session({
+      screenshot: vi.fn(async () => image),
+      move: vi.fn(async (x: number, y: number) => { events.push(`move:${x},${y}`); }),
+      scroll: vi.fn(async (x: number, y: number) => { events.push(`scroll:${x},${y}`); })
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    const frame = await driver.observe({ kind: 'screenshot', maxWidth: 1280 });
+
+    await driver.act({
+      frameId: frame.screenshot.frameId,
+      actions: [{ type: 'scroll', x: 320, y: 240, scroll_x: 4, scroll_y: 600 }]
+    });
+
+    expect(events).toEqual(['move:480,360', 'scroll:4,600']);
+  });
+
+  it('never scrolls when moving to the requested Wayland target fails', async () => {
+    const portal = session({
+      move: vi.fn(async () => { throw new Error('portal move failed'); }),
+      scroll: vi.fn(async () => undefined)
+    });
+    const driver = createWaylandDesktopDriver(portal);
+    const frame = await driver.observe({ kind: 'screenshot' });
+
+    await expect(driver.act({
+      frameId: frame.screenshot.frameId,
+      actions: [{ type: 'scroll', x: 10, y: 20, scroll_y: 100 }]
+    })).rejects.toThrow(/portal move failed/i);
+    expect(portal.scroll).not.toHaveBeenCalled();
+  });
   it('never falls back to unsupported semantic window/UI control', async () => {
     const driver = createWaylandDesktopDriver(session());
     await expect(driver.observe({ kind: 'windows' })).rejects.toThrow(/window enumeration.*unsupported/i);

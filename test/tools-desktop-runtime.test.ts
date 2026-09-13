@@ -30,6 +30,22 @@ vi.mock('../src/main/computer/index.js', () => ({
 
 import { registerDesktopTools } from '../src/main/mcp/tools-desktop.js';
 
+const driver = {
+  capabilities: async () => ({ available: true }),
+  observe: async (request: any) => {
+    switch (request.kind) {
+      case 'active': return { kind: 'active', ...(await desktop.activeWindow()) };
+      case 'windows': return { kind: 'windows', ...(await desktop.listWindows()) };
+      case 'ui': { const { kind: _kind, ...options } = request; return { kind: 'ui', ...(await desktop.findUi(options)) }; }
+      case 'state': { const { kind: _kind, ...options } = request; return { kind: 'state', ...(await desktop.getWindowState(options)) }; }
+      case 'wait-window': { const { kind: _kind, ...options } = request; return { kind: 'wait-window', window: await desktop.waitForWindow(options) }; }
+      case 'screenshot': { const { kind: _kind, ...options } = request; return { kind: 'screenshot', screenshot: await desktop.screenshot(options) }; }
+    }
+  },
+  act: async (request: any) => desktop.actAndCapture(request.actions, request),
+  dispose: async () => undefined
+} as never;
+
 function caps(over: Partial<Capabilities>): Capabilities {
   return {
     browse: false,
@@ -67,7 +83,7 @@ function desktopSurface() {
     guarded: async (_cap: string, _name: string, fn: () => Promise<any>) => fn(),
     featureDisabled: vi.fn(),
     registered: () => [...registered.keys()]
-  } as never);
+  } as never, driver);
   return registered;
 }
 

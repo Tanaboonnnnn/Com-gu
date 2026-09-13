@@ -48,6 +48,7 @@ import { installOptionalAgentsRuntime } from '../src/main/mcp/optional-runtime.j
 import * as agentsRuntime from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
 import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
+import type { DesktopDriver } from '../src/main/desktop/driver.js';
 
 // ---------------------------------------------------------------- transport
 
@@ -239,6 +240,15 @@ let approved: string;
 let outside: string;
 let endpoint: McpEndpoint;
 let ctx: ToolContext;
+const desktopFixtureDriver = {
+  capabilities: async () => ({
+    available: true, capture: true, pointer: true, keyboard: true,
+    clipboardRead: true, clipboardWrite: true, windows: true, uiElements: true, focus: true
+  }),
+  observe: async () => { throw new Error('Desktop fixture observation was not expected'); },
+  act: async () => { throw new Error('Desktop fixture action was not expected'); },
+  dispose: async () => undefined
+} as unknown as DesktopDriver;
 
 function withCaps(overrides: Partial<Capabilities>): Capabilities {
   return { ...DEFAULT_CAPABILITIES, ...overrides };
@@ -309,7 +319,7 @@ beforeEach(async () => {
   ctx.agentTools = false;
   // A fresh endpoint gives every test a fresh ChatGPT tool-surface snapshot. Tests
   // that change permissions mid-flight still exercise the real live-config path.
-  endpoint = await startMcpServer(() => ctx);
+  endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
 });
 
 // ------------------------------------------------------------------- tests
@@ -433,7 +443,7 @@ describe('active Run file authority', () => {
       // retired eager import from startMcpServer().
       installOptionalAgentsRuntime(agentsRuntime);
       if (endpoint) await endpoint.stop();
-      endpoint = await startMcpServer(() => ctx);
+      endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
 
       setChatWorkspaceScopeForTests(primeConversation, runRoots, { primaryRoot: 'a', sharedRoots: ['b'] });
       spawnWithWorkspaceScope(
@@ -486,7 +496,7 @@ describe('active Run file authority', () => {
       // and must use the same narrowed roots before it touches disk.
       ctx.caps = withCaps({ command: true, read: true, browse: true, metadata: true, create: true, edit: true });
       if (endpoint) await endpoint.stop();
-      endpoint = await startMcpServer(() => ctx);
+      endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
       const shellPatchTarget = path.join(rootB, 'blocked-shell.txt');
       const shellPatch = addPatch('/b/blocked-shell.txt', ['blocked']);
       const intercepted = await asWorker('exec_command', {
@@ -886,7 +896,7 @@ describe('surface boundaries', () => {
     // looks like from here.
     ctx.agentTools = false;
     await endpoint.stop();
-    endpoint = await startMcpServer(() => ctx);
+    endpoint = await startMcpServer(() => ctx, undefined, 'desktop-app', desktopFixtureDriver);
 
     expect(toolNames(await core('tools/list'))).not.toContain('agents');
     // And with it every word of the multi-agent vocabulary: nothing is left for a model to

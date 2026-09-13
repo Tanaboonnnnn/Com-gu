@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireRuntimeControlOwnershipGate,
   createRuntimeControlServer,
+  repairRuntimeControlOwnership,
   runtimeControlEndpoint,
   sendRuntimeControlRequest
 } from '../src/main/runtime/control.js';
@@ -211,5 +212,53 @@ describe('runtime local control channel', () => {
     const next = createRuntimeControlServer({ profileDir: dir, handlers });
     await expect(next.start()).resolves.toBeUndefined();
     await next.close();
+  });
+
+  it('repairs only a stale recovery election and leaves stale owner cleanup to normal acquisition', async () => {
+    const owner = { version: 1, pid: 51001, processIdentity: 'old-owner', nonce: '11111111111111111111111111111111' };
+    const recovery = { version: 1, pid: 51002, processIdentity: 'dead-reaper', nonce: '22222222222222222222222222222222' };
+    await fs.writeFile(`${dir}/.comgu-control.owner`, JSON.stringify(owner), 'utf8');
+    await fs.writeFile(`${dir}/.comgu-control.recovery`, JSON.stringify(recovery), 'utf8');
+
+    const result = await repairRuntimeControlOwnership(dir, {
+      processIdentity: async () => null,
+      endpointAccepting: async () => false
+    });
+
+    expect(result).toMatchObject({ repaired: true });
+    await expect(fs.stat(`${dir}/.comgu-control.recovery`)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await fs.readFile(`${dir}/.comgu-control.owner`, 'utf8'))).toEqual(owner);
+  });
+
+  it('refuses ownership repair if the recovery contender is still alive', async () => {
+    const recovery = { version: 1, pid: 52002, processIdentity: 'live-reaper', nonce: '33333333333333333333333333333333' };
+    await fs.writeFile(`${dir}/.comgu-control.recovery`, JSON.stringify(recovery), 'utf8');
+
+    await expect(repairRuntimeControlOwnership(dir, {
+      processIdentity: async (pid) => pid === 52002 ? 'live-reaper' : null,
+      endpointAccepting: async () => false
+    })).rejects.toThrow(/recovery.*active|still active/i);
+    await expect(fs.stat(`${dir}/.comgu-control.recovery`)).resolves.toBeTruthy();
+  });
+
+  it('fails closed if the owner generation changes while stale recovery repair is verifying', async () => {
+    const owner = { version: 1, pid: 53001, processIdentity: 'old-owner', nonce: '55555555555555555555555555555555' };
+    const recovery = { version: 1, pid: 53002, processIdentity: 'dead-reaper', nonce: '55555555555555555555555555555555' };
+    await fs.writeFile(`${dir}/.comgu-control.owner`, JSON.stringify(owner), 'utf8');
+    await fs.writeFile(`${dir}/.comgu-control.recovery`, JSON.stringify(recovery), 'utf8');
+
+    await expect(repairRuntimeControlOwnership(dir, {
+      endpointAccepting: async () => false,
+      processIdentity: async (pid) => {
+        if (pid === owner.pid) {
+          await fs.writeFile(`${dir}/.comgu-control.owner`, JSON.stringify({
+            version: 1, pid: 53003, processIdentity: 'new-owner', nonce: '66666666666666666666666666666666'
+          }), 'utf8');
+        }
+        return null;
+      }
+    })).rejects.toThrow(/owner generation changed/i);
+
+    await expect(fs.stat(`${dir}/.comgu-control.recovery`)).resolves.toBeTruthy();
   });
 });

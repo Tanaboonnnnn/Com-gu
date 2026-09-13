@@ -18,6 +18,10 @@ secret tokenized local paths.
 
 The Desktop connector is optional. Core is the main connector everywhere. Windows provides the
 full native Desktop path; Linux X11/Wayland expose only capabilities proven by the active adapter.
+The connection runtime owns that adapter generation. Crossing the Desktop permission OFF↔ON
+boundary rebuilds the local MCP connection so permission, live capability, driver ownership and
+Desktop tool registration cannot describe different runtime states. Wayland portal revocation
+invalidates the active generation's model-facing capability immediately.
 macOS is Core-only in this release.
 
 On a fresh current config, all Core tool permissions, session recording and multi-agent mode are

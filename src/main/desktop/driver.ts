@@ -92,6 +92,7 @@ export type DesktopActionOutcome = ActionResult & {
  */
 export interface DesktopDriver {
   capabilities(): Promise<DesktopCapabilities>;
+  onCapabilitiesChanged?(listener: (capabilities: DesktopCapabilities) => void): () => void;
   observe<Request extends DesktopObserveRequest>(request: Request): Promise<DesktopObserveResultFor<Request>>;
   act(request: DesktopActionRequest): Promise<DesktopActionOutcome>;
   dispose(): Promise<void>;

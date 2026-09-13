@@ -25,7 +25,7 @@ import { localhostHostValidation, localhostOriginValidation, toNodeHandler } fro
 import { getConfig } from '../config.js';
 import { logError, logInfo, logWarn } from '../logger.js';
 import { buildServer, resetToolClock, type ToolContext } from './tools.js';
-import { SURFACE_IDS, surfaceDefinition, surfaceIsUseful, type SurfaceId } from './surfaces.js';
+import { SURFACE_IDS, surfaceDefinition, type SurfaceId } from './surfaces.js';
 import type { MachineIdentity } from '../machine/profile.js';
 import type { RuntimeProfileName } from '../runtime/profile.js';
 import type { DesktopDriver } from '../desktop/driver.js';
@@ -208,8 +208,9 @@ export function tunnelProbeHeaders(): Record<string, string> {
 /**
  * Starts the local MCP server.
  *
- * `getContext` is called on every request so that roots and capabilities are read
- * fresh; nothing about the permission state is captured at startup.
+ * `getContext` is called on every request so roots and permissions are live. Adapter presence is
+ * generation-scoped: crossing the Desktop OFF↔ON boundary rebuilds the connection before a new
+ * DesktopDriver/tool registration is published.
  */
 interface SurfaceExposure {
   caps: ToolContext['caps'] | null;
@@ -271,12 +272,9 @@ export async function startMcpServer(
     const { resetOptionalMcpRuntime } = await import('./optional-runtime.js');
     resetOptionalMcpRuntime();
   }
-  const initialContext = getContext();
-  const registerDesktopTools = profile === 'desktop-app' || surfaceIsUseful('desktop', initialContext.caps)
-    ? (await import('./tools-desktop.js')).registerDesktopTools
-    : undefined;
-  const registerDesktop = registerDesktopTools
-    ? (registrar: Parameters<typeof registerDesktopTools>[0]) => registerDesktopTools(registrar, desktopDriver ?? undefined)
+  const registerDesktopTools = desktopDriver ? (await import('./tools-desktop.js')).registerDesktopTools : undefined;
+  const registerDesktop = registerDesktopTools && desktopDriver
+    ? (registrar: Parameters<typeof registerDesktopTools>[0]) => registerDesktopTools(registrar, desktopDriver)
     : undefined;
   // A per-session token in the path is what authorises callers. It is regenerated on
   // every app start, so a URL that leaks stops working when the app restarts.

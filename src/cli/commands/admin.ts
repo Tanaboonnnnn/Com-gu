@@ -14,6 +14,7 @@ import { RESERVED_ROOT_NAMES } from '../../main/sandbox.js';
 import { createCliCredentialVault } from '../credentials.js';
 import type { CredentialVault } from '../../main/credentials/vault.js';
 import type { DesktopCapabilities } from '../../main/desktop/driver.js';
+import { repairRuntimeControlOwnership } from '../../main/runtime/control.js';
 
 export interface AdminCommandContext {
   profileDir: string;
@@ -120,7 +121,12 @@ async function scrubCloneUnsafeState(profileDir: string): Promise<void> {
   );
 }
 
-async function doctor(profileDir: string): Promise<AdminCommandResult> {
+async function doctor(profileDir: string, args: string[], context: AdminCommandContext): Promise<AdminCommandResult> {
+  if (args.includes('--repair-ownership')) {
+    if (await ownerExists(context)) throw new Error('Stop the ComGu runtime that owns this profile before repairing ownership.');
+    const repair = await repairRuntimeControlOwnership(profileDir);
+    return { text: repair.detail, json: repair };
+  }
   const { machine } = await state(profileDir);
   const vault = createCliCredentialVault(profileDir, machine);
   const credential = await vault.status();
@@ -213,7 +219,7 @@ export async function runAdminCommand(
   context: AdminCommandContext
 ): Promise<AdminCommandResult> {
   if (command === 'setup') return setup(context.profileDir, args, context);
-  if (command === 'doctor') return doctor(context.profileDir);
+  if (command === 'doctor') return doctor(context.profileDir, args, context);
 
   if (command === 'roots') {
     const action = args[0] ?? 'list';

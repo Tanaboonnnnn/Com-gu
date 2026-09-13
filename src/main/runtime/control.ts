@@ -55,6 +55,16 @@ interface RuntimeOwnerRecord {
   nonce: string;
 }
 
+export interface RuntimeOwnershipRepairDependencies {
+  processIdentity?: (pid: number) => Promise<string | null>;
+  endpointAccepting?: (endpoint: string) => Promise<boolean>;
+}
+
+export interface RuntimeOwnershipRepairResult {
+  repaired: boolean;
+  detail: string;
+}
+
 export interface RuntimeOwnershipDependencies {
   pid?: number;
   processIdentity?: (pid: number) => Promise<string | null>;
@@ -161,6 +171,51 @@ function parseOwnerRecord(raw: string): RuntimeOwnerRecord | null {
   }
 }
 
+export async function repairRuntimeControlOwnership(
+  profileDir: string,
+  dependencies: RuntimeOwnershipRepairDependencies = {}
+): Promise<RuntimeOwnershipRepairResult> {
+  await fs.mkdir(profileDir, { recursive: true });
+  const recoveryPath = path.join(profileDir, OWNERSHIP_RECOVERY_FILE);
+  const ownerPath = ownershipOwnerPath(profileDir);
+  const identityOf = dependencies.processIdentity ?? cachedProcessStartIdentity;
+  const accepting = dependencies.endpointAccepting ?? endpointAccepting;
+  if (await accepting(runtimeControlEndpoint(profileDir))) {
+    throw new Error('ComGu ownership repair refused because the control endpoint is still accepting connections');
+  }
+  const recoveryRaw = await fs.readFile(recoveryPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (recoveryRaw === null) return { repaired: false, detail: 'No stale ownership recovery marker exists.' };
+  const recovery = parseOwnerRecord(recoveryRaw);
+  if (!recovery) throw new Error('ComGu ownership recovery marker is malformed; refusing automatic repair');
+  if (await identityOf(recovery.pid) === recovery.processIdentity) {
+    throw new Error('ComGu ownership repair refused because the recovery contender is still active');
+  }
+  const ownerRaw = await fs.readFile(ownerPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (ownerRaw !== null) {
+    const owner = parseOwnerRecord(ownerRaw);
+    if (!owner) throw new Error('ComGu profile ownership record is malformed; refusing ownership repair');
+    if (await identityOf(owner.pid) === owner.processIdentity) {
+      throw new Error('ComGu ownership repair refused because the profile owner is still active');
+    }
+    const currentOwner = parseOwnerRecord(await fs.readFile(ownerPath, 'utf8'));
+    if (!currentOwner || currentOwner.nonce !== owner.nonce) {
+      throw new Error('ComGu ownership repair refused because the owner generation changed during verification');
+    }
+  }
+  const currentRecovery = parseOwnerRecord(await fs.readFile(recoveryPath, 'utf8'));
+  if (!currentRecovery || currentRecovery.nonce !== recovery.nonce) {
+    throw new Error('ComGu ownership repair refused because the recovery generation changed during verification');
+  }
+  await fs.rm(recoveryPath);
+  return { repaired: true, detail: 'Removed a verified stale ownership recovery marker.' };
+}
+
 async function publishOwnerRecord(
   profileDir: string,
   ownerPath: string,
@@ -195,21 +250,10 @@ async function ownerStillMatches(ownerPath: string, expected: RuntimeOwnerRecord
 
 async function acquireRecoveryElection(profileDir: string, contender: RuntimeOwnerRecord): Promise<() => Promise<void>> {
   const recovery = path.join(profileDir, OWNERSHIP_RECOVERY_FILE);
-  const payload = `${JSON.stringify(contender)}\n`;
-  try {
-    const handle = await fs.open(recovery, 'wx', 0o600);
-    try {
-      await handle.writeFile(payload, 'utf8');
-    } finally {
-      await handle.close();
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      // Deliberately fail closed. Auto-reaping a crashed stale-recovery election would need
-      // another recovery election and recreates the same generation problem recursively.
-      throw new Error('ComGu profile ownership recovery is already in progress; remove the stale recovery marker only after verifying no ComGu runtime is active');
-    }
-    throw error;
+  if (!(await publishOwnerRecord(profileDir, recovery, contender))) {
+    // Ordinary startup stays fail-closed. The first-class doctor repair performs the stronger
+    // endpoint + process-identity + generation checks needed to remove a crashed election.
+    throw new Error('ComGu profile ownership recovery is already in progress; run `comgu doctor --repair-ownership` after verifying no ComGu runtime is active');
   }
   let released = false;
   return async () => {

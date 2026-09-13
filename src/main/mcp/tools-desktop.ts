@@ -41,34 +41,6 @@ const MAX_WINDOW_RESULTS = 100;
 const MAX_CLIPBOARD_LINE_CHARS = 16_000;
 const MAX_CLIPBOARD_OUTPUT_CHARS = 64_000;
 
-const lazyWindowsDriver: DesktopDriver = {
-  async capabilities() {
-    const computer = await import('../computer/index.js');
-    const reason = await computer.checkAvailable();
-    return reason
-      ? { available: false, capture: false, pointer: false, keyboard: false, clipboardRead: false, clipboardWrite: false, windows: false, uiElements: false, focus: false, reason }
-      : { available: true, capture: true, pointer: true, keyboard: true, clipboardRead: true, clipboardWrite: true, windows: true, uiElements: true, focus: true };
-  },
-  async observe(request) {
-    const computer = await import('../computer/index.js');
-    switch (request.kind) {
-      case 'active': return { kind: 'active', ...(await computer.activeWindow()) } as never;
-      case 'windows': return { kind: 'windows', ...(await computer.listWindows()) } as never;
-      case 'ui': { const { kind: _kind, ...options } = request; return { kind: 'ui', ...(await computer.findUi(options)) } as never; }
-      case 'state': { const { kind: _kind, ...options } = request; return { kind: 'state', ...(await computer.getWindowState(options)) } as never; }
-      case 'wait-window': { const { kind: _kind, ...options } = request; return { kind: 'wait-window', window: await computer.waitForWindow(options) } as never; }
-      case 'screenshot': { const { kind: _kind, ...options } = request; return { kind: 'screenshot', screenshot: await computer.screenshot(options) } as never; }
-    }
-  },
-  async act(request) {
-    const computer = await import('../computer/index.js');
-    return computer.actAndCapture(request.actions, { frameId: request.frameId, capture: request.capture, verify: request.verify });
-  },
-  async dispose() {
-    const computer = await import('../computer/index.js');
-    await computer.stopComputerHelper();
-  }
-};
 const computerActionArg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('click_ref'), ref: z.string().min(1).max(64) }).strict().describe('Click a control by ref from observe.'),
   z
@@ -128,7 +100,7 @@ const verificationArg = z
   })
   .strict();
 
-export function registerDesktopTools(reg: SurfaceRegistrar, driver: DesktopDriver = lazyWindowsDriver): void {
+export function registerDesktopTools(reg: SurfaceRegistrar, driver: DesktopDriver): void {
   const { ctx, caps, exposedCaps } = reg;
 
   // ---------------------------------------------------------------- observe

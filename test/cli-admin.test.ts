@@ -111,4 +111,21 @@ describe('CLI profile administration', () => {
     const config = await loadConfig();
     expect(config.capabilities).toMatchObject({ screen: true, control: true, clipboardRead: false, clipboardWrite: false });
   });
+
+  it('offers a first-class doctor repair for a verified stale ownership recovery marker', async () => {
+    await fs.writeFile(path.join(profileDir, '.comgu-control.recovery'), JSON.stringify({
+      version: 1,
+      pid: 2147483000,
+      processIdentity: 'definitely-stale',
+      nonce: '44444444444444444444444444444444'
+    }), 'utf8');
+
+    const result = await runAdminCommand('doctor', ['--repair-ownership'], {
+      profileDir,
+      ownerStatus: async () => { throw new Error('No owner'); }
+    });
+
+    expect(result.json).toMatchObject({ repaired: true });
+    await expect(fs.stat(path.join(profileDir, '.comgu-control.recovery'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });

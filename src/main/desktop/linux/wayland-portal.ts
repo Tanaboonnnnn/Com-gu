@@ -128,9 +128,11 @@ export async function createPortalWaylandSession(options: {
 
   const devices = started.devices ?? 0;
   let active = true;
+  const grantListeners = new Set<() => void>();
   const stream = started.stream;
   const stopClosedListener = options.transport.onSessionClosed(sessionHandle, () => {
     active = false;
+    for (const listener of grantListeners) listener();
   });
 
   const grants = () => ({
@@ -152,6 +154,10 @@ export async function createPortalWaylandSession(options: {
 
   return {
     grants,
+    onGrantsChanged(listener) {
+      grantListeners.add(listener);
+      return () => grantListeners.delete(listener);
+    },
     async screenshot() {
       assertActive();
       if (!stream || !options.captureSelectedStream) {
@@ -212,6 +218,7 @@ export async function createPortalWaylandSession(options: {
         await options.transport.call('org.freedesktop.portal.Session.Close', [], sessionHandle).catch(() => undefined);
       }
       stopClosedListener();
+      grantListeners.clear();
       await options.transport.close();
     }
   };
