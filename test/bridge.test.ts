@@ -4578,8 +4578,21 @@ describe('shutting the listener down', () => {
     const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
     const payload = Buffer.from(JSON.stringify({ conversationId: 'cafe0009-0000-4000-8000-000000000009', events: [] }), 'utf8');
 
+    let request: http.ClientRequest;
+    let releaseBody!: () => void;
+    const bodyRelease = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    let requestConnected!: () => void;
+    const connected = new Promise<void>((resolve) => {
+      requestConnected = resolve;
+    });
+    let halfBodyWritten!: () => void;
+    const halfWritten = new Promise<void>((resolve) => {
+      halfBodyWritten = resolve;
+    });
     const answered = new Promise<number>((resolve, reject) => {
-      const req = http.request(
+      request = http.request(
         `${base}/events`,
         {
           method: 'POST',
@@ -4597,24 +4610,32 @@ describe('shutting the listener down', () => {
           res.on('end', () => resolve(res.statusCode ?? 0));
         }
       );
-      req.on('error', reject);
+      request.on('socket', (socket) => {
+        if (!socket.connecting) requestConnected();
+        else socket.once('connect', requestConnected);
+      });
+      request.on('error', reject);
       // Headers and half the body only: the handler is now parked inside readBody.
-      req.write(payload.subarray(0, payload.length - 1));
-      setTimeout(() => req.end(payload.subarray(payload.length - 1)), 150);
+      request.write(payload.subarray(0, payload.length - 1), () => halfBodyWritten());
+      void bodyRelease.then(() => request.end(payload.subarray(payload.length - 1)));
     });
 
-    // Give the server time to accept the connection and start reading.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const started = Date.now();
-    await stopBridge();
-    const elapsed = Date.now() - started;
+    // Prove the request is on an established socket and its partial body has been flushed before
+    // shutdown starts. This is the state the drain contract is about; wall-clock sleeps do not
+    // prove it and were flaky at the 1 ms boundary on macOS runners.
+    await Promise.all([connected, halfWritten]);
+    let stopped = false;
+    const stopping = stopBridge().finally(() => {
+      stopped = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+
+    releaseBody();
 
     expect(await answered).toBe(200);
+    await stopping;
     agent.destroy();
-    // The drain is real — it waited for the request — but it ends with the request, not with
-    // the force timer 15s later.
-    expect(elapsed).toBeGreaterThanOrEqual(100);
-    expect(elapsed).toBeLessThan(3_000);
 
     const restarted = await startBridge();
     expect(restarted).not.toBeNull();

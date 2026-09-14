@@ -119,16 +119,24 @@ describe('runCommand', () => {
     const grandchild = `setInterval(() => {}, 1000);`;
     const parent = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const ids=[]; for(let i=0;i<48;i++){ const child=spawn(${JSON.stringify(node)}, ['-e', ${JSON.stringify(grandchild)}], {stdio:'ignore'}); ids.push(child.pid); } fs.writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify(ids)); setInterval(() => {}, 1000);`;
     const child = spawn(node, ['-e', parent], { cwd, stdio: 'ignore', windowsHide: true });
-    const deadline = Date.now() + 2_000;
+    const deadline = Date.now() + 15_000;
+    let grandchildPids: number[] | null = null;
     while (Date.now() < deadline) {
       try {
-        await fs.access(pidFile);
-        break;
+        const parsed = JSON.parse(await fs.readFile(pidFile, 'utf8')) as unknown;
+        if (Array.isArray(parsed) && parsed.length === 48 && parsed.every((pid) => Number.isInteger(pid) && pid > 0)) {
+          grandchildPids = parsed;
+          break;
+        }
       } catch {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        // The ARM64 runner can take several seconds to spawn the full process fan-out.
       }
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    const grandchildPids = JSON.parse(await fs.readFile(pidFile, 'utf8')) as number[];
+    if (!grandchildPids) {
+      await terminateProcessTree(child.pid!, true).catch(() => undefined);
+      throw new Error('Timed out waiting for the Windows descendant fan-out to publish all 48 process ids');
+    }
     try {
       await terminateProcessTree(child.pid!, true, 50);
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -142,7 +150,7 @@ describe('runCommand', () => {
       });
       expect(survivors).toEqual([]);
     } finally {
-      for (const grandchildPid of grandchildPids) {
+      for (const grandchildPid of grandchildPids ?? []) {
         if (Number.isInteger(grandchildPid) && grandchildPid > 0) {
           try {
             process.kill(grandchildPid, 'SIGKILL');
