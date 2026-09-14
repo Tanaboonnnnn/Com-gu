@@ -4583,13 +4583,9 @@ describe('shutting the listener down', () => {
     const bodyRelease = new Promise<void>((resolve) => {
       releaseBody = resolve;
     });
-    let requestConnected!: () => void;
-    const connected = new Promise<void>((resolve) => {
-      requestConnected = resolve;
-    });
-    let halfBodyWritten!: () => void;
-    const halfWritten = new Promise<void>((resolve) => {
-      halfBodyWritten = resolve;
+    let requestAccepted!: () => void;
+    const accepted = new Promise<void>((resolve) => {
+      requestAccepted = resolve;
     });
     const answered = new Promise<number>((resolve, reject) => {
       request = http.request(
@@ -4602,7 +4598,8 @@ describe('shutting the listener down', () => {
             authorization: `Bearer ${token}`,
             'content-type': 'application/json',
             'x-extension-protocol': String(BRIDGE_PROTOCOL),
-            'content-length': String(payload.length)
+            'content-length': String(payload.length),
+            expect: '100-continue'
           }
         },
         (res) => {
@@ -4610,20 +4607,17 @@ describe('shutting the listener down', () => {
           res.on('end', () => resolve(res.statusCode ?? 0));
         }
       );
-      request.on('socket', (socket) => {
-        if (!socket.connecting) requestConnected();
-        else socket.once('connect', requestConnected);
-      });
+      request.on('continue', requestAccepted);
       request.on('error', reject);
-      // Headers and half the body only: the handler is now parked inside readBody.
-      request.write(payload.subarray(0, payload.length - 1), () => halfBodyWritten());
-      void bodyRelease.then(() => request.end(payload.subarray(payload.length - 1)));
+      request.flushHeaders();
+      void bodyRelease.then(() => request.end(payload));
     });
 
-    // Prove the request is on an established socket and its partial body has been flushed before
-    // shutdown starts. This is the state the drain contract is about; wall-clock sleeps do not
-    // prove it and were flaky at the 1 ms boundary on macOS runners.
-    await Promise.all([connected, halfWritten]);
+    // The server's 100-continue response proves it parsed this request and admitted it before
+    // shutdown starts. Keep the body withheld so the handler remains parked inside readBody.
+    // Socket-connect/write callbacks only prove client-side progress and raced server admission
+    // on macOS release runners.
+    await accepted;
     let stopped = false;
     const stopping = stopBridge().finally(() => {
       stopped = true;
