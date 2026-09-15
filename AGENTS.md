@@ -375,8 +375,11 @@ attributed.
 
 ## 8. Filesystem containment — `sandbox.ts`
 
-The authority for every model-supplied path. Approved folders get virtual roots such as
-`/project`; native absolute paths are also accepted when they resolve inside an approved root.
+The authority for every model-supplied path. Approved folders whose Home toggle is ON get
+virtual roots such as `/project`; native absolute paths are also accepted when they resolve
+inside an enabled approved root. A missing legacy `enabled` field means ON. The toggle is
+main-process authority, not a renderer filter: OFF roots must disappear from both virtual and
+native path authorization immediately.
 
 **Must hold.**
 
@@ -404,9 +407,11 @@ capability must become read-only-blocked automatically.
 
 ## 9. Workspaces — `workspace.ts`
 
-Two ideas that are easy to confuse: **approved roots** are the security boundary the user
-configured; a **workspace** is convenience state saying which project *this exact chat or
-agent* is working in.
+Three ideas that are easy to confuse: **approved roots** are folders the user added,
+**enabled roots** are the current filesystem authority selected by their Home ON/OFF toggles,
+and a **workspace** is convenience state saying which project *this exact chat or agent* is
+working in. Chat identity never grants a root. Active Runs snapshot the enabled set and Workers
+may narrow it, but neither may widen into an OFF root.
 
 Keyed by exact chat/agent identity, learned from proven absolute paths and project markers,
 inherited by spawned workers, moved by Compact & Resume.

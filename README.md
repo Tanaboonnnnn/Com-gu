@@ -78,7 +78,7 @@ macOS builds ต้องใช้ **macOS 12 Monterey or newer**. สำหร�
 - **Safe auto-compaction** ถึง threshold แล้วจะ arm ไว้ก่อน ไม่กด Stop ตัด ChatGPT กลาง turn; รอ turn และ local tools จบก่อนค่อย compact
 - **Goal loop** ให้โมเดลช่วยส่งข้อความต่อจนถึงเป้าหมายที่กำหนด
 - **Multi-agent** ให้ prime chat เปิด worker chats และส่งงานหากันได้
-- **Safe Workspace Runtime** ให้แต่ละ Run เลือก Primary/Shared folders จาก approved roots เดิม Worker รับสิทธิ์เท่ากันหรือน้อยกว่า Prime เท่านั้น และหน้า Chat แสดง scope ที่มีผลจริง
+- **Enabled folder allowlist** ใช้สวิตช์ ON/OFF ที่หน้า Home เป็น authority ของ file tools โดยตรง ไม่ต้องผูก Primary/Shared กับแต่ละแชท; Active Run จะ snapshot เฉพาะ roots ที่ ON และ Worker ลด scope ต่อได้แต่ขยายเข้า root ที่ OFF ไม่ได้
 - **Windows Run command sandbox** ใช้ MXC ProcessContainer จำกัด process tree ให้อยู่ใน WorkspaceScope; ถ้ายืนยัน confinement ไม่ได้ ระบบจะปิด Run-scoped commands แบบ fail closed แทนการรัน unrestricted
 - **System Health v1** แยกสถานะ Desktop, MCP Core, Tunnel, Browser bridge, Extension, Prime และ Workers ออกจากกัน
 - **Desktop automation แบบ capability-gated** — Windows รองรับ screen/windows/input/clipboard เต็มชุด; Linux มี X11 และ Wayland adapter ที่ fail closed เมื่อยังพิสูจน์ capture/coordinate authority ไม่ได้
@@ -86,7 +86,7 @@ macOS builds ต้องใช้ **macOS 12 Monterey or newer**. สำหร�
 ## Quick start
 
 1. ดาวน์โหลด build ให้ตรง OS/CPU แล้วเปิด **ComGu**
-2. ตรวจ permission ในหน้า Home และเพิ่มเฉพาะ project folders ที่ต้องการให้เข้าถึง
+2. ตรวจ permission ในหน้า Home, เพิ่ม project folders ที่ต้องการ แล้วเปิด/ปิดสิทธิ์แต่ละโฟลเดอร์ด้วยสวิตช์ ON/OFF; แชทไม่ต้องเลือก workspace ซ้ำ
 3. ตั้งค่า OpenAI Secure MCP Tunnel หรือ HTTPS tunnel ที่ต้องการ
 4. ใน ChatGPT เปิด Developer mode แล้วเพิ่ม **ComGu Core**; เพิ่ม **ComGu Desktop** เมื่อ host/runtime รายงาน Desktop capability ที่ใช้งานได้
 5. ใน ComGu กด **Open extension folder** แล้วไป `chrome://extensions`
@@ -127,7 +127,7 @@ is proven. This is recoverable orchestration, not one HTTP/model request kept op
 
 Prime chat สามารถ spawn worker chats, ส่งข้อความหา worker และรับผลกลับผ่าน local broker ได้ Worker แต่ละตัวมี conversation identity ของตัวเองและไม่สามารถคุยกันเองโดยตรง
 
-ตอนเริ่ม Run สามารถเลือก **Primary folder** และ **Shared folders** ได้จากชื่อ root ที่อนุมัติไว้แล้วเท่านั้น Prime จะใช้ scope นี้ทั้งชุด ส่วน Worker แต่ละตัวรับ scope เดิมหรือ subset ที่แคบกว่าได้ แต่เพิ่ม root เองไม่ได้
+ตอนเริ่ม Run ระบบจะ snapshot โฟลเดอร์ที่เปิด **ON** อยู่ในหน้า Home เป็น authority ceiling ของ Prime อัตโนมัติ ส่วน Worker แต่ละตัวรับ scope เดิมหรือ subset ที่แคบกว่าได้ แต่เพิ่ม root ที่ปิด OFF เองไม่ได้ จึงไม่ต้องเลือก Primary/Shared folder ต่อแชทอีก
 
 ระบบนี้ยัง experimental และอาจเปิดหลาย ChatGPT tabs พร้อมกัน ควรใช้กับ repo/workspace ที่ recover ได้และหลีกเลี่ยงการให้ workers แก้ไฟล์ชุดเดียวกันโดยไม่มีการแบ่ง ownership
 
@@ -135,7 +135,7 @@ Prime chat สามารถ spawn worker chats, ส่งข้อความ
 
 ComGu ไม่ใช่ VM เต็มรูปแบบ สิทธิ์พื้นฐานยังเป็นสิทธิ์ของ user account ที่รันโปรแกรม แต่ใน active Run ระบบใช้ WorkspaceScope เป็น authority ของ file tools และใช้ OS process sandbox สำหรับ Run-scoped commands บน Windows
 
-- File operations ถูกจำกัดด้วย approved roots และ canonical path checks
+- File operations ถูกจำกัดด้วย approved roots ที่เปิด ON อยู่และ canonical path checks; root ที่ OFF ใช้ไม่ได้ทั้ง virtual และ native path
 - ใน active Run บน Windows, terminal process และ descendants ถูกจำกัดด้วย MXC ProcessContainer ให้อยู่ใน effective WorkspaceScope ถ้า backend/host preparation ยังยืนยันไม่ได้ Run-scoped command จะ fail closed
 - คำสั่งที่รันนอก active Run ยังเป็นสิทธิ์ของ user account ปัจจุบันและไม่ได้รับ WorkspaceScope confinement ของ Run
 - Desktop control เป็นสิทธิ์ระดับ desktop/session และไม่ได้ถูกจำกัดด้วย project folder; capability ที่ expose ขึ้นกับ host adapter และ permission ปัจจุบัน

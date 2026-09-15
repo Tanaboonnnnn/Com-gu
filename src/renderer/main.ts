@@ -685,7 +685,9 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
   enabled.type = 'checkbox';
   enabled.className = 'root-enabled-toggle';
   enabled.checked = root.enabled !== false;
-  enabled.setAttribute('aria-label', `${enabled.checked ? 'Disable' : 'Enable'} /${root.name}`);
+  const enabledLabel = enabled.checked ? tr('home.disableFolder', { name: root.name }) : tr('home.enableFolder', { name: root.name });
+  enabled.setAttribute('aria-label', enabledLabel);
+  enabled.title = enabledLabel;
   enabled.addEventListener('change', async () => {
     enabled.disabled = true;
     const result = await run(api.setRootEnabled(root.name, enabled.checked));
@@ -1142,7 +1144,7 @@ function facts(next: AppState): HTMLElement[] {
 
   rows.push([
     tr('health.toolsVisible'),
-    tr('health.availableFolders', { tools: toolsOn(next), folders: config.roots.length })
+    tr('health.availableFolders', { tools: toolsOn(next), folders: config.roots.filter((root) => root.enabled !== false).length })
   ]);
 
   return rows.map(([label, value, bad]) => {
