@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.3.0] - 2026-09-15
+
+3.3.0 replaces chat-bound workspace selection with a persistent enabled-folder allowlist managed directly from Home. Folder authorization is now simpler for users while Run/worker narrowing and command confinement remain fail closed.
+
+### Changed
+- Approved folders now expose a persistent ON/OFF authority toggle in Home; ordinary file and command access no longer depends on selecting a Primary/Shared workspace for each chat.
+- Chat identity is retained for recording, attribution and orchestration but no longer grants filesystem roots.
+- Active Runs automatically snapshot the enabled roots as their authority ceiling; workers may narrow the set but cannot widen into a disabled root.
+- The retired Primary/Shared and pending-chat workspace picker UI has been removed.
+
+### Security and compatibility
+- Disabled roots are rejected through both virtual and native path forms.
+- Windows command sandboxing, caller identity, pairing, terminal ownership and Wayland raw-coordinate frame authority remain enforced.
+- Existing roots migrate compatibly: an absent legacy `enabled` field means ON.
+- Release targets remain Windows x64/ARM64, macOS arm64 and Linux x64/ARM64. macOS artifacts remain unsigned and unnotarized.
 ## [3.2.0] — 2026-09-13
 
 3.2.0 is the durable multi-machine runtime release. It adds the standalone Windows/Linux CLI, shared profile ownership across Desktop and CLI, stable per-machine identity, recoverable Durable Runs, lifecycle-owned Desktop drivers, and capability-gated Linux desktop automation while keeping ambiguous mutations fail closed.
