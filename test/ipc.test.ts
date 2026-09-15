@@ -115,6 +115,7 @@ const save = (patch: unknown, base: unknown = getConfig()): Promise<any> =>
   handlers.get('settings:save')!(null, { patch, base }) as Promise<any>;
 const renameRoot = (payload: unknown): Promise<any> => handlers.get('roots:rename')!(null, payload) as Promise<any>;
 const removeRoot = (payload: unknown): Promise<any> => handlers.get('roots:remove')!(null, payload) as Promise<any>;
+const setRootEnabled = (payload: unknown): Promise<any> => handlers.get('roots:setEnabled')!(null, payload) as Promise<any>;
 const sessionEvents = (payload: unknown): Promise<any> => handlers.get('sessions:events')!(null, payload) as Promise<any>;
 const sessionList = (): Promise<any> => handlers.get('sessions:list')!(null, undefined) as Promise<any>;
 const setRunScope = (payload: unknown): Promise<any> => handlers.get('swarm:setWorkspaceScope')!(null, payload) as Promise<any>;
@@ -610,6 +611,30 @@ describe('settings writes from more than one UI', () => {
 });
 
 describe('root namespace invariants', () => {
+  it('persists root authority toggles and preserves them across rename', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [{ name: 'project', path: 'C:\\Users\\example\\project', enabled: true }]
+    });
+
+    const disabled = await setRootEnabled({ name: 'project', enabled: false });
+    expect(disabled.ok, disabled.error).toBe(true);
+    expect(getConfig().roots).toEqual([
+      { name: 'project', path: 'C:\\Users\\example\\project', enabled: false }
+    ]);
+
+    const renamed = await renameRoot({ name: 'project', newName: 'repo' });
+    expect(renamed.ok, renamed.error).toBe(true);
+    expect(getConfig().roots).toEqual([
+      { name: 'repo', path: 'C:\\Users\\example\\project', enabled: false }
+    ]);
+
+    const stale = await setRootEnabled({ name: 'project', enabled: true });
+    expect(stale.ok).toBe(false);
+    expect(stale.error).toMatch(/not an approved folder/i);
+  });
+
   it('refuses a live rename into the reserved /skills namespace', async () => {
     const base = defaultConfig();
     await saveConfig({

@@ -681,9 +681,20 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
     const result = await run(api.removeRoot(root.name));
     if (result) apply(result);
   });
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.className = 'root-enabled-toggle';
+  enabled.checked = root.enabled !== false;
+  enabled.setAttribute('aria-label', `${enabled.checked ? 'Disable' : 'Enable'} /${root.name}`);
+  enabled.addEventListener('change', async () => {
+    enabled.disabled = true;
+    const result = await run(api.setRootEnabled(root.name, enabled.checked));
+    if (result) apply(result);
+    else paintRoots(state?.config.roots ?? []);
+  });
   const path = el('span', '', root.path);
   path.title = root.path;
-  row.append(icon('i-folder'), label, path, rename, remove);
+  row.append(icon('i-folder'), label, path, enabled, rename, remove);
   return row;
 }
 

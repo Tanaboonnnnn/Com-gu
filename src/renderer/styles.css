@@ -1008,6 +1008,20 @@ main {
   white-space: nowrap;
 }
 
+.root-enabled-toggle {
+  width: 34px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.root-enabled-toggle:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .root .btn {
   margin-left: 0;
   padding: 3px 5px;

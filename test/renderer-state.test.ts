@@ -747,6 +747,48 @@ it('surfaces the existing root rename API in the folder row', async () => {
   expect(renames).toEqual([['repo', 'new-repo']]);
 });
 
+it('toggles folder authority from the Home row and repaints only from the main-process reply', async () => {
+  const writes: Array<[string, boolean]> = [];
+  let mountedState: any;
+  const mounted = await mountChat(
+    {
+      config: {
+        roots: [{ name: 'repo', path: 'C:\\repo', enabled: true }],
+        readOnly: false,
+        capabilities: { browse: true, search: true, read: true, metadata: true, create: true, edit: true, move: true, deleteFile: true, command: true, screen: true, control: true, clipboardRead: true, clipboardWrite: true },
+        tunnel: { kind: 'openai', tunnelId: 'tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', desktopTunnelId: '', binaryPath: '' },
+        ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light', locale: 'en' },
+        sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
+        compaction: { auto: true, autoTokens: 300000 },
+        multiAgent: { enabled: false, maxWorkers: 2 },
+        goal: { enabled: false, model: 'deepseek/deepseek-v4-flash', reasoning: 'default', prompt: DEFAULT_GOAL_SYSTEM_PROMPT }
+      }
+    },
+    [],
+    {
+      setRootEnabled: (name: string, enabled: boolean) => {
+        writes.push([name, enabled]);
+        mountedState.config.roots = mountedState.config.roots.map((root: any) =>
+          root.name === name ? { ...root, enabled } : root
+        );
+        return Promise.resolve({ ok: true, data: structuredClone(mountedState) });
+      }
+    }
+  );
+  mountedState = mounted.state;
+  const doc = mounted.window.document;
+  const toggle = doc.querySelector<HTMLInputElement>('.root input.root-enabled-toggle');
+  expect(toggle).not.toBeNull();
+  expect(toggle!.checked).toBe(true);
+
+  toggle!.checked = false;
+  toggle!.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
+  await settle();
+
+  expect(writes).toEqual([['repo', false]]);
+  expect(doc.querySelector<HTMLInputElement>('.root input.root-enabled-toggle')!.checked).toBe(false);
+});
+
 it('preserves an in-progress root rename across unrelated state pushes and cancels it if the root disappears', async () => {
   const renames: Array<[string, string]> = [];
   const mounted = await mountChat({}, [], {
