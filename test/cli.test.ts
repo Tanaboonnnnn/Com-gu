@@ -21,7 +21,7 @@ describe('ComGu CLI', () => {
     const output = io();
     const deps = { profileDir: 'ignored', request: vi.fn(async () => null), startOwner: vi.fn(async () => undefined) };
     expect(await runCli(['--version'], deps, output.value)).toBe(0);
-    expect(output.stdout.join('')).toMatch(/^3\.3\.0\n$/);
+    expect(output.stdout.join('')).toMatch(/^3\.3\.1\n$/);
     expect(deps.startOwner).not.toHaveBeenCalled();
     expect(deps.request).not.toHaveBeenCalled();
   });
