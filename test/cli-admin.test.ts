@@ -122,6 +122,24 @@ describe('CLI profile administration', () => {
     }
   });
 
+  it.runIf(process.platform === 'linux')('does not create a fallback over existing credentials that lost their original provider', async () => {
+    const oldKey = process.env.COMGU_CREDENTIAL_KEY;
+    const oldDbus = process.env.DBUS_SESSION_BUS_ADDRESS;
+    delete process.env.COMGU_CREDENTIAL_KEY;
+    delete process.env.DBUS_SESSION_BUS_ADDRESS;
+    await fs.writeFile(path.join(profileDir, 'credentials.key'), 'existing-protected-key', { mode: 0o600 });
+    await fs.writeFile(path.join(profileDir, 'credentials.vault'), 'existing-vault', { mode: 0o600 });
+    try {
+      await expect(runAdminCommand('setup', ['--name', 'locked-box'], { profileDir })).rejects.toThrow(/existing|credential source|unlock/i);
+      await expect(fs.access(path.join(profileDir, 'credentials.linux.key'))).rejects.toBeDefined();
+    } finally {
+      if (oldKey === undefined) delete process.env.COMGU_CREDENTIAL_KEY;
+      else process.env.COMGU_CREDENTIAL_KEY = oldKey;
+      if (oldDbus === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      else process.env.DBUS_SESSION_BUS_ADDRESS = oldDbus;
+    }
+  });
+
   it('enables only Desktop permissions proven by the explicit setup probe', async () => {
     await runAdminCommand('setup', ['--name', 'linux-box', '--desktop'], {
       profileDir,
