@@ -71,7 +71,7 @@ describe('CLI profile administration', () => {
     await runAdminCommand('roots', ['add', project], { profileDir });
     await runAdminCommand('permissions', ['command', 'off'], { profileDir });
     await loadMachineProfile(profileDir);
-    for (const file of ['credentials.key', 'credentials.vault', 'secrets.bin', 'control.auth']) {
+    for (const file of ['credentials.key', 'credentials.vault', 'credentials.linux.key', 'secrets.bin', 'control.auth']) {
       await fs.writeFile(path.join(profileDir, file), 'opaque');
     }
 
@@ -82,6 +82,7 @@ describe('CLI profile administration', () => {
 
     await expect(fs.access(path.join(profileDir, 'machine.json'))).rejects.toBeDefined();
     await expect(fs.access(path.join(profileDir, 'credentials.vault'))).rejects.toBeDefined();
+    await expect(fs.access(path.join(profileDir, 'credentials.linux.key'))).rejects.toBeDefined();
     initConfigPath(profileDir);
     const config = await loadConfig();
     expect(config.roots).toHaveLength(1);
@@ -96,6 +97,29 @@ describe('CLI profile administration', () => {
     expect((first.json as { connectors: Array<{ connectorName: string }> }).connectors[0]?.connectorName).toBe('ComGu Core');
     const confirmed = await runAdminCommand('setup', ['--name', 'ubuntu-laptop'], { profileDir, credentialVaultFactory: unavailableVault });
     expect((confirmed.json as { connectors: Array<{ connectorName: string }> }).connectors[0]?.connectorName).toBe('ComGu · ubuntu-laptop Core');
+  });
+
+  it.runIf(process.platform === 'linux')('bootstraps headless secure credentials without an environment export', async () => {
+    const oldKey = process.env.COMGU_CREDENTIAL_KEY;
+    const oldDbus = process.env.DBUS_SESSION_BUS_ADDRESS;
+    delete process.env.COMGU_CREDENTIAL_KEY;
+    delete process.env.DBUS_SESSION_BUS_ADDRESS;
+    try {
+      const setup = await runAdminCommand('setup', ['--name', 'headless-box'], { profileDir });
+      const credential = (setup.json as { credential: { available: boolean } }).credential;
+      expect(credential.available).toBe(true);
+      expect(setup.text).toContain('Secure credential source: available');
+      const keyText = await fs.readFile(path.join(profileDir, 'credentials.linux.key'), 'utf8');
+      expect(setup.text).not.toContain(keyText.trim());
+
+      const doctor = await runAdminCommand('doctor', [], { profileDir });
+      expect(doctor.text).toContain('Secure credentials: available');
+    } finally {
+      if (oldKey === undefined) delete process.env.COMGU_CREDENTIAL_KEY;
+      else process.env.COMGU_CREDENTIAL_KEY = oldKey;
+      if (oldDbus === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      else process.env.DBUS_SESSION_BUS_ADDRESS = oldDbus;
+    }
   });
 
   it('enables only Desktop permissions proven by the explicit setup probe', async () => {
