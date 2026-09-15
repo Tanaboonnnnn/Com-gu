@@ -10,7 +10,7 @@
  * that server does not have, which is exactly the confusion the split exists to end.
  */
 
-import { getConfig } from '../config.js';
+import { enabledRoots, getConfig } from '../config.js';
 import { isGitRepository } from '../toolchain.js';
 import type { ToolContext } from './kernel.js';
 import { surfaceDefinition, type SurfaceId } from './surfaces.js';
@@ -35,10 +35,11 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, machine?:
   // repository was one of the most repeated recoverable failures in the recorded sessions,
   // and the answer is one stat the model has no way to perform. Only repositories are
   // labelled, so the line stays short on the common case where every root is one.
+  const usableRoots = enabledRoots(ctx.roots);
   const roots =
-    ctx.roots.length === 0
-      ? 'None yet — the user must approve a folder in the ComGu app.'
-      : ctx.roots.map((r) => `/${r.name}${isGitRepository(r.path) ? ' (git)' : ''}`).join('  ');
+    usableRoots.length === 0
+      ? 'None enabled — turn on a folder in the ComGu app.'
+      : usableRoots.map((r) => `/${r.name}${isGitRepository(r.path) ? ' (git)' : ''}`).join('  ');
 
   const mode = ctx.readOnly
     ? 'Read only. Nothing here can modify anything.'

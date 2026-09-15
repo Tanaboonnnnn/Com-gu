@@ -36,7 +36,7 @@ import {
 } from '../sandbox.js';
 import { currentWorkspace, learnWorkspace } from '../workspace.js';
 import { ExecError } from '../exec.js';
-import { getConfig } from '../config.js';
+import { enabledRoots, getConfig } from '../config.js';
 import {
   acknowledgeOffers,
   acknowledgeOffersForConversation,
@@ -66,7 +66,6 @@ import {
   isOptionalRejectedError
 } from './optional-runtime.js';
 import { effectiveWorkspaceRoots } from '../run/scope.js';
-import { effectiveChatWorkspaceRoots, effectiveManualWorkspaceRoots } from '../chat-workspace-scope.js';
 import type { SurfaceId } from './surfaces.js';
 import type { MachineIdentity } from '../machine/profile.js';
 import type { RuntimeProfileName } from '../runtime/profile.js';
@@ -725,17 +724,16 @@ export async function resolveIn(
 /** Effective filesystem authority for the call currently running. */
 export function effectiveRootsForCall(_ctx: ToolContext): readonly Root[] {
   const caller = currentCall()?.caller;
+  const enabled = enabledRoots(getConfig().roots);
+  if (!swarmRunning()) return enabled;
   if (!caller?.conversationId) {
-    if (swarmRunning()) {
-      throw new SandboxError(
-        'WORKSPACE_SCOPE_REQUIRED: an active Run file or command operation requires the exact ChatGPT conversation.'
-      );
-    }
-    return effectiveManualWorkspaceRoots(getConfig().roots);
+    throw new SandboxError(
+      'WORKSPACE_SCOPE_REQUIRED: an active Run file or command operation requires the exact ChatGPT conversation.'
+    );
   }
-  return swarmRunning()
-    ? effectiveWorkspaceRoots(workspaceScopeForCaller(caller), getConfig().roots)
-    : effectiveChatWorkspaceRoots(caller.conversationId, getConfig().roots);
+  // Run/worker scope is an additional narrowing layer, never a way to resurrect a folder
+  // whose Home toggle is now OFF. Passing only enabled roots makes stale snapshots fail closed.
+  return effectiveWorkspaceRoots(workspaceScopeForCaller(caller), enabled);
 }
 
 export interface ResolvedCwd {
