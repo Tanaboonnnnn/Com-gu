@@ -143,29 +143,29 @@ describe('the session-row delete affordance', () => {
  * the invariant that was actually violated, and it is checkable.
  */
 describe('the chat panel cards', () => {
-  it('contains the bounded Run workspace and command-sandbox controls', () => {
+  it('keeps Run diagnostics and command-sandbox controls without a workspace picker', () => {
     for (const id of [
       'runWorkspace',
-      'runPrimaryRoot',
-      'runSharedRoots',
       'commandSandboxState',
       'commandSandboxPrepare'
     ]) {
       expect(document.getElementById(id), `missing #${id}`).not.toBeNull();
     }
-    expect(document.getElementById('runPrimaryRoot')!.closest('.view[data-view="settings"]')).not.toBeNull();
+    expect(document.getElementById('runPrimaryRoot')).toBeNull();
+    expect(document.getElementById('runSharedRoots')).toBeNull();
     expect(document.getElementById('commandSandboxPrepare')!.closest('.view[data-view="settings"]')).not.toBeNull();
   });
 
-  it('has a Desktop fallback for a pending Chat workspace without any arbitrary native-path input', () => {
-    const box = document.getElementById('chatWorkspaceFallback');
-    expect(box).not.toBeNull();
-    for (const id of ['pendingWorkspaceChat', 'pendingWorkspacePrimary', 'pendingWorkspaceShared', 'pendingWorkspaceSave']) {
-      expect(document.getElementById(id), `missing #${id}`).not.toBeNull();
+  it('does not expose the retired chat-bound workspace selection controls', () => {
+    for (const id of [
+      'chatWorkspaceFallback',
+      'pendingWorkspaceChat',
+      'pendingWorkspacePrimary',
+      'pendingWorkspaceShared',
+      'pendingWorkspaceSave'
+    ]) {
+      expect(document.getElementById(id), `retired #${id} must stay absent`).toBeNull();
     }
-    expect(box!.querySelector('input[type="text"], input[type="file"], textarea')).toBeNull();
-    expect(document.getElementById('pendingWorkspaceChat')!.tagName).toBe('SELECT');
-    expect(document.getElementById('pendingWorkspacePrimary')!.tagName).toBe('SELECT');
   });
 
   /** The track list a card's own rule declares, as an array. */

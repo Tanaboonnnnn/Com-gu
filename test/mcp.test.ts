@@ -47,7 +47,7 @@ import {
 import { installOptionalAgentsRuntime } from '../src/main/mcp/optional-runtime.js';
 import * as agentsRuntime from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
-import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
+import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests } from '../src/main/chat-workspace-scope.js';
 import type { DesktopDriver } from '../src/main/desktop/driver.js';
 
 // ---------------------------------------------------------------- transport
@@ -324,8 +324,8 @@ beforeEach(async () => {
 
 // ------------------------------------------------------------------- tests
 
-describe('manual no-extension workspace fallback', () => {
-  it('blocks unidentified file calls until the user selects a Desktop fallback, then uses only that explicit scope', async () => {
+describe('enabled folder authority', () => {
+  it('allows unidentified file calls through enabled roots without a Desktop fallback choice', async () => {
     resetChatWorkspaceScopesForTests();
     ctx.caps = withCaps({ read: true });
 
@@ -340,19 +340,13 @@ describe('manual no-extension workspace fallback', () => {
         })
       ).then((res) => ({ status: res.status, body: decode(res) }));
 
-    const blocked = await request();
-    expect(failed(blocked), textOf(blocked)).toBe(true);
-    expect(textOf(blocked)).toContain('WORKSPACE_SCOPE_REQUIRED');
-
-    setManualWorkspaceScope(ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
     const allowed = await request();
     expect(failed(allowed), textOf(allowed)).toBe(false);
     expect(textOf(allowed)).toContain('note line 1');
   });
 
-  it('never lets the unidentified Desktop fallback replace an exact conversation workspace', async () => {
+  it('does not require a per-chat workspace when exact conversation identity is known', async () => {
     resetChatWorkspaceScopesForTests();
-    setManualWorkspaceScope(ctx.roots, { primaryRoot: 'workspace', sharedRoots: [] });
     const requestId = 'wfr_exact_chat_must_not_use_manual';
     observeRequestCorrelation({
       requestId,
@@ -374,8 +368,30 @@ describe('manual no-extension workspace fallback', () => {
       { 'x-request-id': `${requestId}/att1` }
     ).then((reply) => ({ status: reply.status, body: decode(reply) }));
 
-    expect(failed(res), textOf(res)).toBe(true);
-    expect(textOf(res)).toContain('WORKSPACE_SCOPE_REQUIRED');
+    expect(failed(res), textOf(res)).toBe(false);
+    expect(textOf(res)).toContain('note line 1');
+  });
+
+  it('fails closed for a disabled root using either virtual or native spelling', async () => {
+    const previous = getConfig();
+    ctx.caps = withCaps({ read: true });
+    await saveConfig({ ...previous, roots: [{ name: 'workspace', path: approved, enabled: false }] });
+    try {
+      for (const requested of ['/workspace/notes.txt', path.join(approved, 'notes.txt')]) {
+        const res = await rawPost(
+          endpoint.urls.core,
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: nextId++,
+            method: 'tools/call',
+            params: { name: 'read', arguments: { paths: [requested] } }
+          })
+        ).then((reply) => ({ status: reply.status, body: decode(reply) }));
+        expect(failed(res), `${requested}: ${textOf(res)}`).toBe(true);
+      }
+    } finally {
+      await saveConfig(previous);
+    }
   });
 });
 describe('active Run file authority', () => {

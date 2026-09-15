@@ -681,9 +681,22 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
     const result = await run(api.removeRoot(root.name));
     if (result) apply(result);
   });
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.className = 'root-enabled-toggle';
+  enabled.checked = root.enabled !== false;
+  const enabledLabel = enabled.checked ? tr('home.disableFolder', { name: root.name }) : tr('home.enableFolder', { name: root.name });
+  enabled.setAttribute('aria-label', enabledLabel);
+  enabled.title = enabledLabel;
+  enabled.addEventListener('change', async () => {
+    enabled.disabled = true;
+    const result = await run(api.setRootEnabled(root.name, enabled.checked));
+    if (result) apply(result);
+    else paintRoots(state?.config.roots ?? []);
+  });
   const path = el('span', '', root.path);
   path.title = root.path;
-  row.append(icon('i-folder'), label, path, rename, remove);
+  row.append(icon('i-folder'), label, path, enabled, rename, remove);
   return row;
 }
 
@@ -1131,7 +1144,7 @@ function facts(next: AppState): HTMLElement[] {
 
   rows.push([
     tr('health.toolsVisible'),
-    tr('health.availableFolders', { tools: toolsOn(next), folders: config.roots.length })
+    tr('health.availableFolders', { tools: toolsOn(next), folders: config.roots.filter((root) => root.enabled !== false).length })
   ]);
 
   return rows.map(([label, value, bad]) => {

@@ -568,7 +568,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const real = await validateNewRoot(result.filePaths[0]!, config.roots);
       const name = uniqueRootName(real, config.roots);
       addedName = name;
-      return { ...config, roots: [...config.roots, { name, path: real }] };
+      return { ...config, roots: [...config.roots, { name, path: real, enabled: true }] };
     });
     logInfo(`approved folder /${addedName}`);
     return buildState();
@@ -586,6 +586,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     forgetWorkspaceRoot(name);
     forgetChatWorkspaceRoot(name);
     logInfo(`removed folder /${name}`);
+    return buildState();
+  });
+
+  handle('roots:setEnabled', async (payload) => {
+    const { name, enabled } = z.object({ name: z.string().min(1).max(32), enabled: z.boolean() }).parse(payload);
+    await updateConfig((config) => {
+      if (!config.roots.some((root) => root.name === name)) throw new Error(`/${name} is not an approved folder`);
+      return {
+        ...config,
+        roots: config.roots.map((root) => (root.name === name ? { ...root, enabled } : root))
+      };
+    });
+    logInfo(`${enabled ? 'enabled' : 'disabled'} folder /${name}`);
     return buildState();
   });
 

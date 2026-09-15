@@ -147,8 +147,14 @@ const rootSchema = z.object({
     .min(1)
     .max(32)
     .regex(/^[a-z0-9][a-z0-9._-]*$/, 'Root names are lowercase letters, digits, dot, dash, underscore'),
-  path: z.string().min(2).max(4096)
+  path: z.string().min(2).max(4096),
+  enabled: z.boolean().optional()
 });
+
+/** The roots that currently carry user-granted file/terminal authority. */
+export function enabledRoots(roots: readonly Root[]): readonly Root[] {
+  return roots.filter((root) => root.enabled !== false);
+}
 
 /**
  * Repairs root names from older/hand-edited configs without ever publishing an ambiguous

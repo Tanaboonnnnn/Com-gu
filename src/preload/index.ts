@@ -8,15 +8,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AppState, BrowserFamily, Capabilities, Config, Diagnosis, ExtensionPairingView, LaunchAtLoginState, LogEntry } from '../shared/types.js';
-import type {
-  Handoff,
-  SessionEvent,
-  SessionSummary,
-  ClearAgentResult,
-  SwarmState,
-  TokenPressure,
-  WorkspaceScopeView
-} from '../shared/session.js';
+import type { Handoff, SessionEvent, SessionSummary, ClearAgentResult, SwarmState, TokenPressure } from '../shared/session.js';
 
 type Reply<T> = { ok: true; data: T } | { ok: false; error: string; errorCode?: string };
 
@@ -71,12 +63,6 @@ export type UpdateUiState =
   | { status: 'error'; currentVersion: string; message: string };
 
 export type RecoveryOperation = 'reconnect-bridge' | 'restart-tunnel' | 'reopen-browser' | 'wake-prime';
-export interface PendingChatWorkspaceView {
-  roots: string[];
-  pending: Array<{ conversationId: string }>;
-  manual: { pending: boolean; scope: WorkspaceScopeView | null };
-}
-
 export interface RecoveryUiResult {
   operation: RecoveryOperation;
   outcome: 'recovered' | 'degraded' | 'failed' | 'requires-user';
@@ -96,6 +82,7 @@ const api = {
   addRoot: () => call<AppState>('roots:add'),
   removeRoot: (name: string) => call<AppState>('roots:remove', { name }),
   renameRoot: (name: string, newName: string) => call<AppState>('roots:rename', { name, newName }),
+  setRootEnabled: (name: string, enabled: boolean) => call<AppState>('roots:setEnabled', { name, enabled }),
   setApiKey: (value: string) => call<AppState>('secret:set', { value }),
   resetUnreadableSecrets: () => call<AppState>('secret:resetUnreadable'),
   // The goal loop's own credential. Same channel, named slot; the value only ever goes in.
@@ -132,14 +119,7 @@ const api = {
   extensionPath: () => call<string | null>('bridge:extensionPath'),
   openExtensionFolder: () => call<string>('bridge:openExtensionFolder'),
 
-  getPendingChatWorkspaces: () => call<PendingChatWorkspaceView>('chatWorkspace:getPending'),
-  setPendingChatWorkspace: (conversationId: string, scope: WorkspaceScopeView) =>
-    call<PendingChatWorkspaceView>('chatWorkspace:setPending', { conversationId, ...scope }),
-  setManualChatWorkspace: (scope: WorkspaceScopeView) =>
-    call<PendingChatWorkspaceView>('chatWorkspace:setManual', scope),
-
   getSwarm: () => call<SwarmState>('swarm:get'),
-  setRunWorkspaceScope: (scope: WorkspaceScopeView) => call<SwarmState>('swarm:setWorkspaceScope', scope),
   resetSwarm: () => call<SwarmState>('swarm:reset'),
   // Clearing the prime ends the run; clearing a worker frees that slot. Which of the two
   // happened comes back in the result โ€” the renderer does not decide it.
@@ -165,11 +145,6 @@ const api = {
     const wrapped = (): void => listener();
     ipcRenderer.on('session:changed', wrapped);
     return () => ipcRenderer.removeListener('session:changed', wrapped);
-  },
-  onPendingChatWorkspacesChanged: (listener: (view: PendingChatWorkspaceView) => void): (() => void) => {
-    const wrapped = (_event: unknown, view: PendingChatWorkspaceView): void => listener(view);
-    ipcRenderer.on('chatWorkspace:changed', wrapped);
-    return () => ipcRenderer.removeListener('chatWorkspace:changed', wrapped);
   },
   onSwarmChanged: (listener: (state: SwarmState) => void): (() => void) => {
     const wrapped = (_event: unknown, state: SwarmState): void => listener(state);

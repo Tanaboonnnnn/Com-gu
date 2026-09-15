@@ -102,6 +102,8 @@ export interface Root {
   name: string;
   /** Absolute host path. Never sent to the model. */
   path: string;
+  /** Persisted user authority. Missing means enabled for pre-3.3 configs. */
+  enabled?: boolean;
 }
 
 export type TunnelKind = 'openai' | 'cloudflared' | 'manual';
