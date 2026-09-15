@@ -27,9 +27,11 @@ interface LinuxProviderOptions {
 
 function parseWrappingKey(text: string | undefined): Buffer | null {
   if (!text) return null;
+  const encoded = text.trim();
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(encoded)) return null;
   try {
-    const key = Buffer.from(text.trim(), 'base64');
-    return key.length === 32 ? key : null;
+    const key = Buffer.from(encoded, 'base64');
+    return key.length === 32 && key.toString('base64') === encoded ? key : null;
   } catch {
     return null;
   }
