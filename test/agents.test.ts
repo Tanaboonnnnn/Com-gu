@@ -276,7 +276,7 @@ describe('spawning a run', () => {
     expect(JSON.stringify(state)).not.toContain('rootIdentities');
   });
 
-  it('uses the exact chat workspace as the fresh Run ceiling even when legacy next-Run telemetry differs', async () => {
+  it('uses enabled roots as the fresh Run ceiling even when legacy chat/next-Run selections differ', async () => {
     const base = defaultConfig();
     const roots = [
       { name: 'project', path: 'C:\\work\\project' },
@@ -288,8 +288,8 @@ describe('spawning a run', () => {
     expect(selected).toEqual({ primaryRoot: 'project', sharedRoots: ['shared'] });
     setChatWorkspaceScopeForTests(PRIME_CHAT, roots, { primaryRoot: 'project', sharedRoots: [] });
 
-    spawnAgent({ caller: prime, workers: [{ task: 'inherits this chat scope only' }] });
-    expect(workspaceScopeForCaller(prime)).toMatchObject({ primaryRoot: 'project', sharedRoots: [] });
+    spawnAgent({ caller: prime, workers: [{ task: 'inherits the enabled set' }] });
+    expect(workspaceScopeForCaller(prime)).toMatchObject({ primaryRoot: 'project', sharedRoots: ['shared'] });
     expect(JSON.stringify(swarmState())).not.toContain('C:\\work');
   });
 
@@ -315,14 +315,46 @@ describe('spawning a run', () => {
     expect(workspaceEntries().find((entry) => entry.key === 'agent:worker-1')).toBeUndefined();
   });
 
-  it('fails closed before mutation when a fresh Run has no chat workspace scope', () => {
+  it('starts a fresh Run from enabled roots without requiring a chat workspace scope', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project', enabled: true },
+        { name: 'shared', path: 'C:\\work\\shared', enabled: true },
+        { name: 'paused', path: 'C:\\work\\paused', enabled: false }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
     setWorkspaceFor(`chat:${PRIME_CHAT}`, { virtual: '/project/src', real: 'C:\\work\\project\\src' });
 
-    expect(() => spawnAgent({ caller: prime, workers: [{ task: 'scope-less work' }] })).toThrow(/WORKSPACE_SCOPE_REQUIRED/);
+    spawnAgent({ caller: prime, workers: [{ task: 'scope-less work' }] });
 
     expect(workspaceForChat(PRIME_CHAT)?.virtual).toBe('/project/src');
+    expect(swarmRunning()).toBe(true);
+    expect(workspaceScopeForCaller(prime)).toMatchObject({ primaryRoot: 'project', sharedRoots: ['shared'] });
+    expect(JSON.stringify(swarmState())).not.toContain('paused');
+  });
+
+  it('refuses a fresh Run that explicitly asks for a disabled root', async () => {
+    const base = defaultConfig();
+    await saveConfig({
+      ...base,
+      roots: [
+        { name: 'project', path: 'C:\\work\\project', enabled: true },
+        { name: 'paused', path: 'C:\\work\\paused', enabled: false }
+      ],
+      multiAgent: { enabled: true, maxWorkers: 3 }
+    });
+
+    expect(() =>
+      spawnAgent({
+        caller: prime,
+        workspaceScope: { primaryRoot: 'paused', sharedRoots: [] },
+        workers: [{ task: 'must not start' }]
+      })
+    ).toThrow(/WORKSPACE_SCOPE_ESCALATION/);
     expect(swarmRunning()).toBe(false);
-    expect(swarmState().agents).toEqual([]);
   });
 
   it('does not fall back to an older Prime mirror when the latest Prime cwd is outside the new scope', async () => {

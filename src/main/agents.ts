@@ -84,7 +84,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { AgentInfo, AgentMessage, AgentState, SwarmState, WorkspaceScopeView } from '../shared/session.js';
-import { getConfig } from './config.js';
+import { enabledRoots, getConfig } from './config.js';
 import { logInfo, logWarn } from './logger.js';
 import { clampPrimeWorkspaceForScope, clampWorkspaceForScope, inheritWorkspace, releasePrimeWorkspace } from './workspace.js';
 import { bindRunWorkspaceScope, effectiveWorkerWorkspaceScope, restoreRunWorkspaceScope } from './run/state.js';
@@ -95,7 +95,6 @@ import {
   workspaceScopeNames
 } from './run/scope.js';
 import type { WorkspaceScope, WorkspaceScopeSelection } from './run/types.js';
-import { chatWorkspaceScope } from './chat-workspace-scope.js';
 
 export const PRIME_ID = 'prime';
 
@@ -1288,28 +1287,29 @@ export function spawn(input: SpawnInput, options: SpawnOptions = {}): SpawnResul
   }
 
   const existingOwner = run ?? dormantRunForPrime(conversationId);
-  const userSelectedScope = existingOwner ? null : chatWorkspaceScope(conversationId);
-  if (userSelectedScope) effectiveWorkspaceRoots(userSelectedScope, getConfig().roots);
-  let plannedRunScope: WorkspaceScope | null = existingOwner?.scope ?? userSelectedScope;
+  const currentEnabledRoots = enabledRoots(getConfig().roots);
+  let plannedRunScope: WorkspaceScope | null = existingOwner?.scope ?? null;
   if (existingOwner) {
     if (requestedRunSelection !== undefined) {
       if (!plannedRunScope) scopeEscalation();
-      const requested = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
+      const requested = bindRunWorkspaceScope(currentEnabledRoots, requestedRunSelection);
       if (!sameWorkspaceScope(plannedRunScope, requested)) scopeEscalation();
     }
-  } else if (userSelectedScope) {
-    // The conversation's explicit user-selected workspace is the new Run ceiling. A model may
-    // repeat that scope in its spawn arguments for clarity, but can never replace or widen it.
-    if (requestedRunSelection !== undefined) {
-      const requested = bindRunWorkspaceScope(getConfig().roots, requestedRunSelection);
-      if (!sameWorkspaceScope(userSelectedScope, requested)) scopeEscalation();
-    }
   } else {
-    throw new AgentError(
-      'WORKSPACE_SCOPE_REQUIRED: choose a workspace for this ChatGPT conversation before starting sub-agents.'
-    );
+    const first = currentEnabledRoots[0];
+    if (!first) {
+      throw new AgentError('WORKSPACE_SCOPE_REQUIRED: turn on at least one folder in ComGu before starting sub-agents.');
+    }
+    const enabledCeiling = bindRunWorkspaceScope(currentEnabledRoots, {
+      primaryRoot: first.name,
+      sharedRoots: currentEnabledRoots.slice(1).map((root) => root.name)
+    });
+    plannedRunScope =
+      requestedRunSelection === undefined
+        ? enabledCeiling
+        : effectiveWorkerWorkspaceScope(enabledCeiling, requestedRunSelection);
   }
-  if (plannedRunScope) effectiveWorkspaceRoots(plannedRunScope, getConfig().roots);
+  if (plannedRunScope) effectiveWorkspaceRoots(plannedRunScope, currentEnabledRoots);
   const scopedPlanned = planned.map((worker) => ({
     label: worker.label,
     task: worker.task,
