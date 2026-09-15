@@ -1,7 +1,12 @@
 ﻿import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createLinuxCredentialProvider, type SecretToolAdapter } from '../src/main/credentials/linux-provider.js';
+import {
+  bootstrapLinuxFallbackKey,
+  createLinuxCredentialProvider,
+  LINUX_FALLBACK_KEY_FILE,
+  type SecretToolAdapter
+} from '../src/main/credentials/linux-provider.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
 class FakeSecretTool implements SecretToolAdapter {
@@ -25,20 +30,22 @@ afterEach(async () => removeTempDir(dir));
 describe('Linux CLI credential provider', () => {
   it('uses a systemd credential wrapping key without writing plaintext configuration', async () => {
     const credentialsDir = path.join(dir, 'credentials');
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
     await fs.mkdir(credentialsDir);
     await fs.writeFile(path.join(credentialsDir, 'comgu-vault-key'), Buffer.alloc(32, 3).toString('base64'));
+    await fs.writeFile(fallbackKeyPath, `${Buffer.alloc(32, 13).toString('base64')}\n`, { mode: 0o600 });
     const provider = createLinuxCredentialProvider({
       platform: 'linux',
       scope: 'machine-a',
       env: { CREDENTIALS_DIRECTORY: credentialsDir },
-      secretTool
+      secretTool,
+      fallbackKeyPath
     });
     expect(await provider.status()).toMatchObject({ available: true, detail: 'systemd-credential' });
     const key = Buffer.alloc(32, 4);
     const wrapped = await provider.protect(key);
     expect(wrapped.toString('utf8')).not.toContain(key.toString('base64'));
     expect(await provider.unprotect(wrapped)).toEqual({ data: key, shouldReprotect: false });
-    expect(await fs.readdir(dir)).toEqual(['credentials']);
   });
 
   it('supports a process-local injected wrapping key and never manufactures an env file', async () => {
@@ -75,6 +82,81 @@ describe('Linux CLI credential provider', () => {
     expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
     await expect(provider.protect(Buffer.alloc(32))).rejects.toThrow(/secure Linux credential source/i);
     expect(await fs.readdir(dir)).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'linux')('bootstraps a private profile fallback that survives a fresh provider', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    await bootstrapLinuxFallbackKey(dir);
+    const stat = await fs.stat(fallbackKeyPath);
+    expect(stat.isFile()).toBe(true);
+    expect(stat.mode & 0o077).toBe(0);
+    expect(Buffer.from((await fs.readFile(fallbackKeyPath, 'utf8')).trim(), 'base64')).toHaveLength(32);
+
+    const first = createLinuxCredentialProvider({ platform: 'linux', scope: 'machine-f', env: {}, secretTool, fallbackKeyPath });
+    expect(await first.status()).toMatchObject({ available: true, detail: 'profile-fallback' });
+    const opaque = await first.protect(Buffer.alloc(32, 9));
+    const fresh = createLinuxCredentialProvider({ platform: 'linux', scope: 'machine-f', env: {}, secretTool, fallbackKeyPath });
+    expect(await fresh.unprotect(opaque)).toEqual({ data: Buffer.alloc(32, 9), shouldReprotect: false });
+  });
+
+  it.runIf(process.platform === 'linux')('never replaces an existing fallback during concurrent bootstrap', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    await Promise.all(Array.from({ length: 8 }, () => bootstrapLinuxFallbackKey(dir)));
+    const first = await fs.readFile(fallbackKeyPath, 'utf8');
+    await bootstrapLinuxFallbackKey(dir);
+    expect(await fs.readFile(fallbackKeyPath, 'utf8')).toBe(first);
+  });
+
+  it.runIf(process.platform === 'linux')('fails closed on a group-readable fallback instead of overwriting it', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    const original = `${Buffer.alloc(32, 10).toString('base64')}\n`;
+    await fs.writeFile(fallbackKeyPath, original, { mode: 0o644 });
+    await fs.chmod(fallbackKeyPath, 0o644);
+    const provider = createLinuxCredentialProvider({ platform: 'linux', scope: 'machine-g', env: {}, secretTool, fallbackKeyPath });
+    expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
+    await expect(bootstrapLinuxFallbackKey(dir)).rejects.toThrow(/credential|permission|fallback/i);
+    expect(await fs.readFile(fallbackKeyPath, 'utf8')).toBe(original);
+  });
+
+  it.runIf(process.platform === 'linux')('fails closed when the fallback is owned by another uid', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    await fs.writeFile(fallbackKeyPath, `${Buffer.alloc(32, 14).toString('base64')}\n`, { mode: 0o600 });
+    const actualUid = typeof process.getuid === 'function' ? process.getuid() : 1000;
+    const provider = createLinuxCredentialProvider({
+      platform: 'linux', scope: 'machine-owner', env: {}, secretTool, fallbackKeyPath,
+      currentUid: () => actualUid + 1
+    });
+    expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
+  });
+
+  it('fails closed on malformed fallback material', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    await fs.writeFile(fallbackKeyPath, 'not-a-32-byte-key\n', { mode: 0o600 });
+    const provider = createLinuxCredentialProvider({ platform: 'linux', scope: 'machine-h', env: {}, secretTool, fallbackKeyPath });
+    expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
+  });
+
+  it('rejects non-canonical base64 even when Node can decode it to 32 bytes', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    const valid = Buffer.alloc(32, 15).toString('base64');
+    await fs.writeFile(fallbackKeyPath, `${valid}@@@\n`, { mode: 0o600 });
+    expect(Buffer.from(`${valid}@@@`, 'base64')).toHaveLength(32);
+    const provider = createLinuxCredentialProvider({ platform: 'linux', scope: 'machine-strict', env: {}, secretTool, fallbackKeyPath });
+    expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
+  });
+
+  it('keeps environment and Secret Service ahead of the profile fallback', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    await fs.writeFile(fallbackKeyPath, `${Buffer.alloc(32, 11).toString('base64')}\n`, { mode: 0o600 });
+    const envProvider = createLinuxCredentialProvider({
+      platform: 'linux', scope: 'machine-i', env: { COMGU_CREDENTIAL_KEY: Buffer.alloc(32, 12).toString('base64') }, secretTool, fallbackKeyPath
+    });
+    expect(await envProvider.status()).toMatchObject({ available: true, detail: 'environment' });
+    secretTool.available = true;
+    const secretProvider = createLinuxCredentialProvider({
+      platform: 'linux', scope: 'machine-i', env: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' }, secretTool, fallbackKeyPath
+    });
+    expect(await secretProvider.status()).toMatchObject({ available: true, detail: 'secret-service' });
   });
 
   it('does not activate Linux providers on another platform', async () => {

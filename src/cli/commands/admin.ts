@@ -11,7 +11,7 @@ import {
   type MachineIdentity
 } from '../../main/machine/profile.js';
 import { RESERVED_ROOT_NAMES } from '../../main/sandbox.js';
-import { createCliCredentialVault } from '../credentials.js';
+import { createCliCredentialVault, ensureCliCredentialVault } from '../credentials.js';
 import type { CredentialVault } from '../../main/credentials/vault.js';
 import type { DesktopCapabilities } from '../../main/desktop/driver.js';
 import { repairRuntimeControlOwnership } from '../../main/runtime/control.js';
@@ -115,7 +115,7 @@ async function scrubCloneUnsafeState(profileDir: string): Promise<void> {
     ui: { ...config.ui, autoConnect: false }
   }));
   await Promise.all(
-    ['credentials.key', 'credentials.vault', 'credentials.migrated', 'secrets.bin', 'control.auth'].map((name) =>
+    ['credentials.key', 'credentials.vault', 'credentials.migrated', 'credentials.linux.key', 'secrets.bin', 'control.auth'].map((name) =>
       fs.rm(path.join(profileDir, name), { force: true })
     )
   );
@@ -191,7 +191,9 @@ async function setup(profileDir: string, args: string[], context: AdminCommandCo
       }
     }));
   }
-  const vault = context.credentialVaultFactory?.(profileDir, machine) ?? createCliCredentialVault(profileDir, machine);
+  const vault = context.credentialVaultFactory
+    ? context.credentialVaultFactory(profileDir, machine)
+    : await ensureCliCredentialVault(profileDir, machine);
   const credential = await vault.status();
   const core = connectorMetadata(machine, 'core');
   const desktopEnabled = DESKTOP_CAPABILITIES.some((capability) => getConfig().capabilities[capability]);
