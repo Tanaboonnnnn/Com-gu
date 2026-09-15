@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { defaultConfig, initConfigPath, loadConfig, saveConfig, updateConfig } from '../src/main/config.js';
+import { defaultConfig, enabledRoots, initConfigPath, loadConfig, saveConfig, updateConfig } from '../src/main/config.js';
 import { DESKTOP_CAPABILITIES, type Capability } from '../src/shared/types.js';
 import { makeTempDir, removeTempDir } from './helpers.js';
 
@@ -17,6 +17,29 @@ afterAll(async () => {
 });
 
 describe('settings migration', () => {
+  it('migrates legacy approved roots to enabled and preserves explicit disabled roots', async () => {
+    const config = defaultConfig() as unknown as Record<string, unknown>;
+    await fs.writeFile(
+      path.join(dir, 'config.json'),
+      JSON.stringify({
+        ...config,
+        roots: [
+          { name: 'legacy', path: 'C:\\work\\legacy' },
+          { name: 'paused', path: 'C:\\work\\paused', enabled: false }
+        ]
+      }),
+      'utf8'
+    );
+
+    const loaded = await loadConfig();
+
+    expect(loaded.roots).toEqual([
+      { name: 'legacy', path: 'C:\\work\\legacy' },
+      { name: 'paused', path: 'C:\\work\\paused', enabled: false }
+    ]);
+    expect(enabledRoots(loaded.roots).map((root) => root.name)).toEqual(['legacy']);
+  });
+
   it('defaults legacy configs with no browser preference to prime affinity', async () => {
     const legacy = defaultConfig() as unknown as Record<string, unknown>;
     const { browser: _browser, ...withoutBrowser } = legacy;
