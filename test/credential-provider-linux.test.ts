@@ -136,6 +136,15 @@ describe('Linux CLI credential provider', () => {
     expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
   });
 
+  it('rejects non-canonical base64 even when Node can decode it to 32 bytes', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    const valid = Buffer.alloc(32, 15).toString('base64');
+    await fs.writeFile(fallbackKeyPath, `${valid}@@@\n`, { mode: 0o600 });
+    expect(Buffer.from(`${valid}@@@`, 'base64')).toHaveLength(32);
+    const provider = createLinuxCredentialProvider({ platform: 'linux', scope: 'machine-strict', env: {}, secretTool, fallbackKeyPath });
+    expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
+  });
+
   it('keeps environment and Secret Service ahead of the profile fallback', async () => {
     const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
     await fs.writeFile(fallbackKeyPath, `${Buffer.alloc(32, 11).toString('base64')}\n`, { mode: 0o600 });
