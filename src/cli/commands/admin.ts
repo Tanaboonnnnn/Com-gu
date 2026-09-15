@@ -93,7 +93,7 @@ async function setPermission(profileDir: string, name: string, value: string): P
     ...config,
     capabilities: { ...config.capabilities, [capability]: enabled }
   }));
-  return { text: `${capability}: ${next.capabilities[capability] ? 'on' : 'off'}`, json: { [capability]: next.capabilities[capability] };
+  return { text: `${capability}: ${next.capabilities[capability] ? 'on' : 'off'}`, json: { [capability]: next.capabilities[capability] } };
 }
 
 async function ownerExists(context: AdminCommandContext): Promise<boolean> {
