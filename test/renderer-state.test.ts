@@ -677,16 +677,17 @@ it('toggles folder authority from the Home row and repaints only from the main-p
   );
   mountedState = mounted.state;
   const doc = mounted.window.document;
-  const toggle = doc.querySelector<HTMLInputElement>('.root input.root-enabled-toggle');
+  const toggle = doc.querySelector<HTMLInputElement>('.root .sw input.root-enabled-toggle');
   expect(toggle).not.toBeNull();
   expect(toggle!.checked).toBe(true);
+  expect(toggle!.nextElementSibling?.tagName).toBe('I');
 
   toggle!.checked = false;
   toggle!.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
   await settle();
 
   expect(writes).toEqual([['repo', false]]);
-  expect(doc.querySelector<HTMLInputElement>('.root input.root-enabled-toggle')!.checked).toBe(false);
+  expect(doc.querySelector<HTMLInputElement>('.root .sw input.root-enabled-toggle')!.checked).toBe(false);
 });
 
 it('preserves an in-progress root rename across unrelated state pushes and cancels it if the root disappears', async () => {

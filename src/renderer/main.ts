@@ -694,9 +694,11 @@ function rootRow(root: AppState['config']['roots'][number]): HTMLElement {
     if (result) apply(result);
     else paintRoots(state?.config.roots ?? []);
   });
+  const enabledSwitch = el('span', 'sw');
+  enabledSwitch.append(enabled, el('i'));
   const path = el('span', '', root.path);
   path.title = root.path;
-  row.append(icon('i-folder'), label, path, enabled, rename, remove);
+  row.append(icon('i-folder'), label, path, enabledSwitch, rename, remove);
   return row;
 }
 
