@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.3.1] - 2026-09-16
+
+3.3.1 makes headless Linux CLI setup self-contained and aligns folder authority switches with the rest of the ComGu UI.
+
+### Fixed
+- `comgu setup` on headless Linux now creates a persistent user-private fallback wrapping key automatically when systemd credentials, an explicit environment key, and Secret Service are all unavailable.
+- The fallback key is validated as a regular file owned by the current user, mode `0600`, and exactly 32 canonical Base64 bytes; malformed or unsafe existing files fail closed and are never overwritten.
+- Existing vault state is never silently rebound to a new fallback key when its prior secure source is unavailable.
+- Clone preparation removes the Linux fallback key together with other credential state.
+- Folder ON/OFF controls now reuse the same switch component as Permissions and Sub-agent controls, making state visually consistent in dark and light themes.
+
+### Compatibility and security
+- systemd credential, explicit environment, and Secret Service providers retain priority over the profile fallback.
+- No credential material is written into the systemd user unit, command line, logs, connector metadata, or CLI output.
+- Workspace/enabled-root authority, caller identity, pairing, terminal ownership, command confinement, and Wayland frame authority are unchanged.
+- Release targets remain Windows x64/ARM64, macOS arm64, and Linux x64/ARM64. macOS artifacts remain unsigned and unnotarized.
+
 ## [3.3.0] - 2026-09-15
 
 3.3.0 replaces chat-bound workspace selection with a persistent enabled-folder allowlist managed directly from Home. Folder authorization is now simpler for users while Run/worker narrowing and command confinement remain fail closed.
