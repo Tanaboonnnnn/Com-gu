@@ -8,6 +8,7 @@ import type { CredentialProvider } from './provider.js';
 const WRAP_AAD = Buffer.from('comgu-cli-master-key-wrap-v1', 'utf8');
 const SYSTEMD_CREDENTIAL_NAME = 'comgu-vault-key';
 const SECRET_SERVICE_PREFIX = 'secret-service:v1:';
+export const LINUX_FALLBACK_KEY_FILE = 'credentials.linux.key';
 
 export interface SecretToolAdapter {
   status(): Promise<boolean>;
@@ -20,6 +21,8 @@ interface LinuxProviderOptions {
   scope: string;
   env?: NodeJS.ProcessEnv;
   secretTool?: SecretToolAdapter;
+  fallbackKeyPath?: string;
+  currentUid?: () => number | undefined;
 }
 
 function parseWrappingKey(text: string | undefined): Buffer | null {
@@ -29,6 +32,62 @@ function parseWrappingKey(text: string | undefined): Buffer | null {
     return key.length === 32 ? key : null;
   } catch {
     return null;
+  }
+}
+
+type FallbackKeyState =
+  | { kind: 'missing' }
+  | { kind: 'invalid' }
+  | { kind: 'valid'; key: Buffer };
+
+async function readFallbackKey(
+  file: string,
+  currentUid: () => number | undefined
+): Promise<FallbackKeyState> {
+  let stat;
+  try {
+    stat = await fs.lstat(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
+    return { kind: 'invalid' };
+  }
+  if (!stat.isFile()) return { kind: 'invalid' };
+  const uid = currentUid();
+  if (uid !== undefined && stat.uid !== uid) return { kind: 'invalid' };
+  if ((stat.mode & 0o077) !== 0) return { kind: 'invalid' };
+  try {
+    const key = parseWrappingKey(await fs.readFile(file, 'utf8'));
+    return key ? { kind: 'valid', key } : { kind: 'invalid' };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+function processUid(): number | undefined {
+  return typeof process.getuid === 'function' ? process.getuid() : undefined;
+}
+
+export async function bootstrapLinuxFallbackKey(profileDir: string): Promise<void> {
+  if (process.platform !== 'linux') throw new Error('Linux fallback credentials are available on Linux only');
+  const file = path.join(profileDir, LINUX_FALLBACK_KEY_FILE);
+  await fs.mkdir(profileDir, { recursive: true });
+
+  const existing = await readFallbackKey(file, processUid);
+  if (existing.kind === 'valid') return;
+  if (existing.kind === 'invalid') {
+    throw new Error('Existing Linux fallback credential is invalid or has unsafe permissions');
+  }
+
+  const encoded = `${randomBytes(32).toString('base64')}\n`;
+  try {
+    await fs.writeFile(file, encoded, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+
+  const created = await readFallbackKey(file, processUid);
+  if (created.kind !== 'valid') {
+    throw new Error('Linux fallback credential could not be initialized securely');
   }
 }
 
@@ -138,6 +197,7 @@ export function createLinuxCredentialProvider(options: LinuxProviderOptions): Cr
   const scope = options.scope;
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(scope)) throw new Error('Invalid Linux credential scope');
   const secretTool = options.secretTool ?? createSecretToolAdapter(env);
+  const currentUid = options.currentUid ?? processUid;
 
   const externalKey = async (): Promise<{ key: Buffer; detail: 'systemd-credential' | 'environment' } | null> => {
     const credentialDir = env.CREDENTIALS_DIRECTORY;
@@ -155,7 +215,7 @@ export function createLinuxCredentialProvider(options: LinuxProviderOptions): Cr
   };
 
   const source = async (): Promise<
-    | { kind: 'wrap'; key: Buffer; detail: 'systemd-credential' | 'environment' }
+    | { kind: 'wrap'; key: Buffer; detail: 'systemd-credential' | 'environment' | 'profile-fallback' }
     | { kind: 'secret-service'; detail: 'secret-service' }
     | null
   > => {
@@ -163,6 +223,10 @@ export function createLinuxCredentialProvider(options: LinuxProviderOptions): Cr
     const wrapping = await externalKey();
     if (wrapping) return { kind: 'wrap', ...wrapping };
     if (env.DBUS_SESSION_BUS_ADDRESS && (await secretTool.status())) return { kind: 'secret-service', detail: 'secret-service' };
+    if (options.fallbackKeyPath) {
+      const fallback = await readFallbackKey(options.fallbackKeyPath, currentUid);
+      if (fallback.kind === 'valid') return { kind: 'wrap', key: fallback.key, detail: 'profile-fallback' };
+    }
     return null;
   };
 
