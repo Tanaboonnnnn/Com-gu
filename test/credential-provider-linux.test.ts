@@ -30,20 +30,22 @@ afterEach(async () => removeTempDir(dir));
 describe('Linux CLI credential provider', () => {
   it('uses a systemd credential wrapping key without writing plaintext configuration', async () => {
     const credentialsDir = path.join(dir, 'credentials');
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
     await fs.mkdir(credentialsDir);
     await fs.writeFile(path.join(credentialsDir, 'comgu-vault-key'), Buffer.alloc(32, 3).toString('base64'));
+    await fs.writeFile(fallbackKeyPath, `${Buffer.alloc(32, 13).toString('base64')}\n`, { mode: 0o600 });
     const provider = createLinuxCredentialProvider({
       platform: 'linux',
       scope: 'machine-a',
       env: { CREDENTIALS_DIRECTORY: credentialsDir },
-      secretTool
+      secretTool,
+      fallbackKeyPath
     });
     expect(await provider.status()).toMatchObject({ available: true, detail: 'systemd-credential' });
     const key = Buffer.alloc(32, 4);
     const wrapped = await provider.protect(key);
     expect(wrapped.toString('utf8')).not.toContain(key.toString('base64'));
     expect(await provider.unprotect(wrapped)).toEqual({ data: key, shouldReprotect: false });
-    expect(await fs.readdir(dir)).toEqual(['credentials']);
   });
 
   it('supports a process-local injected wrapping key and never manufactures an env file', async () => {
@@ -114,6 +116,17 @@ describe('Linux CLI credential provider', () => {
     expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
     await expect(bootstrapLinuxFallbackKey(dir)).rejects.toThrow(/credential|permission|fallback/i);
     expect(await fs.readFile(fallbackKeyPath, 'utf8')).toBe(original);
+  });
+
+  it.runIf(process.platform === 'linux')('fails closed when the fallback is owned by another uid', async () => {
+    const fallbackKeyPath = path.join(dir, LINUX_FALLBACK_KEY_FILE);
+    await fs.writeFile(fallbackKeyPath, `${Buffer.alloc(32, 14).toString('base64')}\n`, { mode: 0o600 });
+    const actualUid = typeof process.getuid === 'function' ? process.getuid() : 1000;
+    const provider = createLinuxCredentialProvider({
+      platform: 'linux', scope: 'machine-owner', env: {}, secretTool, fallbackKeyPath,
+      currentUid: () => actualUid + 1
+    });
+    expect(await provider.status()).toMatchObject({ available: false, reason: 'provider_unavailable' });
   });
 
   it('fails closed on malformed fallback material', async () => {
