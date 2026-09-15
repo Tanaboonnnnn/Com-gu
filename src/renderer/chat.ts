@@ -31,7 +31,6 @@ import {
 } from '../shared/goal.js';
 import { browserExtensionRequired, type AppState, type Config, type ExtensionPairingView } from '../shared/types.js';
 import { t, type MessageKey } from '../shared/i18n/index.js';
-import type { PendingChatWorkspaceView } from '../preload/index.js';
 import { $, clockTime, compactNumber, el, icon, run, toast, type IpcFailure } from './dom.js';
 
 const api = window.api;
@@ -88,8 +87,6 @@ interface Deps {
 
 let deps: Deps;
 let visible = false;
-let pendingWorkspaceView: PendingChatWorkspaceView | null = null;
-const MANUAL_WORKSPACE_TARGET = '__manual__';
 
 function tr(key: MessageKey, values?: Record<string, string | number>): string {
   const locale = (deps?.state() as Partial<AppState> | null | undefined)?.config?.ui?.locale === 'th' ? 'th' : 'en';
@@ -1043,86 +1040,7 @@ function scopeLabel(scope: { primaryRoot: string; sharedRoots: string[] }): stri
   return [`/${scope.primaryRoot}`, ...scope.sharedRoots.map((name) => `/${name}`)].join(' ยท ');
 }
 
-function pendingWorkspaceSelection(): { target: string; primaryRoot: string; sharedRoots: string[] } | null {
-  const target = $<HTMLSelectElement>('pendingWorkspaceChat').value;
-  const primaryRoot = $<HTMLSelectElement>('pendingWorkspacePrimary').value;
-  if (!target || !primaryRoot) return null;
-  const sharedRoots = [...$('pendingWorkspaceShared').querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
-    .map((input) => input.value)
-    .filter((name) => name !== primaryRoot);
-  return { target, primaryRoot, sharedRoots };
-}
-
-function paintPendingWorkspace(view: PendingChatWorkspaceView, preferredPrimary?: string): void {
-  pendingWorkspaceView = view;
-  const box = $('chatWorkspaceFallback');
-  const manualVisible = view.manual.pending || view.manual.scope !== null;
-  box.hidden = view.pending.length === 0 && !manualVisible;
-  if (box.hidden) return;
-
-  const chat = $<HTMLSelectElement>('pendingWorkspaceChat');
-  const priorChat = chat.value;
-  const choices = [
-    ...view.pending.map(({ conversationId }) => ({ value: conversationId, label: conversationId })),
-    ...(manualVisible ? [{ value: MANUAL_WORKSPACE_TARGET, label: tr('workspaceFallback.withoutExtension') }] : [])
-  ];
-  chat.replaceChildren(
-    ...choices.map((choice) => {
-      const option = document.createElement('option');
-      option.value = choice.value;
-      option.textContent = choice.label;
-      return option;
-    })
-  );
-  chat.value = choices.some((choice) => choice.value === priorChat) ? priorChat : choices[0]!.value;
-
-  const selectedScope = chat.value === MANUAL_WORKSPACE_TARGET ? view.manual.scope : null;
-  const primary = $<HTMLSelectElement>('pendingWorkspacePrimary');
-  const priorPrimary = preferredPrimary ?? selectedScope?.primaryRoot ?? primary.value;
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = tr('agents.choosePrimaryFolder');
-  primary.replaceChildren(
-    placeholder,
-    ...view.roots.map((name) => {
-      const option = document.createElement('option');
-      option.value = name;
-      option.textContent = `/${name}`;
-      return option;
-    })
-  );
-  primary.value = view.roots.includes(priorPrimary) ? priorPrimary : '';
-
-  $('pendingWorkspaceShared').replaceChildren(
-    ...view.roots
-      .filter((name) => name !== primary.value)
-      .map((name) => {
-        const label = el('label', 'run-shared-root');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.value = name;
-        input.checked = selectedScope?.sharedRoots.includes(name) ?? false;
-        label.append(input, el('span', '', `/${name}`));
-        return label;
-      })
-  );
-  $<HTMLButtonElement>('pendingWorkspaceSave').disabled = !primary.value;
-}
-async function refreshPendingWorkspace(): Promise<void> {
-  const view = await run(api.getPendingChatWorkspaces());
-  if (view) paintPendingWorkspace(view);
-}
-function runSelectionFromControls(): { primaryRoot: string; sharedRoots: string[] } | null {
-  const primaryRoot = $<HTMLSelectElement>('runPrimaryRoot').value;
-  if (!primaryRoot) return null;
-  const sharedRoots = [...$('runSharedRoots').querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
-    .map((input) => input.value)
-    .filter((name) => name !== primaryRoot);
-  return { primaryRoot, sharedRoots };
-}
-
 function paintRunWorkspace(state: SwarmState): void {
-  const roots = deps.state()?.config.roots ?? [];
   // Any active Run is immutable from the renderer, including a restored legacy Run with no
   // workspace authority. A null scope is a real fail-closed state, not an invitation to pick a
   // replacement underneath a live incarnation.
@@ -1139,38 +1057,6 @@ function paintRunWorkspace(state: SwarmState): void {
       ? tr('agents.nextRunScope', { scope: scopeLabel(scope) })
       : tr('agents.chooseNextRunScope');
 
-  const picker = $('runWorkspacePicker');
-  picker.hidden = active;
-  const primary = $<HTMLSelectElement>('runPrimaryRoot');
-  const selectedPrimary = scope?.primaryRoot ?? '';
-  primary.replaceChildren();
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = tr('agents.choosePrimaryFolder');
-  primary.append(placeholder);
-  for (const root of roots) {
-    const option = document.createElement('option');
-    option.value = root.name;
-    option.textContent = `/${root.name}`;
-    primary.append(option);
-  }
-  primary.value = roots.some((root) => root.name === selectedPrimary) ? selectedPrimary : '';
-  primary.disabled = roots.length === 0;
-
-  const shared = $('runSharedRoots');
-  shared.replaceChildren(
-    ...roots
-      .filter((root) => root.name !== primary.value)
-      .map((root) => {
-        const label = el('label', 'run-shared-root');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.value = root.name;
-        input.checked = scope?.sharedRoots.includes(root.name) ?? false;
-        label.append(input, el('span', '', `/${root.name}`));
-        return label;
-      })
-  );
 }
 
 function paintCommandSandbox(state: AppState): void {
@@ -1588,7 +1474,7 @@ export function chatVisible(next: boolean): void {
 }
 
 async function refreshAll(): Promise<void> {
-  await Promise.all([loadSessions(), refreshPendingWorkspace()]);
+  await loadSessions();
   const swarmNow = await run(api.getSwarm());
   if (swarmNow) paintSwarm(swarmNow);
 }
@@ -1679,48 +1565,6 @@ export function initChat(next: Deps): void {
     }
   });
 
-  $('pendingWorkspacePrimary').addEventListener('change', () => {
-    if (!pendingWorkspaceView) return;
-    paintPendingWorkspace(pendingWorkspaceView, $<HTMLSelectElement>('pendingWorkspacePrimary').value);
-  });
-
-  $('pendingWorkspaceSave').addEventListener('click', async () => {
-    const selection = pendingWorkspaceSelection();
-    if (!selection) return;
-    const button = $<HTMLButtonElement>('pendingWorkspaceSave');
-    button.disabled = true;
-    try {
-      const scope = { primaryRoot: selection.primaryRoot, sharedRoots: selection.sharedRoots };
-      const next = await run(
-        selection.target === MANUAL_WORKSPACE_TARGET
-          ? api.setManualChatWorkspace(scope)
-          : api.setPendingChatWorkspace(selection.target, scope)
-      );
-      if (next) paintPendingWorkspace(next);
-    } finally {
-      if (pendingWorkspaceView && (pendingWorkspaceView.pending.length > 0 || pendingWorkspaceView.manual.pending || pendingWorkspaceView.manual.scope !== null)) button.disabled = false;
-    }
-  });
-  $('runPrimaryRoot').addEventListener('change', async () => {
-    const state = swarm;
-    if (!state || state.running) return;
-    const selected = runSelectionFromControls();
-    paintRunWorkspace({ ...state, selectedWorkspaceScope: selected });
-    const selection = runSelectionFromControls();
-    if (!selection) return;
-    const next = await run(api.setRunWorkspaceScope(selection));
-    if (next) paintSwarm(next);
-  });
-
-  $('runSharedRoots').addEventListener('change', async () => {
-    const state = swarm;
-    if (!state || state.running) return;
-    const selection = runSelectionFromControls();
-    if (!selection) return;
-    const next = await run(api.setRunWorkspaceScope(selection));
-    if (next) paintSwarm(next);
-  });
-
   $('commandSandboxPrepare').addEventListener('click', async () => {
     const button = $<HTMLButtonElement>('commandSandboxPrepare');
     button.disabled = true;
@@ -1783,6 +1627,5 @@ export function initChat(next: Deps): void {
   });
 
   api.onSessionChanged(scheduleReload);
-  api.onPendingChatWorkspacesChanged(paintPendingWorkspace);
   api.onSwarmChanged(paintSwarm);
 }

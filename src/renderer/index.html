@@ -630,30 +630,6 @@
                     <span class="unit" data-i18n="chat.max">max</span>
                   </div>
 
-                  <section class="chat-workspace-fallback" id="chatWorkspaceFallback" hidden>
-                    <span class="setting-text">
-                      <b data-i18n="workspaceFallback.title">Workspace required</b>
-                      <em data-i18n="workspaceFallback.detail">A ChatGPT conversation tried to use files or commands without a workspace. Choose approved folders here, then retry the tool.</em>
-                    </span>
-                    <div class="run-workspace-picker">
-                      <div class="field">
-                        <label for="pendingWorkspaceChat" data-i18n="workspaceFallback.chat">ChatGPT conversation</label>
-                        <select id="pendingWorkspaceChat"></select>
-                      </div>
-                      <div class="field">
-                        <label for="pendingWorkspacePrimary" data-i18n="agents.primaryFolder">Primary folder</label>
-                        <select id="pendingWorkspacePrimary"></select>
-                      </div>
-                    </div>
-                    <div class="field">
-                      <span class="field-label" data-i18n="agents.sharedFolders">Shared folders</span>
-                      <div class="run-shared-roots" id="pendingWorkspaceShared"></div>
-                    </div>
-                    <div class="step-actions">
-                      <button class="btn btn-solid" id="pendingWorkspaceSave" type="button" data-i18n="workspaceFallback.save">Allow for this chat</button>
-                    </div>
-                  </section>
-
                   <section class="run-workspace" id="runWorkspace">
                     <div class="run-workspace-head">
                       <span class="setting-text">
@@ -661,16 +637,6 @@
                         <em id="runWorkspaceSummary"></em>
                       </span>
                       <span class="chip" id="runIdChip" hidden></span>
-                    </div>
-                    <div class="run-workspace-picker" id="runWorkspacePicker">
-                      <div class="field">
-                        <label for="runPrimaryRoot" data-i18n="agents.primaryFolder">Primary folder</label>
-                        <select id="runPrimaryRoot"></select>
-                      </div>
-                      <div class="field">
-                        <span class="field-label" data-i18n="agents.sharedFolders">Shared folders</span>
-                        <div class="run-shared-roots" id="runSharedRoots"></div>
-                      </div>
                     </div>
                   </section>
 

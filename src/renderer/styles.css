@@ -1009,12 +1009,39 @@ main {
 }
 
 .root-enabled-toggle {
-  width: 34px;
-  height: 18px;
+  appearance: none;
+  width: 36px;
+  height: 20px;
   margin: 0;
-  accent-color: var(--blue);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--faint);
   cursor: pointer;
   flex: 0 0 auto;
+  position: relative;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.root-enabled-toggle::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 28%);
+  transition: transform 120ms ease;
+}
+
+.root-enabled-toggle:checked {
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.root-enabled-toggle:checked::after {
+  transform: translateX(16px);
 }
 
 .root-enabled-toggle:disabled {

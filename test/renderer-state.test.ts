@@ -458,108 +458,22 @@ async function mountChat(
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-it('assigns approved root names only to the exact pending Chat workspace and hides the fallback after save', async () => {
-  const writes: any[] = [];
-  let fallback = { roots: ['repo', 'shared'], pending: [{ conversationId: 'chat-needs-workspace' }], manual: { pending: false, scope: null as any } };
-  const mounted = await mountChat(
-    { config: {
-      roots: [{ name: 'repo', path: 'C:\\repo' }, { name: 'shared', path: 'D:\\shared' }],
-      readOnly: false,
-      capabilities: { browse: true, search: true, read: true, metadata: true, create: true, edit: true, move: true, deleteFile: true, command: true, screen: true, control: true, clipboardRead: true, clipboardWrite: true },
-      tunnel: { kind: 'openai', tunnelId: 'tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', desktopTunnelId: '', binaryPath: '' },
-      ui: { minimizeToTray: true, autoConnect: false, privacyScreenshots: false, theme: 'light', locale: 'en' },
-      sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
-      compaction: { auto: true, autoTokens: 300000 },
-      multiAgent: { enabled: false, maxWorkers: 2 },
-      goal: { enabled: false, model: 'deepseek/deepseek-v4-flash', reasoning: 'default', prompt: DEFAULT_GOAL_SYSTEM_PROMPT }
-    } },
-    [],
-    {
-      getPendingChatWorkspaces: () => Promise.resolve({ ok: true, data: structuredClone(fallback) }),
-      setPendingChatWorkspace: (conversationId: string, scope: any) => {
-        writes.push({ conversationId, scope: structuredClone(scope) });
-        fallback = { ...fallback, pending: [] };
-        return Promise.resolve({ ok: true, data: structuredClone(fallback) });
-      }
-    }
-  );
-  const doc = mounted.window.document;
-  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
-  await settle(); await settle();
-
-  const box = doc.getElementById('chatWorkspaceFallback') as HTMLElement;
-  expect(box.hidden).toBe(false);
-  expect(box.textContent).toContain('chat-needs-workspace');
-  expect(box.textContent).not.toContain('C:\\repo');
-  expect(box.textContent).not.toContain('D:\\shared');
-  const primary = doc.getElementById('pendingWorkspacePrimary') as HTMLSelectElement;
-  expect([...primary.options].map((option) => option.value).filter(Boolean)).toEqual(['repo', 'shared']);
-  primary.value = 'repo';
-  primary.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
-  const shared = doc.querySelector<HTMLInputElement>('#pendingWorkspaceShared input[value="shared"]')!;
-  shared.checked = true;
-  (doc.getElementById('pendingWorkspaceSave') as HTMLButtonElement).click();
-  await settle(); await settle();
-
-  expect(writes).toEqual([{ conversationId: 'chat-needs-workspace', scope: { primaryRoot: 'repo', sharedRoots: ['shared'] } }]);
-  expect(box.hidden).toBe(true);
-});
-
-it('shows a newly pending Chat workspace immediately while the Chat panel is already open', async () => {
-  let pendingListener: ((view: any) => void) | null = null;
+it('does not expose or poll the retired chat-bound workspace picker', async () => {
+  let fallbackCalls = 0;
   const mounted = await mountChat({}, [], {
-    getPendingChatWorkspaces: () => Promise.resolve({ ok: true, data: { roots: ['repo'], pending: [], manual: { pending: false, scope: null } } }),
-    onPendingChatWorkspacesChanged: (listener: (view: any) => void) => {
-      pendingListener = listener;
-      return () => undefined;
-    }
-  });
-  const doc = mounted.window.document;
-  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
-  await settle(); await settle();
-  expect((doc.getElementById('chatWorkspaceFallback') as HTMLElement).hidden).toBe(true);
-
-  expect(pendingListener).not.toBeNull();
-  pendingListener!({ roots: ['repo'], pending: [{ conversationId: 'chat-live-pending' }], manual: { pending: false, scope: null } });
-  expect((doc.getElementById('chatWorkspaceFallback') as HTMLElement).hidden).toBe(false);
-  expect(doc.getElementById('pendingWorkspaceChat')!.textContent).toContain('chat-live-pending');
-});
-
-it('lets the user explicitly choose approved roots for an unidentified no-extension fallback', async () => {
-  const writes: any[] = [];
-  let fallback = {
-    roots: ['repo', 'shared'],
-    pending: [],
-    manual: { pending: true, scope: null as any }
-  };
-  const mounted = await mountChat({}, [], {
-    getPendingChatWorkspaces: () => Promise.resolve({ ok: true, data: structuredClone(fallback) }),
-    setManualChatWorkspace: (scope: any) => {
-      writes.push(structuredClone(scope));
-      fallback = { ...fallback, manual: { pending: false, scope: structuredClone(scope) } };
-      return Promise.resolve({ ok: true, data: structuredClone(fallback) });
+    getPendingChatWorkspaces: () => {
+      fallbackCalls += 1;
+      return Promise.resolve({ ok: true, data: { roots: ['repo'], pending: [{ conversationId: 'obsolete' }], manual: { pending: true, scope: null } } });
     }
   });
   const doc = mounted.window.document;
   (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
   await settle(); await settle();
 
-  const box = doc.getElementById('chatWorkspaceFallback') as HTMLElement;
-  expect(box.hidden).toBe(false);
-  const chat = doc.getElementById('pendingWorkspaceChat') as HTMLSelectElement;
-  expect([...chat.options].map((option) => option.value)).toContain('__manual__');
-  expect(chat.textContent).toMatch(/without extension|ไม่มี Extension/i);
-
-  const primary = doc.getElementById('pendingWorkspacePrimary') as HTMLSelectElement;
-  primary.value = 'repo';
-  primary.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
-  const shared = doc.querySelector<HTMLInputElement>('#pendingWorkspaceShared input[value="shared"]')!;
-  shared.checked = true;
-  (doc.getElementById('pendingWorkspaceSave') as HTMLButtonElement).click();
-  await settle(); await settle();
-
-  expect(writes).toEqual([{ primaryRoot: 'repo', sharedRoots: ['shared'] }]);
-  expect(box.hidden).toBe(false);
+  expect(fallbackCalls).toBe(0);
+  expect(doc.getElementById('chatWorkspaceFallback')).toBeNull();
+  expect(doc.getElementById('pendingWorkspacePrimary')).toBeNull();
+  expect(doc.getElementById('pendingWorkspaceSave')).toBeNull();
 });
 it('shows the active Run id and name-only effective scopes for prime and workers', async () => {
   const activeSwarm = {
@@ -604,7 +518,7 @@ it('shows the active Run id and name-only effective scopes for prime and workers
   expect(`${doc.getElementById('runWorkspace')!.textContent}${doc.getElementById('swarmList')!.textContent}`).not.toContain('C:\\repo');
 });
 
-it('keeps the scope picker closed for an active scope-less Run instead of offering authority mutation', async () => {
+it('shows an active scope-less Run as diagnostics without exposing a scope picker', async () => {
   const mounted = await mountChat({}, [], {
     getSwarm: () => Promise.resolve({
       ok: true,
@@ -624,12 +538,11 @@ it('keeps the scope picker closed for an active scope-less Run instead of offeri
   await settle();
   await settle();
 
-  expect((doc.getElementById('runWorkspacePicker') as HTMLElement).hidden).toBe(true);
+  expect(doc.getElementById('runWorkspacePicker')).toBeNull();
   expect(doc.getElementById('runWorkspaceSummary')!.textContent).toMatch(/No workspace scope/i);
 });
 
-it('selects the next Run only from approved root names and exposes explicit sandbox preparation', async () => {
-  const scopes: any[] = [];
+it('keeps Run scope selection out of the UI and exposes explicit sandbox preparation', async () => {
   let prepares = 0;
   const mounted = await mountChat(
     {
@@ -655,13 +568,6 @@ it('selects the next Run only from approved root names and exposes explicit sand
           agents: []
         }
       }),
-      setRunWorkspaceScope: (scope: any) => {
-        scopes.push(structuredClone(scope));
-        return Promise.resolve({ ok: true, data: {
-          enabled: true, running: false, runId: null, workspaceScope: null,
-          selectedWorkspaceScope: scope, retainedHistory: false, agents: []
-        } });
-      },
       prepareCommandSandbox: () => {
         prepares += 1;
         return Promise.resolve({ ok: true, data: mounted.state });
@@ -673,18 +579,12 @@ it('selects the next Run only from approved root names and exposes explicit sand
   await settle();
   await settle();
 
-  const primary = doc.getElementById('runPrimaryRoot') as HTMLSelectElement;
-  expect([...primary.options].map((option) => option.value).filter(Boolean)).toEqual(['repo']);
-  expect(doc.querySelector<HTMLInputElement>('#runSharedRoots input[value="C:\\repo"]')).toBeNull();
+  expect(doc.getElementById('runPrimaryRoot')).toBeNull();
+  expect(doc.getElementById('runSharedRoots')).toBeNull();
   expect(doc.getElementById('commandSandboxState')!.textContent).toMatch(/unavailable|not ready|fail closed/i);
   expect(doc.getElementById('commandSandboxState')!.textContent).not.toContain('windows_host_preparation_required');
   const prepare = doc.getElementById('commandSandboxPrepare') as HTMLButtonElement;
   expect(prepare.hidden).toBe(false);
-
-  primary.value = 'repo';
-  primary.dispatchEvent(new mounted.window.Event('change', { bubbles: true }));
-  await settle();
-  expect(scopes.at(-1)).toEqual({ primaryRoot: 'repo', sharedRoots: [] });
 
   prepare.click();
   await settle();

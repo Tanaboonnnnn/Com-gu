@@ -47,7 +47,7 @@ import {
 import { installOptionalAgentsRuntime } from '../src/main/mcp/optional-runtime.js';
 import * as agentsRuntime from '../src/main/agents.js';
 import { IS_WINDOWS, makeTempDir, removeTempDir, writeTree } from './helpers.js';
-import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests, setManualWorkspaceScope } from '../src/main/chat-workspace-scope.js';
+import { resetChatWorkspaceScopesForTests, setChatWorkspaceScopeForTests } from '../src/main/chat-workspace-scope.js';
 import type { DesktopDriver } from '../src/main/desktop/driver.js';
 
 // ---------------------------------------------------------------- transport
