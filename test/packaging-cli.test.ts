@@ -52,7 +52,8 @@ describe('CLI packaging contract', () => {
     const npmJob = publish.slice(npmJobStart);
     expect(npmJob).toContain('id-token: write');
     expect(npmJob).toContain('node-version: 24');
-    expect(npmJob).not.toContain('registry-url: https://registry.npmjs.org');
+    expect(npmJob).toContain('actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38');
+    expect(npmJob).toContain('registry-url: https://registry.npmjs.org');
     expect(npmJob).toContain("npm install --global 'npm@^11.15.0'");
     expect(npmJob).toContain('npm publish ./packages/comgu-cli --access public --provenance');
     expect(npmJob).not.toContain('NPM_TOKEN');
