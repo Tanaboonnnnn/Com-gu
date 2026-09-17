@@ -8,6 +8,16 @@ name: Publish release
 # pipeline in that tag's own tree.
 on:
   workflow_dispatch:
+    inputs:
+      npm_only:
+        description: Publish only comgu-cli to npm for an already-created GitHub Release
+        required: false
+        default: false
+        type: boolean
+      version:
+        description: Version to recover when npm_only is true (for example 3.3.1)
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -22,6 +32,7 @@ concurrency:
 jobs:
   preflight:
     name: Preflight
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.npm_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -120,20 +131,20 @@ jobs:
   candidate:
     name: Build candidate
     needs: preflight
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.npm_only) }}
     uses: ./.github/workflows/release.yml
 
   publish:
     name: Publish
     needs: candidate
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.npm_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
-      id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       # A branch has no version guarantee — release.yml only checks the tag against
@@ -202,17 +213,63 @@ jobs:
             --notes-file "docs/release-notes/$TAG.md"
           gh release view "$TAG" --json url --jq .url
 
+
+  npm-publish:
+    name: Publish npm package
+    needs: publish
+    if: ${{ always() && ((github.event_name == 'workflow_dispatch' && inputs.npm_only) || needs.publish.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout recovery tag
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_only }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ format('v{0}', inputs.version) }}
+
+      - name: Checkout release ref
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.npm_only) }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Resolve and verify npm version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.npm_only }}" = "true" ]; then
+            VERSION="${{ inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              echo "version is required when npm_only is true" >&2
+              exit 1
+            fi
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          package_version="$(node -p "require('./packages/comgu-cli/package.json').version")"
+          if [ "$package_version" != "$VERSION" ]; then
+            echo "comgu-cli version $package_version does not match requested $VERSION" >&2
+            exit 1
+          fi
+          gh release view "v$VERSION" >/dev/null
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Publish comgu-cli to npm
-        if: ${{ env.NPM_TOKEN != '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+      - name: Publish comgu-cli to npm with OIDC
         run: |
           set -euo pipefail
           npm install --global 'npm@^11.15.0'
+          if npm view "comgu-cli@$VERSION" version >/dev/null 2>&1; then
+            echo "comgu-cli@$VERSION is already published; nothing to do."
+            exit 0
+          fi
           npm publish ./packages/comgu-cli --access public --provenance
