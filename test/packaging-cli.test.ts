@@ -45,12 +45,26 @@ describe('CLI packaging contract', () => {
     expect(bootstrapPackage.files).toEqual(['bin/', 'lib/', 'README.md']);
   });
 
-  it('does not make GitHub Release publication depend on an npm registry token', () => {
+  it('publishes npm through GitHub OIDC without a long-lived registry token', () => {
     const publish = readFileSync('.github/workflows/publish.yml', 'utf8');
-    const publishJob = publish.slice(publish.indexOf('  publish:'), publish.indexOf('    steps:', publish.indexOf('  publish:')));
-    const npmStep = publish.slice(publish.indexOf('      - name: Publish comgu-cli to npm'));
-    expect(publishJob).toContain('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}');
-    expect(npmStep).toContain("if: ${{ env.NPM_TOKEN != '' }}");
-    expect(npmStep).not.toContain('secrets.NPM_TOKEN');
+    const npmJobStart = publish.indexOf('  npm-publish:');
+    expect(npmJobStart).toBeGreaterThan(-1);
+    const npmJob = publish.slice(npmJobStart);
+    expect(npmJob).toContain('id-token: write');
+    expect(npmJob).toContain('node-version: 24');
+    expect(npmJob).toContain("npm install --global 'npm@^11.15.0'");
+    expect(npmJob).toContain('npm publish ./packages/comgu-cli --access public --provenance');
+    expect(npmJob).not.toContain('NPM_TOKEN');
+    expect(npmJob).not.toContain('NODE_AUTH_TOKEN');
+    expect(npmJob).not.toContain('secrets.NPM_TOKEN');
+  });
+
+  it('supports an npm-only recovery publish without recreating an existing GitHub Release', () => {
+    const publish = readFileSync('.github/workflows/publish.yml', 'utf8');
+    expect(publish).toContain('npm_only:');
+    expect(publish).toContain('version:');
+    expect(publish).toContain("github.event_name == 'workflow_dispatch' && inputs.npm_only");
+    expect(publish).toContain('gh release view \"v$VERSION\"');
+    expect(publish).toContain('package_version=');
   });
 });
