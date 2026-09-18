@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.3.2] - 2026-09-19
+
+3.3.2 fixes project/GPT chat URL recognition and completes tokenless npm Trusted Publishing for `comgu-cli`.
+
+### Fixed
+- ChatGPT project/GPT routes such as `/g/<project-or-gpt>/c/<conversation-id>` now resolve the final conversation id correctly.
+- Existing project chat tabs can be reused instead of being missed by the extension and duplicated by revival fallback behavior.
+- Ordinary `/c/<id>` and legacy `chat.openai.com/c/<id>` routes remain supported.
+
+### Release infrastructure
+- npm publishing now uses GitHub Actions OIDC Trusted Publishing with direct publish permission and provenance, without a long-lived npm token.
+- CLI npm installs continue to bootstrap the same checksummed GitHub Release payload as the shell and PowerShell installers.
 ## [3.3.1] - 2026-09-16
 
 3.3.1 makes headless Linux CLI setup self-contained and aligns folder authority switches with the rest of the ComGu UI.
