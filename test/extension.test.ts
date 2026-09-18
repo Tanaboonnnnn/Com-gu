@@ -1413,6 +1413,28 @@ describe('extension revival delivery', () => {
     expect(worker.windowsUpdate).not.toHaveBeenCalled();
   });
 
+  it('reuses an already-open ChatGPT project chat whose conversation id is the final path segment', async () => {
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch: quiet() });
+    worker.tabsQuery.mockResolvedValue([{
+      id: 4,
+      windowId: 7,
+      url: 'https://chatgpt.com/g/g-6a7004ee0584819186740928ba5aa1ce-os/c/' + CHAT
+    }]);
+    worker.tabsSendMessage.mockImplementation(async (_id: number, message: { type: string }) =>
+      message.type === 'clf-recorder-ping'
+        ? { ok: true, recorderVersion: 10 }
+        : { ok: true, claimed: true }
+    );
+
+    await worker.createTab({ id: 12, pendingUrl: REVIVAL_URL });
+
+    expect(worker.tabsSendMessage).toHaveBeenCalledWith(4, {
+      type: 'clf-run-command',
+      id: 'cmd-wake',
+      conversationId: CHAT
+    });
+    expect(worker.tabsRemove).toHaveBeenCalledWith(12);
+  });
   it('reuses a supported legacy chat.openai.com worker tab', async () => {
     const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch: quiet() });
     worker.tabsQuery.mockResolvedValue([{ id: 4, windowId: 7, url: `https://chat.openai.com/c/${CHAT}` }]);
