@@ -1699,7 +1699,10 @@ function conversationFromUrl(value) {
   try {
     const url = new URL(String(value || ''));
     if (url.protocol !== 'https:' || (url.hostname !== 'chatgpt.com' && url.hostname !== 'chat.openai.com')) return null;
-    const match = /^\/c\/([0-9a-f-]{8,64})/i.exec(url.pathname);
+    // Ordinary chats use /c/<id>. Project/GPT chats can prefix that route, e.g.
+    // /g/<project-or-gpt-slug>/c/<id>. In both forms the conversation id is the
+    // final path segment after /c/; never infer identity from the project slug.
+    const match = /(?:^|\/)c\/([0-9a-f-]{8,64})\/?$/i.exec(url.pathname);
     return match ? match[1] : null;
   } catch {
     return null;
