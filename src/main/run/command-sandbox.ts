@@ -480,7 +480,8 @@ async function runtimePolicy(
     env: {
       ...env,
       Path: `${mirror}${path.delimiter}${originalPath}`,
-      PATH: `${mirror}${path.delimiter}${originalPath}`
+      PATH: `${mirror}${path.delimiter}${originalPath}`,
+      NODE_PRESERVE_SYMLINKS_MAIN: '1'
     }
   };
 }
