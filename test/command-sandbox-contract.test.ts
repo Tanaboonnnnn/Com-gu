@@ -148,6 +148,15 @@ describe('command sandbox confinement contract', () => {
     expect(source).toMatch(/runtimeMirror[\s\S]{0,900}validateNodeRuntimeMirror/);
   });
 
+  it('keeps npm entry-script resolution inside the verified runtime mirror on Windows', async () => {
+    const source = await fs.readFile(
+      path.join(process.cwd(), 'src', 'main', 'run', 'command-sandbox.ts'),
+      'utf8'
+    );
+
+    expect(source).toContain("NODE_PRESERVE_SYMLINKS_MAIN: '1'");
+  });
+
   it.skipIf(process.platform !== 'win32')('requires host preparation before returning a usable capability', () => {
     const preparation = commandSandboxHostPreparation();
     if (preparation.required) {
