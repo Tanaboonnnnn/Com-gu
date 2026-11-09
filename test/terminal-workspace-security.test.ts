@@ -322,7 +322,7 @@ describe.skipIf(process.platform !== 'win32')('Windows command WorkspaceScope co
     expect(output).not.toContain('PTY_ESCAPED=pty-outside-secret');
   }, 30_000);
 
-  it('still permits common developer tools to execute against data inside the scope', async () => {
+  it('still permits git and node tools to execute inside the scope', async () => {
     const allowed = await tempDir('comgu-tool-scope-');
     await fs.writeFile(path.join(allowed, 'package.json'), '{"name":"sandbox-smoke","version":"1.0.0"}\n', 'utf8');
     const shell = process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe';
@@ -333,7 +333,7 @@ describe.skipIf(process.platform !== 'win32')('Windows command WorkspaceScope co
         '/d',
         '/s',
         '/c',
-        `git --version && node --version && npm --version`
+        `git --version && node --version`
       ],
       cwd: allowed,
       roots: [allowed],

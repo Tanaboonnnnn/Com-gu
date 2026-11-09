@@ -295,7 +295,7 @@ async function queryWindowsChildRows(
   });
 }
 
-async function snapshotWindowsDescendants(rootPid: number, timeoutMs = 4_000): Promise<number[]> {
+async function snapshotWindowsDescendants(rootPid: number, timeoutMs = 12_000): Promise<number[]> {
   const deadline = Date.now() + Math.max(100, timeoutMs);
   const rows: WindowsProcessRow[] = [];
   const seen = new Set<number>([rootPid]);
