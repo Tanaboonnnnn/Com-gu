@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.3] - 2026-11-09
+
+### Security and reliability
+- Persist independent, high-entropy Core and Desktop MCP URL bearer secrets across app restarts.
+- Keep existing MCP paths private; corrupted credential files fail closed instead of silently rotating connector URLs.
+- Local server remains loopback-only; this release does not publish a public HTTPS hostname or create a Cloudflare named tunnel.
+
 ## [3.3.2] - 2026-09-19
 
 3.3.2 fixes project/GPT chat URL recognition and completes tokenless npm Trusted Publishing for `comgu-cli`.
@@ -107,7 +114,7 @@ the app refuses the extension and asks you to reload the matching copy.
 - Explicit browser Disconnect, exact extension-origin approval, `CALLER_IDENTITY_REQUIRED`, WorkspaceScope, MXC confinement, permission gates, and exact-search behavior are unchanged.
 - Release targets remain Windows x64/ARM64, macOS ARM64, Linux x64/ARM64. macOS artifacts remain unsigned and unnotarized.
 
-## [3.1.3] — 2026-09-07
+## [3.1.3] ï¿½ 2026-09-07
 
 3.1.3 hardens child-process credential isolation, browser-extension pairing, outbound-destination review and release security gates without changing ComGu's workspace or exact-search model.
 

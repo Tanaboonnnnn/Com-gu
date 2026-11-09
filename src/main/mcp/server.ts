@@ -22,7 +22,10 @@ import { requestIdFromHeader, withInboundRequestId } from './inbound.js';
 import http from 'node:http';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { localhostHostValidation, localhostOriginValidation, toNodeHandler } from '@modelcontextprotocol/node';
-import { getConfig } from '../config.js';
+import { getConfig, mcpCredentialDirectory } from '../config.js';
+import { loadOrCreateMcpSecrets } from './credential.js';
+import { listenOnLoopback } from './listen.js';
+
 import { logError, logInfo, logWarn } from '../logger.js';
 import { buildServer, resetToolClock, type ToolContext } from './tools.js';
 import { SURFACE_IDS, surfaceDefinition, type SurfaceId } from './surfaces.js';
@@ -278,6 +281,7 @@ export async function startMcpServer(
     : undefined;
   // A per-session token in the path is what authorises callers. It is regenerated on
   // every app start, so a URL that leaks stops working when the app restarts.
+  const persistentSecrets = await loadOrCreateMcpSecrets(mcpCredentialDirectory());
   requestSeenAt = null;
   surfaceRequestAt.clear();
   resetToolClock();
@@ -289,7 +293,7 @@ export async function startMcpServer(
   // Desktop" and "give me everything" the same act.
   const surfacePaths = SURFACE_IDS.map((id) => ({
     id,
-    basePath: `/mcp/${id}/${randomBytes(32).toString('base64url')}`
+    basePath: `/mcp/${id}/${persistentSecrets[id]}`
   }));
 
   // ChatGPT can keep a cached tools/list snapshot for the lifetime of a connector
@@ -443,13 +447,7 @@ export async function startMcpServer(
   server.requestTimeout = 300_000;
   server.maxRequestsPerSocket = 0;
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      server.removeListener('error', reject);
-      resolve();
-    });
-  });
+  await listenOnLoopback(server);
 
   const address = server.address();
   if (address === null || typeof address === 'string') {

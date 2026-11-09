@@ -414,6 +414,11 @@ export function initConfigPath(userDataDir: string): void {
   configPath = path.join(userDataDir, 'config.json');
 }
 
+export function mcpCredentialDirectory(): string {
+  if (!configPath) throw new Error('Config path is not initialized');
+  return path.dirname(configPath);
+}
+
 export async function loadConfig(): Promise<Config> {
   try {
     const raw = await fs.readFile(configPath, 'utf8');
