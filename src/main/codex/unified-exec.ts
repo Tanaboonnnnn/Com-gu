@@ -761,7 +761,7 @@ interface ProcessEntry {
 
 export class UnifiedExecProcessManager {
   private readonly processes = new Map<number, ProcessEntry>();
-  private readonly reservedProcessIds = new Set<number>();
+  private readonly reservedProcessIds = new Map<number, symbol>();
   private readonly maxWriteStdinYieldTimeMs: number;
 
   constructor(maxWriteStdinYieldTimeMs: number) {
@@ -773,7 +773,7 @@ export class UnifiedExecProcessManager {
     for (;;) {
       const processId = 1_000 + Math.floor(Math.random() * (100_000 - 1_000));
       if (this.reservedProcessIds.has(processId)) continue;
-      this.reservedProcessIds.add(processId);
+      this.reservedProcessIds.set(processId, Symbol('terminal session reservation'));
       return processId;
     }
   }
@@ -784,11 +784,15 @@ export class UnifiedExecProcessManager {
   }
 
   async execCommand(request: ExecCommandRequest): Promise<ExecCommandToolOutput> {
+    const reservation = this.reservedProcessIds.get(request.processId);
+    const releaseReservation = () => {
+      if (this.reservedProcessIds.get(request.processId) === reservation) this.releaseProcessId(request.processId);
+    };
     let process: UnifiedExecProcess;
     try {
       this.ensureProcessCapacity(request.processId);
     } catch (error) {
-      this.releaseProcessId(request.processId);
+      releaseReservation();
       throw error;
     }
     try {
@@ -805,7 +809,7 @@ export class UnifiedExecProcessManager {
         ...(request.sandbox ? { sandboxRoots: request.sandbox.roots } : {})
       });
     } catch (error) {
-      this.releaseProcessId(request.processId);
+      releaseReservation();
       throw error instanceof UnifiedExecError
         ? error
         : UnifiedExecError.createProcess(error instanceof Error ? error.message : String(error));
@@ -839,14 +843,15 @@ export class UnifiedExecProcessManager {
 
     const failure = process.failureMessage();
     if (failure !== null) {
-      this.releaseProcessId(request.processId);
+      if (processStartedAlive) this.releaseProcessIfCurrent(request.processId, process);
+      else releaseReservation();
       throw UnifiedExecError.processFailed(failure);
     }
 
     let responseProcessId: number | null;
     let exitCode: number | null;
     if (processStartedAlive) {
-      const status = this.refreshProcessState(request.processId);
+      const status = this.refreshProcessState(request.processId, process, true);
       if (status.kind === 'alive') {
         responseProcessId = status.processId;
         exitCode = status.exitCode;
@@ -857,7 +862,7 @@ export class UnifiedExecProcessManager {
         throw UnifiedExecError.unknownProcessId(request.processId);
       }
     } else {
-      this.releaseProcessId(request.processId);
+      releaseReservation();
       responseProcessId = null;
       exitCode = process.exitCode();
     }
@@ -895,7 +900,7 @@ export class UnifiedExecProcessManager {
           supplied.scopeFingerprint !== expected.scopeFingerprint));
     if (authorityMismatch) {
       if (!entry.process.hasExited()) await entry.process.terminate();
-      this.releaseProcessId(request.processId);
+      this.releaseProcessIfCurrent(request.processId, entry.process);
       throw UnifiedExecError.workspaceSessionStale();
     }
     const locked = entry.process;
@@ -922,12 +927,12 @@ export class UnifiedExecProcessManager {
             // A brief window so the child's reaction is more likely to land in the poll below.
             await sleep(100);
           } catch (error) {
-            const status = this.refreshProcessState(request.processId);
+            const status = this.refreshProcessState(request.processId, process);
             if (status.kind === 'exited') {
               statusAfterWrite = status;
             } else if (error instanceof UnifiedExecError && error.kind === 'process_failed') {
               await process.terminate();
-              this.releaseProcessId(request.processId);
+              this.releaseProcessIfCurrent(request.processId, process);
               throw error;
             } else {
               throw error;
@@ -962,11 +967,11 @@ export class UnifiedExecProcessManager {
 
       const failure = process.failureMessage();
       if (failure !== null) {
-        this.releaseProcessId(request.processId);
+        this.releaseProcessIfCurrent(request.processId, process);
         throw UnifiedExecError.processFailed(failure);
       }
 
-      const status = statusAfterWrite ?? this.refreshProcessState(request.processId);
+      const status = statusAfterWrite ?? this.refreshProcessState(request.processId, process);
       let responseProcessId: number | null;
       let exitCode: number | null;
       if (status.kind === 'alive') {
@@ -975,9 +980,6 @@ export class UnifiedExecProcessManager {
       } else if (status.kind === 'exited') {
         responseProcessId = null;
         exitCode = status.exitCode;
-      } else if (process.hasExited()) {
-        responseProcessId = null;
-        exitCode = process.exitCode();
       } else {
         throw UnifiedExecError.unknownProcessId(request.processId);
       }
@@ -1041,12 +1043,26 @@ export class UnifiedExecProcessManager {
     );
   }
 
-  private refreshProcessState(processId: number): ProcessStatus {
+  private releaseProcessIfCurrent(processId: number, expected: UnifiedExecProcess): void {
+    if (this.processes.get(processId)?.process === expected) this.releaseProcessId(processId);
+  }
+
+  private refreshProcessState(
+    processId: number,
+    expected: UnifiedExecProcess,
+    initialExec = false
+  ): ProcessStatus {
     const entry = this.processes.get(processId);
-    if (!entry) return { kind: 'unknown' };
-    const exitCode = entry.process.exitCode();
-    if (entry.process.hasExited()) {
-      this.releaseProcessId(processId);
+    const exitCode = expected.exitCode();
+    // An in-flight call can complete its own already-exited process, but a recycled
+    // numeric ID is never permission to read or release the replacement session.
+    if (entry?.process !== expected) {
+      return expected.hasExited() ? { kind: 'exited', exitCode } : { kind: 'unknown' };
+    }
+    if (expected.hasExited()) {
+      // A concurrent write_stdin may observe exit first. Leave the reservation until
+      // the original exec response sees the same terminal state.
+      if (initialExec || !entry.initialExecCommandActive) this.releaseProcessId(processId);
       return { kind: 'exited', exitCode };
     }
     return { kind: 'alive', exitCode, processId: entry.processId };
@@ -1064,7 +1080,7 @@ export class UnifiedExecProcessManager {
     // each observe one free slot and collectively insert a 65th live process.
     while (this.reservedProcessIds.size > MAX_UNIFIED_EXEC_PROCESSES) {
       const exited = [...this.processes.values()]
-        .filter((entry) => entry.process.hasExited())
+        .filter((entry) => entry.process.hasExited() && !entry.initialExecCommandActive)
         .sort((left, right) => left.lastUsed - right.lastUsed);
       let removed = false;
       for (const candidate of exited) {

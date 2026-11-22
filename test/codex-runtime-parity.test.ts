@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   UnifiedExecError,
   UnifiedExecProcessManager,
@@ -420,6 +420,82 @@ describe('Codex unified exec runtime parity', () => {
 
     await expect(initial).resolves.toMatchObject({ processId: null });
     expect(instance.listProcesses()).toEqual([]);
+  });
+
+  it('finishes the original command without reporting or releasing a reused process id', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'clf-initial-exec-race-'));
+    tempRoots.push(root);
+    const exitTrigger = path.join(root, 'exit-original');
+    const instance = manager();
+    managers.push(instance);
+    const allocate = (...values: number[]) => {
+      const random = vi.spyOn(Math, 'random');
+      for (const value of values) random.mockReturnValueOnce(value);
+      try {
+        return instance.allocateProcessId();
+      } finally {
+        random.mockRestore();
+      }
+    };
+    const processId = allocate(0);
+    let releaseInitial!: () => void;
+    const initialGate = new Promise<void>((resolve) => { releaseInitial = resolve; });
+    // Block only the original output collector's exit wakeup, not the OS child or
+    // subsequent write_stdin call. This makes the order independent of runner timing.
+    type Notifier = { notified(): { promise: Promise<void>; dispose(): void } };
+    type Held = { process: { cancelNotify: Notifier } };
+    const processes = (instance as unknown as { processes: Map<number, Held> }).processes;
+    const store = processes.set.bind(processes);
+    const gate = vi.spyOn(processes, 'set').mockImplementationOnce((id, entry) => {
+      const notifier = entry.process.cancelNotify;
+      const notified = notifier.notified.bind(notifier);
+      vi.spyOn(notifier, 'notified').mockImplementationOnce(() => {
+        const wait = notified();
+        return { ...wait, promise: wait.promise.then(() => initialGate) };
+      });
+      return store(id, entry);
+    });
+    const launch = (id: number, script: string, yieldTimeMs: number) =>
+      instance.execCommand({
+        command: [process.execPath, '-e', script],
+        shellType: process.platform === 'win32' ? 'powershell' : 'bash',
+        hookCommand: script,
+        processId: id,
+        yieldTimeMs,
+        maxOutputTokens: undefined,
+        truncationPolicy,
+        cwd: root,
+        displayCwd: root,
+        env: applyUnifiedExecEnv(process.env),
+        tty: false
+      });
+    const initial = launch(processId, `setInterval(() => { if (require('node:fs').existsSync(${JSON.stringify(exitTrigger)})) process.exit(7); }, 10)`, 30_000);
+    void initial.catch(() => {});
+    try {
+      await waitForProcess(instance, processId);
+      await writeFile(exitTrigger, 'done');
+      await expect.poll(() => instance.listProcesses(), { timeout: 5_000 }).toEqual([]);
+      const completedPoll = await instance.writeStdin({ processId, input: '', yieldTimeMs: 250, maxOutputTokens: undefined, truncationPolicy });
+      expect(completedPoll).toMatchObject({ processId: null, exitCode: 7 });
+
+      const reservationProbe = allocate(0, 0.5);
+      instance.releaseProcessId(reservationProbe);
+      // Force an exceptional release/reuse to verify completion still uses the exact
+      // captured child, even when the numeric ID already denotes another live command.
+      instance.releaseProcessId(processId);
+      expect(allocate(0)).toBe(processId);
+      await expect(launch(processId, 'setInterval(() => {}, 1000)', 250)).resolves.toMatchObject({ processId });
+
+      releaseInitial();
+      await expect(initial).resolves.toMatchObject({ processId: null, exitCode: 7 });
+      expect(reservationProbe).not.toBe(processId);
+      expect(instance.listProcesses().map((entry) => entry.processId)).toEqual([processId]);
+    } finally {
+      releaseInitial();
+      gate.mockRestore();
+      await instance.terminateAllProcesses();
+      await initial.catch(() => {});
+    }
   });
 
   it.runIf(process.platform === 'win32')('Ctrl-C on a Windows pipe session terminates the whole process tree', async () => {
