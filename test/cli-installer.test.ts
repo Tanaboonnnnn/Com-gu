@@ -155,7 +155,7 @@ describe('ComGu CLI installer core', () => {
     const asset = assetNameForTarget(target);
     if (process.platform === 'win32') {
       await fs.writeFile(path.join(fixture, 'comgu.cmd'), '@echo off\r\necho fixture\r\n', 'utf8');
-      execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `Compress-Archive -Path '${path.join(dir, 'fixture').replace(/'/g, "''")}\\*' -DestinationPath '${path.join(releaseRoot, asset).replace(/'/g, "''")}' -Force`]);
+      execFileSync('tar.exe', ['-a', '-cf', path.join(releaseRoot, asset), '-C', path.dirname(fixture), 'ComGu-CLI']);
     } else {
       const launcher = path.join(fixture, 'comgu');
       await fs.writeFile(launcher, '#!/bin/sh\necho fixture\n', { encoding: 'utf8', mode: 0o755 });
