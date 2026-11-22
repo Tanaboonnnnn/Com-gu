@@ -243,12 +243,22 @@ export function defaultUserShell(): DetectedShell {
 }
 
 /** `Shell::derive_exec_args`: the argv Codex hands the operating system. */
-export function deriveExecArgs(shell: DetectedShell, command: string, useLoginShell: boolean): string[] {
+export function deriveExecArgs(
+  shell: DetectedShell, command: string, useLoginShell: boolean, packagedToolDir?: string
+): string[] {
   switch (shell.shellType) {
     case 'zsh':
     case 'bash':
-    case 'sh':
-      return [shell.shellPath, useLoginShell ? '-lc' : '-c', command];
+    case 'sh': {
+      // Login startup may replace the PATH the parent supplied. Restore just the packaged
+      // tool directory after startup, preserving the profile's remaining PATH and shell mode.
+      if (!useLoginShell || !packagedToolDir || packagedToolDir.includes(':')) {
+        return [shell.shellPath, useLoginShell ? '-lc' : '-c', command];
+      }
+      const dir = shlexQuote(packagedToolDir);
+      const restore = `case "\${PATH-}" in ${dir}|${dir}:*) ;; *) export PATH=${dir}"\${PATH:+:$PATH}";; esac\n`;
+      return [shell.shellPath, '-lc', restore + command];
+    }
     case 'powershell': {
       const args = [shell.shellPath];
       if (!useLoginShell) args.push('-NoProfile');

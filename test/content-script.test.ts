@@ -7877,6 +7877,10 @@ describe('the fresh chat the app opened', () => {
     const oldMenu = live.document.querySelector('.clf-menu') as HTMLElement;
     expect(oldMenu).not.toBeNull();
     expect(oldMenu.hidden).toBe(false);
+    const workspace = live.document.querySelector<HTMLElement>('[data-clf-workspace-button]')!;
+    workspace.click();
+    const oldWorkspaceMenu = live.document.querySelector<HTMLElement>('[data-clf-workspace-menu]')!;
+    expect(oldWorkspaceMenu.hidden).toBe(false);
 
     // Tips are delegated from the document, so use an ordinary body node to prove the old
     // recorder owns a live document-level listener rather than a handler attached to its menu.
@@ -7900,6 +7904,7 @@ describe('the fresh chat the app opened', () => {
     await settle(120);
 
     expect(oldMenu.isConnected).toBe(false);
+    expect(oldWorkspaceMenu.isConnected).toBe(false);
     expect(oldTip.isConnected).toBe(false);
     expect(live.document.querySelectorAll('.clf-menu')).toHaveLength(0);
     expect(live.document.querySelectorAll('.clf-tip')).toHaveLength(0);

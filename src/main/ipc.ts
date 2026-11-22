@@ -3,7 +3,7 @@
  *
  * A fixed list of named handlers, each validating its own input with zod. There is no
  * generic "call this method" or "read this file" channel, so a compromised renderer
- * gains only the operations listed below โ€” it can never reach the filesystem or spawn
+ * gains only the operations listed below — it can never reach the filesystem or spawn
  * a process directly. Secrets travel one way: the renderer can set or clear the API
  * key but can never read it back.
  */
@@ -187,7 +187,7 @@ const settingsPatch = z.object({
     // An OpenRouter model id, and validated only as a shape: the catalogue changes weekly,
     // and an allow-list here would mean this app deciding which models exist.
     // The leading `~` is OpenRouter's own marker for an alias that always resolves to the
-    // newest model in a family โ€” `~deepseek/deepseek-v4-flash-latest` and eleven others. The
+    // newest model in a family — `~deepseek/deepseek-v4-flash-latest` and eleven others. The
     // picker lists them because the listing does, so refusing them here meant the one kind
     // of entry most worth choosing was the one kind that could not be saved.
     model: z
@@ -512,8 +512,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     // Switching multi-agent mode off has to be able to remove the `agents` tool from the
     // schemas, and the exposed surface only ever widens by default. So the latch is
-    // released here โ€” the one place that knows the user made the decision
-    // deliberately โ€” and the settings screen tells them to reconnect the connector, which
+    // released here — the one place that knows the user made the decision
+    // deliberately — and the settings screen tells them to reconnect the connector, which
     // is what makes ChatGPT read the clean schemas.
     if (wasMultiAgent && !next.multiAgent.enabled) forgetExposedSurface();
     // Order matters, and it used to be wrong. Pausing the run and withdrawing worker browser
@@ -536,7 +536,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     // The extension bridge serves both features: recording needs it to observe the
     // chat, and multi-agent mode needs it to open worker tabs. Either one being on is
-    // enough, and this must match the startup rule in index.ts exactly โ€” a bridge that
+    // enough, and this must match the startup rule in index.ts exactly — a bridge that
     // runs at startup but not after a settings save is the worst of both.
     if (next.sessions.record || next.multiAgent.enabled) await startBridge();
     else await stopBridge();
@@ -628,7 +628,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * Stores one of the two keys the app holds, by name.
    *
    * The name is an enum rather than a string, so the renderer can choose *which* credential
-   * it is writing but cannot name a slot nobody defined โ€” and the value still only ever
+   * it is writing but cannot name a slot nobody defined — and the value still only ever
    * travels inwards. Nothing reads a key back out over IPC; the state carries a boolean.
    */
   handle('secret:set', async (payload) => {
@@ -776,7 +776,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const { id } = sessionIdArg.parse(payload);
     // Detach first. The recorder maps live ChatGPT conversations to session ids, so
     // deleting the folder underneath a live one left it appending to a session that no
-    // longer existed โ€” the events went to a resurrected half-session with no summary.
+    // longer existed — the events went to a resurrected half-session with no summary.
     // Forgetting the mapping makes the next observation open a fresh session instead.
     const detached = forgetSession(id);
     await deleteSession(id);
@@ -894,7 +894,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    *
    * The queued bootstrap is withdrawn here rather than from inside the broker. The broker
    * deliberately knows nothing about HTTP or tabs, and `drop()` reaches `failAgent` from
-   * inside a delivery โ€” cancelling from there would re-enter it. An IPC call never is.
+   * inside a delivery — cancelling from there would re-enter it. An IPC call never is.
    * `tidyCommands()` would retire the command on its own at the next poll; doing it now is
    * what stops a tab opening for a slot the user has just cleared.
    */
@@ -930,7 +930,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * A null window was always handled; a *destroyed* one was not. Electron keeps the object
    * alive after the window is gone, so `getWindow()` stays truthy and merely reading
    * `.webContents` off it throws. That is not just a missed repaint: `onLog` runs inside
-   * `log()`, synchronously, on the caller's own stack โ€” so once the window was destroyed,
+   * `log()`, synchronously, on the caller's own stack — so once the window was destroyed,
    * every log line written during teardown threw into whatever was writing it. The MCP drain's
    * force-close timer died on its own `logWarn` before it could force anything, and the app
    * sat draining a half-closed tunnel socket forever, with no window, no tray, and the

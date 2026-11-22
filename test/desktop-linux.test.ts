@@ -165,6 +165,28 @@ describe('Linux X11 DesktopDriver', () => {
     expect(calls).toContainEqual(['mouseup', '1']);
   });
 
+  it('captures only the active X11 window when the desktop action prefers it', async () => {
+    const image = await (await import('sharp')).default({
+      create: { width: 10, height: 10, channels: 4, background: 'white' }
+    }).png().toBuffer();
+    const run = vi.fn(async (command: string, args: string[]) => {
+      const output = args[0] === 'getactivewindow' ? '42\n'
+        : args[0] === 'getwindowgeometry' ? 'X=5\nY=10\nWIDTH=10\nHEIGHT=10\n' : '100 100';
+      return { code: 0, stdout: command === 'import' ? image : Buffer.from(output) };
+    });
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+    const result = await driver.act({ actions: [], capture: { preferActiveWindow: true } });
+    expect(result.screenshot).toMatchObject({ captureMode: 'window', windowId: 42 });
+    expect(run).toHaveBeenCalledWith('import', ['-window', '42', 'png:-'], undefined);
+  });
+
+  it('does not widen a preferred X11 capture if the active window is unavailable', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: Buffer.from('0\n') }));
+    const driver = createX11DesktopDriver({ commands: new Set(['xdotool', 'import']), run });
+    await expect(driver.act({ actions: [], capture: { preferActiveWindow: true } })).rejects.toThrow('active X11 window');
+    expect(run).not.toHaveBeenCalledWith('import', expect.anything(), expect.anything());
+  });
+
   it('maps a scaled X11 window screenshot from its real desktop origin', async () => {
     const image = await (await import('sharp')).default({
       create: { width: 1000, height: 800, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } }

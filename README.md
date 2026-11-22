@@ -21,7 +21,7 @@ ComGu คือ desktop bridge ที่เราใช้ให้ ChatGPT เ�
 
 ## Download
 
-Release ชุดนี้คือ **ComGu v3.3.3** โดย GitHub release workflow จะสร้าง native packages บน runner ของแต่ละ OS/CPU ก่อนเผยแพร่
+หน้านี้ลิงก์ไปยัง ComGu รุ่นล่าสุดที่เผยแพร่แล้ว โดย GitHub release workflow จะสร้าง native packages บน runner ของแต่ละ OS/CPU ก่อนเผยแพร่
 
 | Platform | x64 | ARM64 |
 | --- | --- | --- |
@@ -58,8 +58,8 @@ irm https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.ps1 
 
 | CLI | x64 | ARM64 |
 | --- | --- | --- |
-| **Windows** | [ZIP](../../releases/download/v3.3.3/ComGu-CLI-windows-x64.zip) | [ZIP](../../releases/download/v3.3.3/ComGu-CLI-windows-arm64.zip) |
-| **Linux** | [TAR.GZ](../../releases/download/v3.3.3/ComGu-CLI-linux-x64.tar.gz) | [TAR.GZ](../../releases/download/v3.3.3/ComGu-CLI-linux-arm64.tar.gz) |
+| **Windows** | [ZIP](../../releases/latest/download/ComGu-CLI-windows-x64.zip) | [ZIP](../../releases/latest/download/ComGu-CLI-windows-arm64.zip) |
+| **Linux** | [TAR.GZ](../../releases/latest/download/ComGu-CLI-linux-x64.tar.gz) | [TAR.GZ](../../releases/latest/download/ComGu-CLI-linux-arm64.tar.gz) |
 
 CLI ต้องใช้ **Node.js 22+**. ใช้ `comgu --version` ตรวจรุ่น, `comgu setup` สำหรับตั้งค่า profile ครั้งแรก และ `comgu status` เพื่อตรวจ runtime ที่กำลังถือ profile อยู่. หากเครื่องดับระหว่าง stale-owner recovery จน `.comgu-control.recovery` ค้าง ให้ใช้ `comgu doctor --repair-ownership` ซึ่งจะลบ marker เฉพาะเมื่อยืนยันแล้วว่า endpoint, owner และ recovery contender ไม่ได้มีชีวิตอยู่. Direct ZIP/TAR.GZ ด้านล่างยังคงไว้เป็น manual fallback.
 
@@ -170,8 +170,7 @@ Packaging ควรรันบน OS เป้าหมายจริง โ�
 npm run dist:x64
 npm run dist:arm64
 
-# macOS
-npm run dist:mac:x64
+# macOS (Apple silicon; Intel is not included in official release CI)
 npm run dist:mac:arm64
 
 # Linux

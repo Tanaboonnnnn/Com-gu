@@ -73,6 +73,30 @@ describe('durable state commit boundary', () => {
     await expect(readDurable('probe')).resolves.toEqual({ generation: 3 });
   });
 
+  it('does not overwrite a newer immediate commit to a later state file during a shutdown flush', async () => {
+    await tempStore();
+    const realRename = fs.rename.bind(fs);
+    let startRename!: () => void;
+    let releaseRename!: () => void;
+    const renameEntered = new Promise<void>((resolve) => { startRename = resolve; });
+    const renameReleased = new Promise<void>((resolve) => { releaseRename = resolve; });
+    vi.spyOn(fs, 'rename').mockImplementationOnce(async (from, to) => {
+      startRename();
+      await renameReleased;
+      return realRename(from, to);
+    });
+
+    writeDurableSoon('first', { generation: 1 });
+    writeDurableSoon('second', { generation: 1 });
+    const flushing = flushDurable();
+    await renameEntered;
+    const newer = writeDurableNow('second', { generation: 2 });
+    releaseRename();
+    await Promise.all([flushing, newer]);
+
+    await expect(readDurable('second')).resolves.toEqual({ generation: 2 });
+  });
+
   it('attempts every pending state file even when one shutdown flush fails', async () => {
     await tempStore();
     const failed = Object.assign(new Error('injected swarm rename failure'), { code: 'EBUSY' });

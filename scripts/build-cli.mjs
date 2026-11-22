@@ -88,9 +88,13 @@ const runtimePackage = {
   private: true,
   type: 'module',
   engines: { node: '>=22' },
-  dependencies: pkg.dependencies
+  dependencies: pkg.dependencies,
+  overrides: pkg.overrides
 };
-await fs.writeFile(path.join(stage, 'package.json'), `${JSON.stringify(runtimePackage, null, 2)}\n`, 'utf8');
+// Install exactly the production tree reviewed in the root lockfile, including overrides.
+// Keep the full manifest during npm ci so its root metadata still matches that lockfile.
+await fs.copyFile(path.join(root, 'package.json'), path.join(stage, 'package.json'));
+await fs.copyFile(path.join(root, 'package-lock.json'), path.join(stage, 'package-lock.json'));
 await fs.copyFile(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
 await fs.writeFile(
   path.join(stage, 'README.txt'),
@@ -98,7 +102,7 @@ await fs.writeFile(
   'utf8'
 );
 
-const installArgs = ['install', '--omit=dev', '--no-audit', '--no-fund', '--package-lock=false'];
+const installArgs = ['ci', '--omit=dev', '--no-audit', '--no-fund'];
 const install = process.platform === 'win32'
   ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm', ...installArgs], {
       cwd: stage,
@@ -112,6 +116,8 @@ const install = process.platform === 'win32'
     });
 if (install.error) throw install.error;
 if (install.status !== 0) process.exit(install.status ?? 1);
+await fs.rm(path.join(stage, 'package-lock.json'));
+await fs.writeFile(path.join(stage, 'package.json'), `${JSON.stringify(runtimePackage, null, 2)}\n`, 'utf8');
 
 if (platform === 'win32') {
   await fs.writeFile(path.join(stage, 'comgu.cmd'), '@echo off\r\nnode "%~dp0bin\\comgu.mjs" %*\r\n', 'utf8');

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
 import type { Action, Rect, Screenshot, WindowInfo } from '../../computer/index.js';
-import { DesktopError, type DesktopCapabilities, type DesktopDriver, type DesktopObserveRequest, type DesktopObserveResult } from '../driver.js';
+import { DesktopError, type DesktopActionRequest, type DesktopCapabilities, type DesktopDriver, type DesktopObserveRequest, type DesktopObserveResult } from '../driver.js';
 
 export interface X11RunResult { code: number; stdout: Buffer; }
 export type X11Runner = (command: string, args: string[], input?: Buffer | string) => Promise<X11RunResult>;
@@ -81,15 +81,27 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
     return region;
   };
 
-  const capture = async (request: Extract<DesktopObserveRequest, { kind: 'screenshot' }> | { kind: 'screenshot'; window?: number; maxWidth?: number; crop?: Rect; full?: boolean }): Promise<Screenshot> => {
+  const activeWindowId = async (): Promise<number | null> => {
+    if (!has('xdotool')) return null;
+    const raw = (await runOk('xdotool', ['getactivewindow'])).toString('utf8').trim();
+    const id = Number(raw);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  };
+
+  const capture = async (request: NonNullable<DesktopActionRequest['capture']>): Promise<Screenshot> => {
     if (!has('import')) unsupported('X11 screenshot capture is unavailable.');
-    const target = request.window ? String(request.window) : 'root';
+    let window = request.window;
+    if (window === undefined && request.preferActiveWindow && request.full !== true && request.crop === undefined) {
+      window = await activeWindowId().catch(() => null) ?? undefined;
+      if (window === undefined) throw new DesktopError('Could not identify the active X11 window for this capture.');
+    }
+    const target = window === undefined ? 'root' : String(window);
     let image = await runOk('import', ['-window', target, 'png:-']);
     let metadata = await sharp(image).metadata();
     const sourceWidth = metadata.width ?? 0;
     const sourceHeight = metadata.height ?? 0;
     if (!sourceWidth || !sourceHeight) throw new DesktopError('X11 screenshot returned invalid image data.');
-    let region: Rect = request.window ? await windowGeometry(request.window) : await displayGeometry();
+    let region: Rect = window === undefined ? await displayGeometry() : await windowGeometry(window);
     if (request.crop) {
       const left = Math.max(0, Math.floor(request.crop.x));
       const top = Math.max(0, Math.floor(request.crop.y));
@@ -109,8 +121,8 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
     lastFrame = { id: frameId, scale, region };
     return {
       data: image.toString('base64'), frameId, width, height, region, scale,
-      focused: request.window ? null : null,
-      captureMode: request.window ? 'window' : 'screen', windowId: request.window ?? null
+      focused: null,
+      captureMode: window === undefined ? 'screen' : 'window', windowId: window ?? null
     };
   };
 
@@ -127,13 +139,18 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
   const observe = async (request: DesktopObserveRequest): Promise<DesktopObserveResult> => {
     if (request.kind === 'ui') unsupported('X11 semantic UI refs are unsupported; use screenshots and coordinates.');
     if (request.kind === 'state') {
-      const activeId = request.window ?? Number((await runOk('xdotool', ['getactivewindow'])).toString('utf8').trim());
-      return { kind: 'state', window: await windowInfo(activeId, true), snapshotId: null, screenshot: request.includeScreenshot === false ? null : await capture({ kind: 'screenshot', window: request.window, maxWidth: request.maxWidth }), elements: [] };
+      const activeId = await activeWindowId().catch(() => null);
+      const window = request.window ?? activeId;
+      if (window === null) throw new DesktopError('Could not identify the active X11 window.');
+      return {
+        kind: 'state', window: await windowInfo(window, window === activeId), snapshotId: null,
+        screenshot: request.includeScreenshot === false ? null : await capture({ window, maxWidth: request.maxWidth }), elements: []
+      };
     }
     if (request.kind === 'active') {
       const screen = await displayGeometry();
-      const id = Number((await runOk('xdotool', ['getactivewindow'])).toString('utf8').trim());
-      return { kind: 'active', window: Number.isFinite(id) ? await windowInfo(id, true) : null, screen };
+      const id = await activeWindowId();
+      return { kind: 'active', window: id === null ? null : await windowInfo(id, true), screen };
     }
     if (request.kind === 'windows') {
       const screen = await displayGeometry();
@@ -218,7 +235,7 @@ export function createX11DesktopDriver(options: { commands: Set<string>; run: X1
           );
         }
       }
-      const screenshot = request.capture ? await capture({ kind: 'screenshot', window: request.capture.window, maxWidth: request.capture.maxWidth, crop: request.capture.crop, full: request.capture.full }) : null;
+      const screenshot = request.capture ? await capture(request.capture) : null;
       return { cursor: null, clipboard, completedCount, routes, screenshot, verification: null };
     },
     async dispose() {}

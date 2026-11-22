@@ -458,6 +458,88 @@ async function mountChat(
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+const sessionFixture = (id: string, title: string, lastHandoffId: string | null = null) => ({
+  id, title, lastHandoffId, conversationId: id, chatIds: [id], agents: [],
+  updatedAt: 10, startedAt: 1, endedAt: 10, userMessages: 1, toolCalls: 0,
+  errors: 0, events: 1, estimatedTokens: 100, lastTurnOutcome: null
+});
+
+const testReply = <T>(data: T) => Promise.resolve({ ok: true as const, data });
+
+it('clears the previous timeline while a different session loads and if it fails', async () => {
+  const a = sessionFixture('session-a', 'First chat');
+  const b = sessionFixture('session-b', 'Second chat');
+  let failSecond!: (reply: { ok: false; error: string }) => void;
+  const pendingSecond = new Promise<{ ok: false; error: string }>((resolve) => { failSecond = resolve; });
+  const mounted = await mountChat({}, [], {
+    listSessions: () => testReply({ sessions: [a, b], activeId: null, pressure: [], total: 2, nextCursor: null }),
+    getSession: (id: string) => id === b.id ? pendingSecond : testReply({
+      summary: a, total: 1, nextFrom: 2,
+      events: [{
+        kind: 'user_message', time: 1, seq: 1, source: 'extension',
+        message: { text: 'First chat transcript', truncated: false, chars: 21 }
+      }]
+    })
+  });
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle();
+  expect(doc.getElementById('timeline')!.textContent).toContain('First chat transcript');
+  (doc.querySelector('[data-id="session-b"]') as HTMLElement).click();
+  expect(doc.getElementById('chatTitle')!.textContent).toBe('Second chat');
+  expect(doc.getElementById('timeline')!.textContent).not.toContain('First chat transcript');
+  failSecond({ ok: false, error: 'Session not found' });
+  await settle();
+  expect(doc.getElementById('timeline')!.textContent).not.toContain('First chat transcript');
+});
+
+it('retries a failed handoff read when the same session is refreshed', async () => {
+  const a = sessionFixture('session-a', 'First chat', 'handoff-a');
+  let handoffReady = false;
+  const mounted = await mountChat({}, [], {
+    listSessions: () => testReply({ sessions: [a], activeId: null, pressure: [], total: 1, nextCursor: null }),
+    getSession: () => testReply({ summary: a, total: 0, nextFrom: 0, events: [] }),
+    getHandoff: () => handoffReady
+      ? testReply({ text: 'Recovered handoff', sourceEvents: 1, sourceTokens: 10, createdAt: 1, notes: [] })
+      : Promise.resolve({ ok: false, error: 'Temporary handoff error' })
+  });
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle();
+  expect(doc.getElementById('handoffBox')!.textContent).not.toContain('Recovered handoff');
+  handoffReady = true;
+  doc.getElementById('chatRefresh')!.click();
+  await settle();
+  expect(doc.getElementById('handoffBox')!.textContent).toContain('Recovered handoff');
+});
+
+it('discards stale older pages when refreshed after retention removes a session', async () => {
+  const a = sessionFixture('session-a', 'Retained chat');
+  const b = sessionFixture('session-b', 'Expired chat');
+  let expired = false;
+  const mounted = await mountChat({}, [], {
+    listSessions: (options: { cursor?: { id: string } }) => testReply({
+      sessions: options.cursor ? [b] : [a], activeId: null, pressure: [],
+      total: expired ? 1 : 2,
+      nextCursor: options.cursor || expired ? null : { updatedAt: a.updatedAt, id: a.id }
+    }),
+    getSession: (id: string) => testReply({ summary: id === b.id ? b : a, total: 0, nextFrom: 0, events: [] })
+  });
+  const doc = mounted.window.document;
+  (doc.querySelector('[data-tab="chat"]') as HTMLButtonElement).click();
+  await settle();
+  doc.getElementById('sessionList')!.closest('.scroll')!.dispatchEvent(new mounted.window.Event('scroll'));
+  await settle();
+  const oldRow = doc.querySelector<HTMLElement>('[data-id="session-b"]')!;
+  expect(oldRow).not.toBeNull();
+  oldRow.click();
+  expired = true;
+  doc.getElementById('chatRefresh')!.click();
+  await settle();
+  expect(doc.querySelector('[data-id="session-b"]')).toBeNull();
+  expect(doc.getElementById('chatTitle')!.textContent).toBe('Retained chat');
+});
+
 it('does not expose or poll the retired chat-bound workspace picker', async () => {
   let fallbackCalls = 0;
   const mounted = await mountChat({}, [], {
@@ -1115,7 +1197,7 @@ it('loads the model catalogue only when the picker is opened, twenty at a time',
  * at twenty with four hundred still to come and no sign that there was a button below it.
  *
  * The repaint is the other half. The list is rebuilt whole on every page, and emptying an
- * element scrolls it back to the top โ€” so even once it paged, the reader was thrown back to
+ * element scrolls it back to the top — so even once it paged, the reader was thrown back to
  * the newest model, which is the one they had just scrolled away from.
  */
 it('pages the catalogue in as the list is scrolled, without losing the reader\'s place', async () => {
@@ -1168,7 +1250,7 @@ it('pages the catalogue in as the list is scrolled, without losing the reader\'s
 /**
  * A closed picker measures zero in every direction, which reads as "scrolled to the end".
  * Left unguarded, every repaint of the settings sheet would page the whole catalogue in
- * behind a panel nobody has open โ€” hundreds of models, on somebody else's service.
+ * behind a panel nobody has open — hundreds of models, on somebody else's service.
  */
 it('never pages the catalogue while the picker is closed', async () => {
   const mounted = await mountChat({ hasGoalKey: true }, catalogue(45));

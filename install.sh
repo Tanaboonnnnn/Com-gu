@@ -32,6 +32,7 @@ esac
 if [ -n "$VERSION_INPUT" ]; then
   TAG="${VERSION_INPUT#v}"
   case "$TAG" in *[!0-9.]*|'') fail "COMGU_VERSION must be an exact version such as 3.2.0" ;; esac
+  printf '%s\n' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "COMGU_VERSION must be an exact version such as 3.2.0"
   TAG="v$TAG"
 else
   [ -z "$TEST_BASE" ] || fail "COMGU_VERSION is required with the test release source"
@@ -40,9 +41,8 @@ else
 fi
 
 VERSION="${TAG#v}"
-case "$VERSION" in
-  *[!0-9.]*|'') fail "could not resolve a valid ComGu release version" ;;
-esac
+case "$VERSION" in *[!0-9.]*|'') fail "could not resolve a valid ComGu release version" ;; esac
+[ "$TAG" = "v$VERSION" ] && printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "could not resolve a valid ComGu release version"
 
 ASSET="ComGu-CLI-linux-$ARCH.tar.gz"
 if [ -n "$TEST_BASE" ]; then
@@ -51,7 +51,9 @@ else
   BASE="https://github.com/$REPO/releases/download/$TAG"
 fi
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+STAGE=''
+trap 'rm -rf "$TMP"; if [ -n "$STAGE" ]; then rm -rf "$STAGE"; fi' EXIT
+trap 'exit 1' HUP INT TERM
 
 printf 'Installing ComGu CLI %s for linux-%s...\n' "$VERSION" "$ARCH"
 curl -fL --retry 3 --retry-delay 1 "$BASE/SHA256SUMS.txt" -o "$TMP/SHA256SUMS.txt"
@@ -64,15 +66,14 @@ ACTUAL="$(sha256sum "$TMP/$ASSET" | awk '{ print tolower($1) }')"
 
 mkdir -p "$ROOT/versions" "$BIN_DIR"
 FINAL="$ROOT/versions/$VERSION"
-if [ ! -x "$FINAL/ComGu-CLI/comgu" ]; then
-  STAGE="$TMP/payload"
-  mkdir -p "$STAGE"
+if [ ! -f "$FINAL/ComGu-CLI/comgu" ] || [ ! -x "$FINAL/ComGu-CLI/comgu" ]; then
+  [ ! -e "$FINAL" ] || fail "incomplete installation at $FINAL; remove that version directory and try again"
+  STAGE="$(mktemp -d "$ROOT/versions/.stage.XXXXXXXX")"
   tar -xzf "$TMP/$ASSET" -C "$STAGE"
-  [ -x "$STAGE/ComGu-CLI/comgu" ] || fail "archive does not contain ComGu-CLI/comgu"
-  if [ ! -e "$FINAL" ]; then
-    mv "$STAGE" "$FINAL"
-  fi
+  [ -f "$STAGE/ComGu-CLI/comgu" ] && [ -x "$STAGE/ComGu-CLI/comgu" ] || fail "archive does not contain an executable ComGu-CLI/comgu"
+  mv -T "$STAGE" "$FINAL"
 fi
+[ -f "$FINAL/ComGu-CLI/comgu" ] && [ -x "$FINAL/ComGu-CLI/comgu" ] || fail "installed launcher is missing at $FINAL"
 
 CURRENT_TMP="$ROOT/current.tmp.$$"
 printf '%s\n' "$VERSION" > "$CURRENT_TMP"
@@ -91,8 +92,12 @@ ROOT="${COMGU_INSTALL_ROOT:-$HOME/.local/share/comgu-cli}"
 SELF="${COMGU_BIN_DIR:-$HOME/.local/bin}/comgu"
 case "${1:-}" in
   update)
-    curl -fsSL https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.sh | sh
-    exit $?
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+    trap 'exit 1' HUP INT TERM
+    curl -fsSL https://github.com/Tanaboonnnnn/Com-gu/releases/latest/download/install.sh -o "$TMP"
+    sh "$TMP"
+    exit 0
     ;;
   uninstall)
     rm -rf "$ROOT"

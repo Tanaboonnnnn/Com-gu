@@ -5,7 +5,7 @@
  * There is one local server and one or two published connectors. The Core connector is
  * what the app is for and is always published; Desktop is optional, is published only
  * when the user has both granted desktop permissions and configured a way to reach it,
- * and its absence is never allowed to fail the connection โ€” a user who never wants
+ * and its absence is never allowed to fail the connection — a user who never wants
  * desktop control should not see a broken app because of a connector they did not create.
  */
 
@@ -139,7 +139,7 @@ export function getStatus(): ConnectionStatus {
   // Read live rather than trusting the last stored copy: both clocks are set by
   // incoming requests, which do not go past setStatus, so a stored value would lag
   // behind reality by up to one tunnel report. The surface cards are rebuilt for the
-  // same reason โ€” what each connector would advertise follows the permission
+  // same reason — what each connector would advertise follows the permission
   // checkboxes, which change without any connection event to recompute them.
   return {
     ...status,
@@ -164,7 +164,7 @@ function setStatus(next: Partial<ConnectionStatus>): void {
  *
  * Built even while disconnected, because this is what the setup screen reads: the user
  * needs the exact name and description to paste into ChatGPT *before* anything is live,
- * and asking them to invent either is how a connector ends up named "my pc" โ€” a name the
+ * and asking them to invent either is how a connector ends up named "my pc" — a name the
  * model cannot address and a description it cannot route on.
  */
 function describeSurfaces(): SurfaceStatus[] {
@@ -266,8 +266,8 @@ function sameCoreTransport(
 /**
  * Derives a second surface's public URL from the first one's.
  *
- * Only correct for a transport that publishes a whole origin โ€” cloudflared and a manual
- * reverse proxy โ€” where both surfaces are already reachable at their own paths on the URL
+ * Only correct for a transport that publishes a whole origin — cloudflared and a manual
+ * reverse proxy — where both surfaces are already reachable at their own paths on the URL
  * the user was given. It is deliberately not used for the OpenAI tunnel, where a tunnel id
  * maps to one local URL and the second surface genuinely needs its own tunnel.
  */
@@ -327,7 +327,7 @@ async function connectImpl(): Promise<void> {
   }
 
   try {
-    setStatus({ state: 'starting-server', detail: 'Starting the local serverโ€ฆ', publicUrl: null });
+    setStatus({ state: 'starting-server', detail: 'Starting the local server…', publicUrl: null });
     const startedEndpoint = await startMcpServer(() => {
       const live = getConfig();
       return {
@@ -359,7 +359,7 @@ async function connectImpl(): Promise<void> {
       logError(`performance MCP endpoint marker failed: ${error instanceof Error ? error.message : String(error)}`)
     );
     if (runtimeDependencies.desktopSupported() && (caps.screen || caps.control)) void runtimeDependencies.prewarmDesktop();
-    updateSurface('core', { state: 'starting', detail: 'Connectingโ€ฆ' });
+    updateSurface('core', { state: 'starting', detail: 'Connecting…' });
 
     const apiKey = await runtimeDependencies.getApiKey();
     if (shutdownRequested || generation !== connectionGeneration) {
@@ -432,7 +432,7 @@ async function connectImpl(): Promise<void> {
  *
  * Every failure here is contained. Desktop is optional, the user may not have created its
  * connector yet, and the coding connector must not go down because a second tunnel id was
- * mistyped โ€” so this reports the problem on the Desktop card and leaves the connection up.
+ * mistyped — so this reports the problem on the Desktop card and leaves the connection up.
  */
 async function startDesktopTunnel(
   generation: number,
@@ -450,7 +450,7 @@ async function startDesktopTunnel(
     return;
   }
 
-  updateSurface('desktop', { state: 'starting', detail: 'Connectingโ€ฆ' });
+  updateSurface('desktop', { state: 'starting', detail: 'Connecting…' });
   try {
     desktopTunnelId = settings.desktopTunnelId;
     const startedDesktopTunnel = await startTunnel({
@@ -548,7 +548,7 @@ async function applySettingsImpl(): Promise<void> {
     return;
   }
   if (desktopTunnel && desktopTunnelId === config.tunnel.desktopTunnelId) return;
-  await stopDesktopTunnel('Reconnecting with the new tunnelโ€ฆ');
+  await stopDesktopTunnel('Reconnecting with the new tunnel…');
   await startDesktopTunnel(connectionGeneration, config.tunnel, await runtimeDependencies.getApiKey());
 }
 

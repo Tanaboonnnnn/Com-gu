@@ -77,7 +77,7 @@ function schedule(name: string, delay: number): void {
     timers.delete(name);
     const slot = pending.get(name);
     if (!slot) return;
-    void enqueue(() => flushOne(name, slot)).catch(() => scheduleRetry(name));
+    void enqueue(() => flushPending(name, slot)).catch(() => scheduleRetry(name));
   }, delay);
   timer.unref?.();
   timers.set(name, timer);
@@ -89,6 +89,12 @@ function scheduleRetry(name: string): void {
   retryAttempts.set(name, attempt);
   const delay = Math.min(RETRY_MAX_MS, WRITE_DELAY_MS * 2 ** Math.min(attempt, 4));
   schedule(name, delay);
+}
+
+async function flushPending(name: string, slot: PendingWrite): Promise<void> {
+  // Background and shutdown writes are coalesced. A later immediate commit may have already
+  // replaced or cleared this slot while it was waiting behind work for another state file.
+  if (pending.get(name)?.generation === slot.generation) await flushOne(name, slot);
 }
 
 async function flushOne(name: string, slot: PendingWrite): Promise<void> {
@@ -167,7 +173,7 @@ export async function flushDurable(): Promise<void> {
     let firstError: unknown = null;
     for (const [name, slot] of entries) {
       try {
-        await enqueue(() => flushOne(name, slot));
+        await enqueue(() => flushPending(name, slot));
       } catch (error) {
         // Shutdown is the last chance for every independent state file. One broken target
         // must not prevent a continuation, correlation or retired-worker snapshot queued

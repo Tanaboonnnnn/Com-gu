@@ -8963,6 +8963,9 @@
       closeMenu();
       if (menuNode) menuNode.remove();
       menuNode = null;
+      closeWorkspaceMenu();
+      if (workspaceMenuNode) workspaceMenuNode.remove();
+      workspaceMenuNode = null;
       removeStagePanel();
       if (control && control.root) control.root.remove();
       control = null;

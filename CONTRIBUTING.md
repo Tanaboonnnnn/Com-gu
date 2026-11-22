@@ -10,7 +10,7 @@ Keep changes narrow. Preserve existing permission, identity and recovery behavio
 
 ## Development setup
 
-Development requires Node 22+ and is supported on Windows, macOS and Linux. Desktop/computer-use implementation and tests remain Windows-specific; Core, extension, sessions, agents and tunnel behavior must stay portable.
+Development requires Node 22+ and is supported on Windows, macOS and Linux. Desktop/computer-use is available on Windows and supported Linux graphical sessions; macOS is Core-only. Core, extension, sessions, agents and tunnel behavior must stay portable.
 
 ```sh
 npm ci
@@ -27,13 +27,12 @@ Release packages are platform/architecture-specific:
 ```sh
 npm run dist:x64
 npm run dist:arm64
-npm run dist:mac:x64
 npm run dist:mac:arm64
 npm run dist:linux:x64
 npm run dist:linux:arm64
 ```
 
-Release CI builds and smoke-tests every platform/architecture on a native runner. Packaging downloads/stages pinned external assets and verifies their checksums, so the first packaging run needs network access. Do not claim a cross-OS package is validated merely because electron-builder can sometimes emit it from another host.
+Release CI builds and smoke-tests Windows and Linux x64/arm64 and macOS arm64 on native runners. A tag alone does not publish a release; follow the tagged publish workflow. Packaging downloads/stages pinned external assets and verifies their checksums, so the first packaging run needs network access. Do not claim a cross-OS package is validated merely because electron-builder can sometimes emit it from another host.
 
 ## Pull requests
 

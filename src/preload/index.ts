@@ -122,7 +122,7 @@ const api = {
   getSwarm: () => call<SwarmState>('swarm:get'),
   resetSwarm: () => call<SwarmState>('swarm:reset'),
   // Clearing the prime ends the run; clearing a worker frees that slot. Which of the two
-  // happened comes back in the result โ€” the renderer does not decide it.
+  // happened comes back in the result — the renderer does not decide it.
   clearAgent: (id: string) => call<ClearAgentResult>('swarm:clearAgent', id),
   prepareCommandSandbox: () => call<AppState>('commandSandbox:prepare'),
 

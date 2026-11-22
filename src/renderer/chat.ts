@@ -9,7 +9,7 @@
  * rest of the renderer.
  *
  * The timeline is drawn from what the recorder actually stored. Where a value is a
- * local estimate rather than a fact โ€” token counts above all โ€” the UI says so, because
+ * local estimate rather than a fact — token counts above all — the UI says so, because
  * the whole point of this panel is to be more honest than the wall of "Called tool".
  */
 
@@ -70,8 +70,8 @@ const SESSION_SCROLL_MARGIN = 72;
  * Which agent's events the timeline is showing.
  *
  * `null` is everything. `UNATTRIBUTED` is its own bucket rather than being folded into
- * "all", because a call this app could not tie to any agent is a real category โ€” with
- * ChatGPT's stateless connector it is the *default* category โ€” and hiding it inside the
+ * "all", because a call this app could not tie to any agent is a real category — with
+ * ChatGPT's stateless connector it is the *default* category — and hiding it inside the
  * total would let a filtered view look complete when it is not.
  */
 const UNATTRIBUTED = '\u0000unattributed';
@@ -80,7 +80,7 @@ let agentFilter: string | null = null;
 let filterFor: string | null = null;
 
 interface Deps {
-  /** The renderer's single save path โ€” reads every control, including ours. */
+  /** The renderer's single save path — reads every control, including ours. */
   save: () => Promise<void>;
   state: () => AppState | null;
 }
@@ -112,6 +112,8 @@ let pressure = new Map<string, TokenPressure>();
 let sessionTotal = 0;
 let sessionPageCursor: { updatedAt: number; id: string } | null = null;
 let sessionPageLoading = false;
+let sessionPageInvalidation = 0;
+let resetSessionPages = false;
 /** True after the user has explicitly paged beyond the newest page. */
 let loadedOlderSessions = false;
 let activeId: string | null = null;
@@ -170,8 +172,8 @@ function agentBadge(state: AgentState): Badge {
  *
  * Once resume and multi-agent mode are in use, most rows in the list are chats this app
  * opened, and they are all recorded within a minute of each other. A name alone cannot
- * separate them โ€” which run a chat belonged to, whether its tab ever opened, whether the
- * worker in it ever joined โ€” and that is how a user loses track of a delayed tab. The
+ * separate them — which run a chat belonged to, whether its tab ever opened, whether the
+ * worker in it ever joined — and that is how a user loses track of a delayed tab. The
  * first badge is durable and comes from the session itself; the second is live and comes
  * from the swarm or the compaction currently reported by the app.
  */
@@ -249,25 +251,32 @@ function sessionRow(summary: SessionSummary): HTMLElement {
   return row;
 }
 
+function selectSession(id: string | null): void {
+  if (selectedId === id) return;
+  selectedId = id;
+  // Invalidate pending reads and remove the old session before the next read starts.
+  detailLoadGeneration++;
+  handoffLoadGeneration++;
+  events = [];
+  totalEvents = 0;
+  detailFor = null;
+  detailCursor = null;
+  handoff = null;
+  handoffFor = null;
+  openTools.clear();
+  paintDetail();
+  paintHandoff();
+}
+
 async function deleteSession(id: string): Promise<void> {
   const done = await run(api.deleteSession(id));
   if (done === null) return;
   sessions = sessions.filter((entry) => entry.id !== id);
   pressure.delete(id);
   sessionTotal = Math.max(0, sessionTotal - 1);
-  if (selectedId === id) {
-    selectedId = null;
-    events = [];
-    totalEvents = 0;
-    detailFor = null;
-    detailCursor = null;
-    handoff = null;
-    handoffFor = null;
-    detailLoadGeneration++;
-    handoffLoadGeneration++;
-  }
+  if (selectedId === id) selectSession(null);
   toast(tr('sessions.deleted'));
-  await loadSessions();
+  await loadSessions(true);
 }
 
 function sortSessionRows(rows: SessionSummary[]): SessionSummary[] {
@@ -284,46 +293,51 @@ function mergeSessionRows(rows: SessionSummary[]): void {
   sessions = sortSessionRows([...merged.values()]);
 }
 
-async function loadSessions(): Promise<void> {
+async function loadSessions(resetPages = false): Promise<void> {
+  if (resetPages) {
+    resetSessionPages = true;
+    sessionPageInvalidation++;
+  }
   const generation = ++sessionsLoadGeneration;
   const list = await run(api.listSessions({ limit: SESSION_PAGE_SIZE }));
   if (!list || generation !== sessionsLoadGeneration) return;
-  // Once older pages have been requested, a hot refresh only replaces/updates the newest page.
-  // Throwing the older rows away here would make scrolling history vanish every 400 ms while a
-  // live chat is recording. Before pagination begins, replacing the first page is cheaper and
-  // also removes a session that was deleted elsewhere.
-  if (loadedOlderSessions) mergeSessionRows(list.sessions);
-  else {
-    sessions = list.sessions;
-    sessionPageCursor = list.nextCursor ?? null;
-  }
-  sessionTotal = typeof list.total === 'number' ? list.total : list.sessions.length;
-  activeId = list.activeId;
-  if (loadedOlderSessions) {
+  const total = typeof list.total === 'number' ? list.total : list.sessions.length;
+  // Keep older rows on live refresh, but an explicit refresh or a shrinking catalog no
+  // longer vouches for those cached pages. Start again from the authoritative first page.
+  const invalidate = resetSessionPages || total < sessionTotal;
+  resetSessionPages = false;
+  if (invalidate) sessionPageInvalidation++;
+  if (loadedOlderSessions && !invalidate) {
+    mergeSessionRows(list.sessions);
     for (const entry of list.pressure) pressure.set(entry.id, entry);
   } else {
+    loadedOlderSessions = false;
+    sessions = list.sessions;
+    sessionPageCursor = list.nextCursor ?? null;
     pressure = new Map(list.pressure.map((entry) => [entry.id, entry]));
   }
-  if (selectedId !== null && !sessions.some((s) => s.id === selectedId)) {
-    selectedId = null;
-    detailFor = null;
-    detailCursor = null;
+  sessionTotal = total;
+  activeId = list.activeId;
+  if (selectedId === null || !sessions.some((s) => s.id === selectedId)) {
+    selectSession(activeId ?? sessions[0]?.id ?? null);
   }
-  if (selectedId === null) selectedId = activeId ?? sessions[0]?.id ?? null;
   paintSessions();
   await loadDetail();
 }
 
 async function loadMoreSessions(): Promise<void> {
-  if (sessionPageLoading || !sessionPageCursor || sessions.length >= sessionTotal) return;
+  if (resetSessionPages || sessionPageLoading || !sessionPageCursor || sessions.length >= sessionTotal) return;
   sessionPageLoading = true;
   const cursor = sessionPageCursor;
+  const invalidation = sessionPageInvalidation;
   try {
     const page = await run(api.listSessions({ cursor, limit: SESSION_PAGE_SIZE }));
-    if (!page) return;
+    if (
+      !page || invalidation !== sessionPageInvalidation ||
+      sessionPageCursor?.id !== cursor.id || sessionPageCursor.updatedAt !== cursor.updatedAt
+    ) return;
     mergeSessionRows(page.sessions);
     loadedOlderSessions = true;
-    sessionTotal = page.total;
     sessionPageCursor = page.nextCursor;
     for (const entry of page.pressure) pressure.set(entry.id, entry);
     paintSessions();
@@ -399,16 +413,21 @@ async function loadDetail(): Promise<void> {
     return;
   }
   const incremental = detailFor === wanted && detailCursor !== null;
-  const detail = await run(
-    api.getSession(wanted, incremental ? { from: detailCursor!, limit: MAX_TIMELINE_ROWS } : { limit: MAX_TIMELINE_ROWS })
+  const reply = await api.getSession(
+    wanted, incremental ? { from: detailCursor!, limit: MAX_TIMELINE_ROWS } : { limit: MAX_TIMELINE_ROWS }
   );
-  if (!detail || generation !== detailLoadGeneration || selectedId !== wanted) return;
+  if (generation !== detailLoadGeneration || selectedId !== wanted) return;
+  if (!reply.ok) {
+    toast(reply.error);
+    return;
+  }
+  const detail = reply.data;
   // User/assistant prose is canonical in messages.json, while structured page activity stays
   // append-only by design: ChatGPT can grow one commentary caption or rewrite one activity
   // label several times. `foldProgress` turns those snapshots back into the one logical row
   // their stable progressId/messageId names, then chronology places that row at its first
   // appearance. This helper existed already but was never wired into the desktop reader,
-  // which is why "Inspectingโ€ฆ" and "Inspectedโ€ฆ" still appeared as siblings.
+  // which is why "Inspecting…" and "Inspected…" still appeared as siblings.
   if (incremental) mergeDetailDelta(detail.events);
   else {
     const folded = chronological(foldProgress(detail.events));
@@ -442,10 +461,11 @@ async function loadHandoff(): Promise<void> {
     return;
   }
   if (handoffFor === wanted) return;
-  const loaded = await run(api.getHandoff(summary!.id, wanted));
+  const reply = await api.getHandoff(summary!.id, wanted);
   if (generation !== handoffLoadGeneration || selectedId !== sessionId) return;
-  handoff = loaded ?? null;
-  handoffFor = wanted;
+  handoff = reply.ok ? reply.data : null;
+  handoffFor = reply.ok ? wanted : null;
+  if (!reply.ok) toast(reply.error);
   paintHandoff();
 }
 
@@ -543,7 +563,7 @@ export function renderedMessage(html: string, fallback: string): HTMLElement {
  *
  * The timeline is redrawn from scratch whenever anything is recorded, and a fresh
  * `<details>` is closed. So opening a call to read its arguments and then having ChatGPT
- * make one more MCP call โ€” which is to say, the normal case โ€” silently collapsed what you
+ * make one more MCP call — which is to say, the normal case — silently collapsed what you
  * were reading, several times a minute. Remembering the open set outside the DOM is what
  * makes a redraw invisible; the ids are the recorder's own, so they survive the rebuild.
  *
@@ -630,7 +650,7 @@ function eventBody(event: SessionEvent): HTMLElement {
       const line = el(
         'p',
         event.outcome === 'completed' ? 'meta' : 'meta is-warn',
-        `${tr('chat.turnOutcome', { outcome: outcomeLabel(event.outcome) })}${event.detail ? ` โ€” ${event.detail}` : ''}`
+        `${tr('chat.turnOutcome', { outcome: outcomeLabel(event.outcome) })}${event.detail ? ` — ${event.detail}` : ''}`
       );
       return line;
     }
@@ -645,7 +665,7 @@ function eventBody(event: SessionEvent): HTMLElement {
      *
      * The timeline is how the user checks what the agents actually said to each other, and
      * a run of grey "Unknown event" rows in the middle of a multi-agent session reads as a
-     * broken log โ€” the one impression a session recorder cannot afford to give.
+     * broken log — the one impression a session recorder cannot afford to give.
      */
     case 'agent_message': {
       const box = el('div', 'said');
@@ -686,7 +706,7 @@ function eventRow(event: SessionEvent): HTMLElement {
  * The agent chips above the timeline.
  *
  * Drawn only when this session actually has more than one attribution in it, so a
- * single-agent session โ€” which is every session unless multi-agent mode is running โ€”
+ * single-agent session — which is every session unless multi-agent mode is running —
  * keeps exactly the view it had before.
  */
 function paintAgentFilter(): void {
@@ -694,7 +714,7 @@ function paintAgentFilter(): void {
   const named = [...new Set(events.flatMap((event) => (event.agent ? [event.agent] : [])))].sort();
   const anyUnattributed = events.some((event) => !event.agent);
   // A filter belongs to the session it was chosen in. Carrying it across a selection
-  // change showed the next session's timeline as empty with no chip lit to explain why โ€”
+  // change showed the next session's timeline as empty with no chip lit to explain why —
   // and agent ids repeat between runs, so it could also silently hide half of one. The
   // same guard catches an agent that simply is not in this session's events.
   if (filterFor !== selectedId) {
@@ -781,7 +801,7 @@ function paintDetail(): void {
   const shown = windowed.shown;
 
   // The scroller is the card body, not the list: a live session appends to the bottom,
-  // so stay pinned there unless the user has scrolled up to read something โ€” and if they
+  // so stay pinned there unless the user has scrolled up to read something — and if they
   // have, put them back exactly where they were instead of letting the rebuild jump.
   const pane = $('chatBody');
   const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 40;
@@ -834,8 +854,8 @@ function paintDetail(): void {
 /**
  * The brief the last compaction of this session left behind.
  *
- * A record, not a control. The compaction itself happens in the ChatGPT conversation โ€” the
- * chat writes its own brief as its final answer โ€” so what is worth showing here is the
+ * A record, not a control. The compaction itself happens in the ChatGPT conversation — the
+ * chat writes its own brief as its final answer — so what is worth showing here is the
  * document that came out of it, and any warning attached to it.
  */
 function paintHandoff(): void {
@@ -1091,8 +1111,8 @@ function paintCommandSandbox(state: AppState): void {
 /**
  * The meter's red line, derived from the one threshold the user actually sets.
  *
- * There used to be three numbers for one quantity โ€” "suggest at", "urgent at" and
- * "compact at" โ€” all measured in the same local estimate and all editable apart. That is
+ * There used to be three numbers for one quantity — "suggest at", "urgent at" and
+ * "compact at" — all measured in the same local estimate and all editable apart. That is
  * three ways to describe one line, and they drifted: a meter could sit red for an hour on
  * a chat whose automatic trigger was set far higher, or fill only halfway on the turn that
  * compaction actually fired. The threshold is now the amber line by definition, and the red
@@ -1174,7 +1194,7 @@ function releasedOn(created: number): string {
  * Loads the next twenty models, newest first.
  *
  * Paged rather than fetched whole because the catalogue is several hundred entries long and
- * the question this list answers โ€” what is new โ€” is answered by the first screen of it.
+ * the question this list answers — what is new — is answered by the first screen of it.
  */
 async function loadGoalModels(reset: boolean): Promise<void> {
   if (goalLoading) return;
@@ -1203,7 +1223,7 @@ function paintGoalModels(): void {
   const list = $('goalModelList');
   // Emptying an element scrolls it back to the top, and this repaints the whole list every
   // time a page lands. Without holding the offset, paging in the next twenty threw the
-  // reader back to the newest model โ€” which is the one place they had already decided
+  // reader back to the newest model — which is the one place they had already decided
   // against by scrolling away from it.
   const keep = list.scrollTop;
   list.textContent = '';
@@ -1283,7 +1303,7 @@ function applyGoal(state: AppState, previous?: Config): void {
     previous?.goal.objectivePrompt
   );
   // The one sentence somebody switching this on needs, and the exact words the extension
-  // shows under the same switch โ€” two places saying the same thing differently is how a
+  // shows under the same switch — two places saying the same thing differently is how a
   // missing key turns into a support question.
   $('goalHint').textContent = !config.sessions.record
     ? tr('goal.recordFirst')
@@ -1295,7 +1315,7 @@ function applyGoal(state: AppState, previous?: Config): void {
   $('goalHint').classList.toggle('is-warn', !config.sessions.record || !state.hasGoalKey);
   $('goalModelName').textContent = config.goal.model;
   const goalKey = $<HTMLInputElement>('goalKey');
-  goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-โ€ฆ';
+  goalKey.placeholder = state.hasGoalKey ? tr('setup.apiKeyStoredPlaceholder') : 'sk-or-v1-…';
   goalKey.disabled = !secureStorageAvailable || storedCredentialsUnreadable || storedCredentialsAccessFailed;
   const secureStorageReason = state.secureStorage?.reason;
   $('goalKeyState').textContent = storedCredentialsAccessFailed
@@ -1408,7 +1428,7 @@ function applyAutoCompactHint(config: Config): void {
  * A field that is not here does not save: it keeps what was typed until the next repaint
  * and then quietly reverts. `autoCompactTokens` was missing, which made the one number the
  * automatic trigger fires on the one control in the app that never kept what you typed.
- * `sessRecord` is deliberately absent โ€” it lives in the Home permission list now, with
+ * `sessRecord` is deliberately absent — it lives in the Home permission list now, with
  * every other switch that decides what ChatGPT can reach, and saves from there.
  */
 const CHAT_INPUTS = [
@@ -1473,8 +1493,8 @@ export function chatVisible(next: boolean): void {
   if (next) void refreshAll();
 }
 
-async function refreshAll(): Promise<void> {
-  await loadSessions();
+async function refreshAll(resetPages = false): Promise<void> {
+  await loadSessions(resetPages);
   const swarmNow = await run(api.getSwarm());
   if (swarmNow) paintSwarm(swarmNow);
 }
@@ -1506,7 +1526,7 @@ function showView(name: string): void {
   $('chatSettingsBtn').classList.toggle('is-on', name === 'settings');
 }
 
-/** Timeline or Compaction โ€” whichever the gear was opened over. */
+/** Timeline or Compaction — whichever the gear was opened over. */
 let lastContentView = 'timeline';
 
 /** The gear toggles: pressing it again returns to the view the user came from. */
@@ -1521,13 +1541,7 @@ export function initChat(next: Deps): void {
   $('sessionList').addEventListener('click', (event) => {
     const row = (event.target as HTMLElement).closest<HTMLElement>('[data-id]');
     if (!row?.dataset.id || row.dataset.id === selectedId) return;
-    selectedId = row.dataset.id;
-    detailFor = null;
-    detailCursor = null;
-    // A different session is a different set of calls; nothing here should arrive open.
-    openTools.clear();
-    handoff = null;
-    handoffFor = null;
+    selectSession(row.dataset.id);
     paintSessions();
     void loadDetail();
   });
@@ -1549,7 +1563,7 @@ export function initChat(next: Deps): void {
     paintDetail();
   });
 
-  $('chatRefresh').addEventListener('click', () => void refreshAll());
+  $('chatRefresh').addEventListener('click', () => void refreshAll(true));
 
   $('copyHandoff').addEventListener('click', async () => {
     if (!handoff) return;
@@ -1588,9 +1602,9 @@ export function initChat(next: Deps): void {
     paintSwarm(outcome.swarm);
     toast(
       outcome.cleared === 'run'
-        ? 'Run cleared โ€” every worker ended'
+        ? 'Run cleared — every worker ended'
         : outcome.cleared === 'worker'
-          ? `${id} cleared โ€” its slot is free`
+          ? `${id} cleared — its slot is free`
           : outcome.reason
     );
   });

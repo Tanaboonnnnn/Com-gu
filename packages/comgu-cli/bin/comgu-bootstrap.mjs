@@ -7,7 +7,6 @@ import { defaultNpmInstallRoot, installRelease } from '../lib/install.mjs';
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const pkg = JSON.parse(await fs.readFile(path.join(packageRoot, 'package.json'), 'utf8'));
-const installRoot = defaultNpmInstallRoot(packageRoot);
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -21,15 +20,21 @@ function run(command, args, options = {}) {
 }
 
 async function ensurePayload() {
-  return installRelease({ version: pkg.version, installRoot, channel: 'npm' });
+  return installRelease({ version: pkg.version, installRoot: defaultNpmInstallRoot(), channel: 'npm' });
 }
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === '--version') {
+    console.log(pkg.version);
+    return;
+  }
   if (args[0] === 'update') {
-    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     console.log('Updating npm-managed ComGu CLI through npm...');
-    process.exitCode = await run(npm, ['install', '-g', 'comgu-cli@latest']);
+    const npmArgs = ['install', '-g', 'comgu-cli@latest'];
+    process.exitCode = process.platform === 'win32'
+      ? await run('cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...npmArgs])
+      : await run('npm', npmArgs);
     return;
   }
 

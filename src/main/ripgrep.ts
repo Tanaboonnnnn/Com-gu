@@ -34,15 +34,20 @@ function pathCandidate(): string | null {
   return null;
 }
 
-/** Locate the bundled ripgrep first, then an existing user installation as a dev fallback. */
-export function locateRipgrep(): string | null {
+/** Locate only the packaged or locally staged ripgrep. */
+export function locateBundledRipgrep(): string | null {
   const fileName = ripgrepExecutableName();
   const packaged = process.resourcesPath ? path.join(process.resourcesPath, 'rg', fileName) : null;
   if (packaged && isExecutableFile(packaged)) return packaged;
 
   const dev = path.resolve(__dirname, '..', '..', 'resources', 'rg', fileName);
   if (isExecutableFile(dev)) return dev;
-  return pathCandidate();
+  return null;
+}
+
+/** Locate the bundled ripgrep first, then an existing user installation as a dev fallback. */
+export function locateRipgrep(): string | null {
+  return locateBundledRipgrep() ?? pathCandidate();
 }
 
 export function ripgrepVersionFile(): string | null {

@@ -60,10 +60,6 @@ export async function verifySha256(file, expected) {
   return actual;
 }
 
-export function releaseAssetUrl(tag, filename, repository = REPOSITORY) {
-  return `https://github.com/${repository}/releases/download/${tag}/${filename}`;
-}
-
 export async function downloadFile(url, destination, fetchImpl = fetch) {
   const response = await fetchImpl(url, { redirect: 'follow' });
   if (!response.ok || !response.body) throw new Error(`Download failed (${response.status}) for ${url}`);
@@ -113,7 +109,8 @@ export async function installRelease({
   const target = resolveCliTarget(platform, arch);
   const asset = assetNameForTarget(target);
   const root = path.resolve(installRoot);
-  const versionsDir = path.join(root, 'versions');
+  // The per-user cache is shared by independent npm installs, including different architectures.
+  const versionsDir = path.join(root, 'versions', target);
   const finalDir = path.join(versionsDir, normalized.version);
   const statePath = path.join(root, 'install.json');
   await fs.mkdir(versionsDir, { recursive: true });
@@ -143,9 +140,12 @@ export async function installRelease({
     try {
       await fs.rename(staging, finalDir);
     } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
+      if (error?.code !== 'EEXIST' && error?.code !== 'ENOTEMPTY') throw error;
+      // Another installer published this target and version first. Only reuse a usable winner.
+      await fs.access(existingLauncher);
+      return { version: normalized.version, tag: normalized.tag, target, asset, payloadDir: finalDir, launcher: existingLauncher, reused: true };
     }
-    const launcher = packagedLauncher(finalDir, target);
+    const launcher = existingLauncher;
     await fs.access(launcher);
     const state = {
       version: normalized.version,
@@ -157,7 +157,7 @@ export async function installRelease({
       arch,
       installedAt: new Date().toISOString()
     };
-    const stateTemp = `${statePath}.tmp-${process.pid}`;
+    const stateTemp = path.join(tempRoot, 'install.json');
     await fs.writeFile(stateTemp, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await fs.rename(stateTemp, statePath);
     return { ...state, target, payloadDir: finalDir, launcher, reused: false };
@@ -166,18 +166,11 @@ export async function installRelease({
   }
 }
 
-export async function removeInstallerPayload(installRoot) {
-  await fs.rm(path.resolve(installRoot), { recursive: true, force: true });
-}
-
-export function defaultNpmInstallRoot(packageRoot) {
-  return path.join(packageRoot, '.payload');
-}
-
-export function defaultUserInstallRoot(platform = process.platform) {
+export function defaultNpmInstallRoot(platform = process.platform) {
   if (platform === 'win32') {
     const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    return path.join(local, 'ComGu', 'CLI');
+    return path.join(local, 'ComGu', 'NpmCache');
   }
-  return path.join(os.homedir(), '.local', 'share', 'comgu-cli');
+  const cache = process.env.XDG_CACHE_HOME;
+  return path.join(cache && path.isAbsolute(cache) ? cache : path.join(os.homedir(), '.cache'), 'comgu-cli');
 }

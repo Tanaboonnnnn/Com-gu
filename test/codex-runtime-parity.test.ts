@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -218,6 +219,23 @@ describe('Codex unified exec runtime parity', () => {
       '-c',
       "printf '%s\\n' x"
     ]);
+  });
+
+  it.runIf(process.platform !== 'win32')('restores packaged tool discovery after POSIX login startup rewrites PATH', async () => {
+    const temp = await mkdtemp(path.join(tmpdir(), 'comgu-login-path-'));
+    try {
+      const packaged = path.join(temp, "app's packaged tools");
+      const profile = path.join(temp, 'login-env');
+      await mkdir(packaged);
+      await writeFile(path.join(packaged, 'rg'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      await writeFile(profile, 'export PATH=/usr/bin:/bin\nexport COMGU_TEST_PROFILE=loaded\n');
+      const shell = { shellType: 'bash' as const, shellPath: '/bin/bash' };
+      const [file, ...args] = deriveExecArgs(shell, 'printf "%s\\n" "$COMGU_TEST_PROFILE"; command -v rg; printf "%s\\n" "$PATH"', true, packaged);
+      const output = execFileSync(file!, args, { encoding: 'utf8', env: { ...process.env, BASH_ENV: profile } });
+      expect(output.trim().split('\n')).toEqual(['loaded', path.join(packaged, 'rg'), `${packaged}:/usr/bin:/bin`]);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
   });
 
   it('models macOS/Linux shell fallback policy without inventing a Windows shell', () => {

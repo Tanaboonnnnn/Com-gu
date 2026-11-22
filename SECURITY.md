@@ -17,9 +17,9 @@ ComGu is a permission boundary between ChatGPT and the logged-in OS user running
 
 - Filesystem tools validate paths against folders you explicitly approve.
 - Read-only mode disables effective file writes, commands, desktop control and clipboard writes.
-- Ordinary file/terminal authority is selected per exact ChatGPT conversation from already-approved roots. No selected chat scope means no authority. During an active Run, filesystem tools use only that caller's effective `WorkspaceScope` (Primary + Shared approved roots). Learned cwd/workspace state is convenience, never authority.
+- File tools use approved roots enabled on Home and canonical path checks. A Run snapshots the enabled roots as its authority ceiling; a worker can inherit that ceiling or a narrower scope. Learned cwd is convenience, never authority.
 - During an active Run on supported Windows hosts, `exec_command` and `write_stdin` are OS-confined with MXC ProcessContainer for the full descendant process tree. If confinement or required host preparation cannot be proven, Run-scoped commands fail closed with no unrestricted fallback.
-- Commands outside an active Run require either exact per-chat workspace authority or an explicit non-durable unidentified Desktop fallback. The fallback cannot authorize Prime/Workers, and exact chat identity always overrides it.
+- Commands outside an active Run use the permissions of the logged-in OS user. Their starting directory does not confine the command to an approved root.
 - Screen, mouse/keyboard and clipboard permissions are desktop/session-wide capabilities, not folder permissions. They are exposed only when the active Windows/Linux desktop adapter proves the corresponding capability; Wayland coordinate input requires authoritative frame evidence.
 - MCP servers bind to loopback and use secret tokenized paths. Public reachability comes only from the tunnel you configure.
 - The companion-extension bridge is a separate loopback service and exposes no filesystem, command or settings-mutation route.

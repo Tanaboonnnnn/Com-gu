@@ -95,7 +95,7 @@ import {
   withExecNotes
 } from '../exec-hints.js';
 import { childEnv } from '../exec.js';
-import { locateRipgrep } from '../ripgrep.js';
+import { locateBundledRipgrep, locateRipgrep } from '../ripgrep.js';
 import { ensureDevToolchain } from '../toolchain.js';
 import { workspaceRootsFingerprint } from '../run/scope.js';
 import {
@@ -783,8 +783,11 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               }
             }
 
+            // Parse an intercepted apply_patch above using the original argv. The PATH
+            // setup belongs only to the real POSIX login shell and follows its startup.
+            const bundled = process.platform !== 'win32' && useLoginShell ? locateBundledRipgrep() : null;
             const output = await unifiedExecManager.execCommand({
-              command,
+              command: bundled ? deriveExecArgs(shell, boundCommand, useLoginShell, nodePath.dirname(bundled)) : command,
               shellType: shell.shellType,
               hookCommand: commandDetail,
               processId,

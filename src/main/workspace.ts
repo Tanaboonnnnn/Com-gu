@@ -237,22 +237,19 @@ export function primeWorkspace(primeConversationId: string | null): Workspace | 
 }
 
 /**
- * Collapses the live swarm prime's agent-scoped cwd back into its ordinary chat identity.
+ * Clears the temporary Prime slot on run release.
  *
- * While a run exists, the kernel resolves prime tool calls as `agent:prime`, so that key is
- * the authority for workspace changes made during the run. Once the run ends those same calls
- * go back to `chat:<conversation>`. Recency comparison is the wrong tool at this boundary: two
- * writes may share one millisecond, and the generic primeWorkspace() tie-break deliberately
- * favours the chat key for inheritance. Ending the run is an explicit identity transition, so
- * copy the agent value when present and then remove the temporary key. Removing it also keeps
- * a later run from inheriting a previous run's prime cwd when the new prime has none yet.
+ * Exact calls already write to the conversation key. Keep that value; the agent mirror may
+ * still refer to the project from an earlier spawn. Only recover a staged folder when the
+ * exact conversation has none.
  */
 export function releasePrimeWorkspace(primeConversationId: string | null): boolean {
   prune();
   const held = workspaces.get('agent:prime');
   if (!held) return false;
-  if (primeConversationId) {
-    setWorkspaceFor(`chat:${primeConversationId}`, { virtual: held.virtual, real: held.real });
+  const chatKey = primeConversationId ? `chat:${primeConversationId}` : null;
+  if (chatKey && !workspaces.has(chatKey)) {
+    setWorkspaceFor(chatKey, { virtual: held.virtual, real: held.real });
   }
   workspaces.delete('agent:prime');
   return true;
@@ -288,25 +285,6 @@ export function parkAgentWorkspace(agentId: string, conversationId: string | nul
 export function bindAgentWorkspace(agentId: string, conversationId: string): boolean {
   if (!conversationId) return false;
   return parkAgentWorkspace(agentId, conversationId);
-}
-
-/**
- * Rehydrates a parked conversation workspace into the friendly agent id of a new incarnation.
- *
- * Absence is meaningful: the same friendly id may have belonged to another run moments ago, so
- * failing to find a conversation-scoped workspace must actively clear that stale agent key.
- */
-export function activateAgentWorkspace(agentId: string, conversationId: string | null): boolean {
-  if (!agentId) return false;
-  prune();
-  const key = `agent:${agentId}`;
-  const held = conversationId ? workspaces.get(`chat:${conversationId}`) : undefined;
-  if (!held) {
-    workspaces.delete(key);
-    return false;
-  }
-  setWorkspaceFor(key, { virtual: held.virtual, real: held.real });
-  return true;
 }
 
 /** The workspace a named conversation has learned, for code running outside its calls. */

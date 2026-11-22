@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -12,6 +12,8 @@ const SECRET_PATTERNS = [
   { label: 'Stripe live secret', pattern: /\bsk_live_[A-Za-z0-9]{20,}\b/g }
 ];
 
+// Recognize specific UTF-8 punctuation misdecoded as Windows-874, not normal Thai text.
+const ENCODING_CORRUPTION = /\u0e42\u20ac[\u201c\u201d\u0e06\u0e02\u0099]/u;
 const FLOATING_ACTION = /\buses:\s*[^\s#]+@(main|master|latest)\b/gim;
 const OLD_UPSTREAM = ['totec448-spec', 'chat-on-steroids'].join('/');
 const OLD_MAINTAINER = ['227782719+totec448-spec', 'users.noreply.github.com'].join('@');
@@ -43,6 +45,7 @@ export function scanText(text, { file = '' } = {}) {
   }
   FLOATING_ACTION.lastIndex = 0;
   if (runtimeOrReleasePath(file)) {
+    if (ENCODING_CORRUPTION.test(text)) issues.push('probable text encoding corruption');
     if (text.includes(OLD_UPSTREAM)) issues.push('previous upstream repository reference');
     if (text.includes(OLD_MAINTAINER)) issues.push('previous upstream maintainer identity');
   }

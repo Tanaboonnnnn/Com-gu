@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkForUpdate,
@@ -13,6 +13,24 @@ import {
 } from '../src/main/updater.js';
 
 const RELEASE_URL = 'https://github.com/Tanaboonnnnn/Com-gu/releases/tag/v2.1.0';
+const DOWNLOAD_FIXTURE = {
+  target: { platform: 'win32', arch: 'x64' } as const,
+  version: '2.1.0',
+  assets: [
+    { name: 'ComGu-Setup-x64.exe', url: 'https://download/x64' },
+    { name: 'SHA256SUMS.txt', url: 'https://download/sums' }
+  ]
+};
+const stagingDirs: string[] = [];
+async function stagingDir() {
+  const dir = await mkdtemp(join(tmpdir(), 'comgu-updater-'));
+  stagingDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  for (const dir of stagingDirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -115,12 +133,22 @@ describe('updater core', () => {
   });
 
   it('downloads only the exact installer and checksum manifest, then verifies SHA-256', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'comgu-updater-'));
+    const dir = await stagingDir();
     const installer = Buffer.from('installer bytes');
     const digest = createHash('sha256').update(installer).digest('hex');
     const fetcher = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-      if (url.endsWith('/x64')) return new Response(installer);
+      if (url.endsWith('/x64')) {
+        const response = new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(installer.subarray(0, 5));
+            controller.enqueue(installer.subarray(5));
+            controller.close();
+          }
+        }));
+        vi.spyOn(response, 'arrayBuffer').mockRejectedValue(new Error('do not buffer the installer'));
+        return response;
+      }
       if (url.endsWith('/sums')) return new Response(`${digest}  ComGu-Setup-x64.exe\n`);
       throw new Error(`unexpected ${url}`);
     });
@@ -141,10 +169,13 @@ describe('updater core', () => {
     if (downloaded.status !== 'downloaded') throw new Error('expected downloaded');
     expect(await readFile(downloaded.installerPath)).toEqual(installer);
     expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(await readdir(dir)).toEqual(['ComGu-Setup-x64.exe']);
   });
 
-  it('deletes/refuses a staged installer whose checksum does not match', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'comgu-updater-'));
+  it('removes only its partial file when the checksum does not match', async () => {
+    const dir = await stagingDir();
+    const previousPath = join(dir, 'ComGu-Setup-x64.exe');
+    await writeFile(previousPath, 'previous verified installer');
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('/x64')
         ? new Response('tampered')
@@ -163,10 +194,59 @@ describe('updater core', () => {
     });
 
     expect(result).toEqual({ status: 'error', message: 'Downloaded installer failed SHA-256 verification.' });
+    expect(await readFile(previousPath, 'utf8')).toBe('previous verified installer');
+    expect(await readdir(dir)).toEqual(['ComGu-Setup-x64.exe']);
+  });
+
+  it('rejects an over-limit streamed checksum manifest before downloading the installer', async () => {
+    const dir = await stagingDir();
+    const fetcher = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(40 * 1024));
+        controller.enqueue(new Uint8Array(40 * 1024));
+        controller.close();
+      }
+    })));
+    await expect(downloadUpdate({ ...DOWNLOAD_FIXTURE, stagingDir: dir, fetcher })).resolves.toEqual({
+      status: 'error', message: 'Checksum manifest exceeds the download size limit.'
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('rejects an installer advertised above the size limit and cleans staging', async () => {
+    const dir = await stagingDir();
+    const fetcher = vi.fn(async (input: string | URL | Request) => String(input).endsWith('/sums')
+      ? new Response(`${'0'.repeat(64)}  ComGu-Setup-x64.exe\n`)
+      : new Response('installer', { headers: { 'Content-Length': String(1024 ** 3 + 1) } }));
+    await expect(downloadUpdate({ ...DOWNLOAD_FIXTURE, stagingDir: dir, fetcher })).resolves.toEqual({
+      status: 'error', message: 'Installer exceeds the download size limit.'
+    });
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('aborts a stalled installer body and cleans staging', async () => {
+    const dir = await stagingDir();
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/sums')) return new Response(`${'0'.repeat(64)}  ComGu-Setup-x64.exe\n`);
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+          const signal = init?.signal;
+          if (signal?.aborted) controller.error(signal.reason);
+          else signal?.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+        }
+      }));
+    });
+    await expect(downloadUpdate({ ...DOWNLOAD_FIXTURE, stagingDir: dir, fetcher, timeoutMs: 100 })).resolves.toEqual({
+      status: 'error', message: 'Update download timed out.'
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('re-verifies the staged installer before an explicit install launch', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'comgu-updater-'));
+    const dir = await stagingDir();
     const path = join(dir, 'ComGu-Setup-x64.exe');
     await writeFile(path, 'verified');
     const sha256 = createHash('sha256').update('verified').digest('hex');
@@ -178,7 +258,7 @@ describe('updater core', () => {
   });
 
   it('refuses launch if a verified staged installer was changed afterward', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'comgu-updater-'));
+    const dir = await stagingDir();
     const path = join(dir, 'ComGu-Setup-x64.exe');
     const sha256 = createHash('sha256').update('verified').digest('hex');
     await writeFile(path, 'tampered later');

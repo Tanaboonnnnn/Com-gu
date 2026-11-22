@@ -173,6 +173,8 @@ async function syncExtensionToAppVersion(version) {
  * app is unreachable would otherwise file A's messages into B's history.
  */
 let journal = [];
+/** One /events snapshot may be acknowledged while another tab compacts the queue. */
+let journalPosting = null;
 /** The one journal flush currently talking to the app, if any. */
 let drainWork = null;
 
@@ -512,23 +514,52 @@ function makeRoom(tighten = false) {
     journal.splice(Math.min(index, journal.length), 0, entry);
     bytes += sizeOf(entry) + comma;
   };
-  /** Updates a gap and keeps the running exact serialised size in sync. */
-  const setGapText = (gap, text) => {
+  /** Update the marker and its cached byte size as one change. */
+  const recordPressureLoss = (gap, lostKind = null) => {
     const before = sizeOf(gap);
-    gap.event.text = text;
+    const loss = gap.pressureLoss;
+    loss.count++;
+    if (lostKind) {
+      loss.kinds[lostKind] = (loss.kinds[lostKind] || 0) + 1;
+      const detail = Object.entries(loss.kinds).map(([kind, count]) => `${count} ${kind}`).join(', ');
+      gap.event.text = `⚠ ${loss.count} observation(s) (${detail}) were lost in the browser before the app accepted them: the local journal hit its storage limit while the app was unreachable. This part of the history is incomplete.`;
+    } else {
+      gap.event.text = `⚠ ${loss.count} progress line(s) observed here were dropped in the browser before the app accepted them. The app was unreachable and the local queue was full.`;
+    }
     sizeCache.delete(gap);
     bytes += sizeOf(gap) - before;
   };
 
-  // Pass one: progress and other non-essential lines, oldest first. The gap marker is
-  // inserted on the first removal and counts against the limits while we keep trimming,
-  // so pressure can never make the algorithm delete its own evidence of what was lost.
   const progressGaps = new Map();
+  const lossGaps = new Map();
+  for (const entry of journal) {
+    if (!entry.gap || !entry.pressureLoss || journalPosting?.has(entry)) continue;
+    const buckets = entry.event.kind === 'progress' ? progressGaps : lossGaps;
+    const key = routeKey(entry);
+    if (!buckets.has(key)) buckets.set(key, entry);
+  }
+  const bucketFor = (buckets, entry, kind, index) => {
+    const key = routeKey(entry);
+    let gap = buckets.get(key);
+    if (!gap) {
+      // A marker already in a POST will report its own counts. Keep only the
+      // new loss here, so an eventual ACK cannot duplicate or erase either count.
+      gap = gapEntry(entry, kind, '');
+      gap.pressureLoss = { count: 0, kinds: {} };
+      buckets.set(key, gap);
+      insertAt(index, gap);
+    }
+    return gap;
+  };
+  const trimmable = (entry) => !entry.gap && !journalPosting?.has(entry);
+
+  // Pass one: progress and other non-essential lines, oldest first. The per-route gap
+  // also counts against the limits; reuse it on the next overflow, even after restart.
   let progressAt = 0;
   while (!fits()) {
     while (
       progressAt < journal.length &&
-      (journal[progressAt].gap || ESSENTIAL.has(journal[progressAt].event.kind))
+      (!trimmable(journal[progressAt]) || ESSENTIAL.has(journal[progressAt].event.kind))
     ) {
       progressAt++;
     }
@@ -536,50 +567,27 @@ function makeRoom(tighten = false) {
     const index = progressAt;
     const entry = removeAt(index);
     if (!entry) break;
-    const key = routeKey(entry);
-    let bucket = progressGaps.get(key);
-    if (!bucket) {
-      bucket = { gap: gapEntry(entry, 'progress', ''), dropped: 0 };
-      progressGaps.set(key, bucket);
-      insertAt(index, bucket.gap);
-      progressAt = index + 1;
-    }
-    bucket.dropped++;
-    setGapText(
-      bucket.gap,
-      `⚠ ${bucket.dropped} progress line(s) observed here were dropped in the browser before the app accepted them. The app was unreachable and the local queue was full.`
-    );
+    recordPressureLoss(bucketFor(progressGaps, entry, 'progress', index));
   }
   if (fits()) return;
 
   // Pass two: essentials themselves have to go. This is real loss, so keep one durable
-  // marker naming exactly what kinds disappeared. As above, the marker is present while
-  // trimming, which guarantees the final journal is genuinely inside both caps.
-  const lossGaps = new Map();
+  // marker naming exactly what kinds disappeared, for each affected route.
   let lossAt = 0;
   while (!fits()) {
-    while (lossAt < journal.length && journal[lossAt].gap) lossAt++;
+    while (lossAt < journal.length && !trimmable(journal[lossAt])) lossAt++;
     if (lossAt >= journal.length) break;
     const index = lossAt;
     const entry = removeAt(index);
     if (!entry) break;
-    const key = routeKey(entry);
-    let bucket = lossGaps.get(key);
-    if (!bucket) {
-      bucket = { gap: gapEntry(entry, 'chat_error', ''), lost: 0, counts: {} };
-      lossGaps.set(key, bucket);
-      insertAt(index, bucket.gap);
-      lossAt = index + 1;
-    }
-    bucket.lost++;
-    bucket.counts[entry.event.kind] = (bucket.counts[entry.event.kind] || 0) + 1;
-    const detail = Object.entries(bucket.counts)
-      .map(([kind, count]) => `${count} ${kind}`)
-      .join(', ');
-    setGapText(
-      bucket.gap,
-      `⚠ ${bucket.lost} observation(s) (${detail}) were lost in the browser before the app accepted them: the local journal hit its storage limit while the app was unreachable. This part of the history is incomplete.`
-    );
+    recordPressureLoss(bucketFor(lossGaps, entry, 'chat_error', index), entry.event.kind);
+  }
+  // If only route-specific markers remain (e.g. from an older extension or thousands
+  // of distinct routes), retain the newest ones rather than making the whole journal
+  // unwritable. Never attribute one chat's losses to a different chat to save space.
+  while (!fits() && journal.length > 0) {
+    const oldestNotPosting = journal.findIndex((entry) => !journalPosting?.has(entry));
+    removeAt(Math.max(0, oldestNotPosting));
   }
 }
 
@@ -677,8 +685,6 @@ function nextJournalBatch(preferredConversationId = null) {
     preferred && !blocked.has(preferred) && journal.some((entry) => entry.conversationId === preferred)
       ? preferred
       : null;
-  let agent;
-  let agentCommandId;
   const mine = [];
   for (const entry of journal) {
     if (!conversationId) {
@@ -687,16 +693,9 @@ function nextJournalBatch(preferredConversationId = null) {
     }
     if (entry.conversationId !== conversationId || mine.length >= BATCH) continue;
     mine.push(entry);
-    // Recovery provenance must come from the same journal entry. Older entries can have an
-    // agent label but no command id; keep delivering them, but never upgrade that label into
-    // worker-binding authority by combining it with another row's command id.
-    if (!agent && entry.agent && entry.agentCommandId) {
-      agent = entry.agent;
-      agentCommandId = entry.agentCommandId;
-    }
     if (mine.length >= BATCH) break;
   }
-  return conversationId ? { conversationId, mine, agent, agentCommandId } : null;
+  return conversationId ? { conversationId, mine } : null;
 }
 
 async function drainOnce(preferredConversationId = null) {
@@ -710,33 +709,35 @@ async function drainOnce(preferredConversationId = null) {
     // concrete conversation overtake it. Other conversations remain independent.
     const batch = nextJournalBatch(preferredConversationId);
     if (!batch) break;
-    const { conversationId, mine, agent, agentCommandId } = batch;
-    const result = await call('/events', {
-      method: 'POST',
-      body: JSON.stringify({
-        conversationId,
-        browserFamily: BROWSER_FAMILY,
-        agent,
-        agentCommandId,
-        events: mine.map((entry) => entry.event)
-      })
-    });
-    noteDelivery(result, mine.length, conversationId);
-    if (result.status === 413 && mine.length > 1) {
-      // Too big for the app to accept. Send half; the remainder stays queued.
-      const half = mine.slice(0, Math.floor(mine.length / 2));
-      const retry = await call('/events', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId, browserFamily: BROWSER_FAMILY, agent, agentCommandId, events: half.map((entry) => entry.event) })
-      });
-      noteDelivery(retry, half.length, conversationId);
-      if (!retry.ok) break;
-      const sent = new Set(half);
-      journal = journal.filter((entry) => !sent.has(entry));
-      continue;
+    const { conversationId } = batch;
+    let mine = batch.mine;
+    let result;
+    while (true) {
+      // Both parts of recovery provenance must come from the same row in the batch
+      // actually sent, including after a 413 shrinks it.
+      const owner = mine.find((entry) => entry.agent && entry.agentCommandId);
+      journalPosting = new Set(mine);
+      try {
+        result = await call('/events', {
+          method: 'POST',
+          body: JSON.stringify({
+            conversationId,
+            browserFamily: BROWSER_FAMILY,
+            agent: owner?.agent,
+            agentCommandId: owner?.agentCommandId,
+            events: mine.map((entry) => entry.event)
+          })
+        });
+      } finally {
+        journalPosting = null;
+      }
+      noteDelivery(result, mine.length, conversationId);
+      if (result.status !== 413 || mine.length === 1) break;
+      mine = mine.slice(0, Math.floor(mine.length / 2));
     }
     if (result.status === 413 && mine.length === 1) {
       const rejected = mine[0];
+      if (rejected.gap) break;
       journal = journal.filter((entry) => entry !== rejected);
       journal.unshift(
         gapEntry(

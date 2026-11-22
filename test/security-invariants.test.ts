@@ -90,6 +90,12 @@ describe('security invariants', () => {
     expect(scanText('https://github.com/Tanaboonnnnn/Com-gu')).toEqual([]);
   });
 
+  it('flags known encoding corruption without rejecting normal Thai or Unicode punctuation', () => {
+    const file = 'src/main/example.ts';
+    expect(scanText('Connecting\u0e42\u20ac\u0e06', { file })).toContain('probable text encoding corruption');
+    expect(scanText('ยังเชื่อมต่อ… แล้วลองใหม่ — พร้อม', { file })).toEqual([]);
+  });
+
   it('wires deterministic security and production-audit gates into CI and release preflight', async () => {
     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
     expect(pkg.scripts?.['verify:security']).toBe('node scripts/verify-security-invariants.mjs');

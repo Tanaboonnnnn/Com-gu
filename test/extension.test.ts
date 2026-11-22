@@ -2645,6 +2645,69 @@ describe('extension observation journal', () => {
     expect(journal.some((entry) => entry.gap === true && entry.conversationId === null && entry.provisional === provisional)).toBe(false);
   });
 
+  it('keeps one cumulative progress gap per route across repeated journal overflows and worker restart', async () => {
+    const local = new FakeStorageArea();
+    const session = new FakeStorageArea();
+    let worker = loadWorker({ local, session });
+    const conversationId = '11111111-2222-3333-4444-555555555555';
+    const entries = Array.from({ length: 4200 }, (_, index) => ({
+      conversationId,
+      event: { kind: 'progress', time: Date.now(), text: `progress ${index}` }
+    }));
+    await worker.send({ type: 'events', entries });
+    worker = loadWorker({ local, session });
+    await worker.send({ type: 'events', entries: entries.slice(0, 5) });
+    await worker.send({ type: 'events', entries: entries.slice(0, 5) });
+
+    const journal = journalOf(session);
+    const gaps = journal.filter((entry) => entry.gap === true);
+    expect(journal).toHaveLength(4000);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({ conversationId, event: { text: expect.stringContaining('211 progress line(s)') } });
+  });
+
+  it('reports only new losses when the prior journal gap is already being delivered', async () => {
+    const local = new FakeStorageArea({ port: 8765, token: 'paired-token' });
+    const session = new FakeStorageArea();
+    const conversationId = '11111111-2222-3333-4444-555555555555';
+    const receivedCounts: number[] = [];
+    let beginPost!: () => void;
+    let finishPost!: () => void;
+    const posted = new Promise<void>((resolve) => { beginPost = resolve; });
+    const paused = new Promise<void>((resolve) => { finishPost = resolve; });
+    let first = true;
+    const worker = loadWorker({ local, session, fetch: vi.fn(async (input: string, init: Record<string, unknown> = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname !== '/events') return response(200, {});
+      const body = JSON.parse(String(init.body));
+      for (const event of body.events) {
+        const count = typeof event.text === 'string' && /([0-9]+) progress line/.exec(event.text);
+        if (count) receivedCounts.push(Number(count[1]));
+      }
+      if (first) {
+        first = false;
+        beginPost();
+        await paused;
+      }
+      return response(200, {});
+    }) });
+    const entries = Array.from({ length: 4200 }, (_, index) => ({
+      conversationId,
+      event: { kind: 'progress', time: Date.now(), text: `progress ${index}` }
+    }));
+    const initial = worker.send({ type: 'events', entries, conversationId }, 31);
+    await posted;
+    try {
+      await worker.send({ type: 'events', entries: entries.slice(0, 5), conversationId }, 32);
+    } finally {
+      finishPost();
+    }
+    await initial;
+
+    expect(receivedCounts).toEqual([201, 6]);
+  });
+
   it('keeps essential-loss markers scoped to each affected conversation', async () => {
     const local = new FakeStorageArea();
     const session = new FakeStorageArea();
@@ -2679,6 +2742,35 @@ describe('extension observation journal', () => {
     const journal = journalOf(session);
     expect(Buffer.byteLength(JSON.stringify(journal), 'utf8')).toBeLessThanOrEqual(4 * 1024 * 1024);
     expect(journal.some((entry) => entry.gap === true)).toBe(true);
+  });
+
+  it('delivers every observation when both an initial batch and its first half exceed the bridge cap', async () => {
+    const local = new FakeStorageArea({ port: 8765, token: 'paired-token' });
+    const session = new FakeStorageArea();
+    const conversationId = '11111111-2222-3333-4444-555555555555';
+    const received: string[] = [];
+    let oversized = 0;
+    const worker = loadWorker({ local, session, fetch: vi.fn(async (input: string, init: Record<string, unknown> = {}) => {
+      const url = new URL(input);
+      if (url.pathname === '/hello') return response(200, { app: 'chat-on-steroids', paired: true });
+      if (url.pathname !== '/events') return response(200, {});
+      const body = JSON.parse(String(init.body));
+      if (body.events.length > 2) {
+        oversized++;
+        return response(413, { error: 'body_too_large' });
+      }
+      received.push(...body.events.map((event: { text: string }) => event.text));
+      return response(200, {});
+    }) });
+    const texts = Array.from({ length: 8 }, (_, index) => `message ${index}`);
+    await worker.send({
+      type: 'events', conversationId,
+      entries: texts.map((text) => ({ conversationId, event: { kind: 'user_message', time: Date.now(), text } }))
+    });
+
+    expect(oversized).toBeGreaterThanOrEqual(2);
+    expect(received).toEqual(texts);
+    expect(journalOf(session)).toEqual([]);
   });
 
   it('replaces a single unhalvable 413 observation with an explicit durable gap', async () => {

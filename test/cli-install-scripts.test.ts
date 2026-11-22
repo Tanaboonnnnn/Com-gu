@@ -14,6 +14,12 @@ describe('professional CLI install scripts', () => {
     expect(source).not.toMatch(/\bsudo\b/);
   });
 
+  it('expands the Windows update exit status after PowerShell runs', () => {
+    const source = readFileSync('install.ps1', 'utf8').replace(/\r\n/g, '\n');
+    expect(source).toMatch(/^if \/I "%~1"=="update" goto update$/m);
+    expect(source).toMatch(/^:update\npowershell\.exe [^\n]+\nexit \/b %ERRORLEVEL%$/m);
+  });
+
   it('keeps the PowerShell installer fail-closed and user-scoped', () => {
     const source = readFileSync('install.ps1', 'utf8');
     expect(source).toContain("$ErrorActionPreference = 'Stop'");

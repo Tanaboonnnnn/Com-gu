@@ -59,6 +59,16 @@ function run(command, args, env) {
   });
 }
 
+async function expectFailure(action, pattern) {
+  try {
+    await action();
+  } catch (error) {
+    if (!pattern.test(String(error))) throw error;
+    return;
+  }
+  throw new Error('Installer command unexpectedly succeeded');
+}
+
 async function waitForMissing(target, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -81,8 +91,19 @@ try {
     COMGU_BIN_DIR: binDir,
     COMGU_INSTALLER_TEST_BASE_URL: baseUrl
   };
+  const install = process.platform === 'win32'
+    ? () => run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'install.ps1')], env)
+    : () => run('sh', [path.join(root, 'install.sh')], env);
+  if (!['win32', 'linux'].includes(process.platform)) throw new Error(`Installer channel smoke does not support ${process.platform}`);
+  const incomplete = path.join(installRoot, 'versions', pkg.version);
+  const current = path.join(installRoot, 'current');
+  await fs.mkdir(incomplete, { recursive: true });
+  await fs.writeFile(current, '0.0.0', 'utf8');
+  await expectFailure(install, /incomplete installation/i);
+  if ((await fs.readFile(current, 'utf8')) !== '0.0.0') throw new Error('Installer activated an incomplete version');
+  await fs.rmdir(incomplete);
+  await install();
   if (process.platform === 'win32') {
-    await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'install.ps1')], env);
     const command = path.join(binDir, 'comgu.cmd');
     const version = await run('cmd.exe', ['/d', '/s', '/c', command, '--version'], env);
     if (version.stdout.trim() !== pkg.version) throw new Error(`Installed CLI reported ${version.stdout.trim()}, expected ${pkg.version}`);
@@ -90,14 +111,15 @@ try {
     await waitForMissing(installRoot);
     await waitForMissing(command);
   } else if (process.platform === 'linux') {
-    await run('sh', [path.join(root, 'install.sh')], env);
     const command = path.join(binDir, 'comgu');
     const version = await run(command, ['--version'], env);
     if (version.stdout.trim() !== pkg.version) throw new Error(`Installed CLI reported ${version.stdout.trim()}, expected ${pkg.version}`);
+    const fakeBin = path.join(temp, 'fake-bin');
+    await fs.mkdir(fakeBin);
+    await fs.writeFile(path.join(fakeBin, 'curl'), '#!/bin/sh\nexit 19\n', { mode: 0o755 });
+    await expectFailure(() => run(command, ['update'], { ...env, PATH: `${fakeBin}:${env.PATH}` }), /failed \(19\)/);
     await run(command, ['uninstall'], env);
     await waitForMissing(command);
-  } else {
-    throw new Error(`Installer channel smoke does not support ${process.platform}`);
   }
   if ((await fs.readFile(profileSentinel, 'utf8')) !== 'keep') throw new Error('Installer touched profile sentinel');
   await waitForMissing(installRoot);

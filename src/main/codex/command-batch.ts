@@ -5,6 +5,7 @@
  * same shell, so variables, environment changes and the working directory survive between
  * sections. The wrapper keeps going after a normal non-zero result, labels each section,
  * and exits with the first non-zero code after all commands have had a chance to run.
+ * Each exit marker starts on a fresh line even if command output had no trailing newline.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -41,6 +42,7 @@ function powershellBatch(commands: readonly string[], marker: string): string {
     '    [Console]::Error.WriteLine($_.ToString())',
     '    $__cos_batch_code = 1',
     '  }',
+    '  [Console]::Out.WriteLine()',
     `  [Console]::Out.WriteLine(("--- exit code {0} --- [clf-batch:${marker}]" -f $__cos_batch_code))`,
     '  if ($__cos_batch_code -ne 0 -and $__cos_batch_exit -eq 0) { $__cos_batch_exit = $__cos_batch_code }',
     '}',
@@ -55,7 +57,7 @@ function posixBatch(commands: readonly string[], marker: string): string {
       `printf '%s\\n' ${shellSingleQuote(commandBanner(index + 1, commands.length, marker))}`,
       `eval ${shellSingleQuote(command)}`,
       '__cos_batch_code=$?',
-      `printf '%s\\n' "--- exit code $__cos_batch_code --- [clf-batch:${marker}]"`,
+      `printf '\\n%s\\n' "--- exit code $__cos_batch_code --- [clf-batch:${marker}]"`,
       'if [ "$__cos_batch_code" -ne 0 ] && [ "$__cos_batch_exit" -eq 0 ]; then __cos_batch_exit=$__cos_batch_code; fi'
     );
   });
@@ -70,6 +72,7 @@ function cmdBatch(commands: readonly string[], marker: string): string {
       `echo ${commandBanner(index + 1, commands.length, marker)}`,
       `call ${command}`,
       'set "__cos_batch_code=%errorlevel%"',
+      'echo(',
       `echo --- exit code %__cos_batch_code% --- [clf-batch:${marker}]`,
       'if not "%__cos_batch_code%"=="0" if "%__cos_batch_exit%"=="0" set "__cos_batch_exit=%__cos_batch_code%"'
     );

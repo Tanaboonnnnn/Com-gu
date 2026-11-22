@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { chmod, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 import type {
   UpdateAsset,
@@ -11,8 +14,50 @@ import type {
 
 const RELEASE_API = 'https://api.github.com/repos/Tanaboonnnnn/Com-gu/releases/latest';
 const CHECKSUM_ASSET = 'SHA256SUMS.txt';
+const METADATA_TIMEOUT_MS = 20_000;
+const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+const MAX_RELEASE_BYTES = 2 * 1024 * 1024;
+const MAX_CHECKSUM_BYTES = 64 * 1024;
+const MAX_INSTALLER_BYTES = 1024 * 1024 * 1024;
+
+class UpdateDownloadError extends Error {}
 
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+async function* responseChunks(response: Response, maxBytes: number, label: string): AsyncGenerator<Uint8Array> {
+  if (!response.ok || !response.body) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new UpdateDownloadError(`${label} download failed (HTTP ${response.status}).`);
+  }
+  const reader = response.body.getReader();
+  let complete = false;
+  let size = 0;
+  try {
+    if (Number(response.headers.get('content-length')) > maxBytes) {
+      throw new UpdateDownloadError(`${label} exceeds the download size limit.`);
+    }
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        complete = true;
+        return;
+      }
+      size += chunk.value.byteLength;
+      if (size > maxBytes) throw new UpdateDownloadError(`${label} exceeds the download size limit.`);
+      yield chunk.value;
+    }
+  } finally {
+    if (!complete) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+async function responseText(response: Response, maxBytes: number, label: string): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = '';
+  for await (const chunk of responseChunks(response, maxBytes, label)) text += decoder.decode(chunk, { stream: true });
+  return text + decoder.decode();
+}
 
 interface GitHubAsset {
   name?: unknown;
@@ -93,10 +138,10 @@ export async function checkForUpdate(options: {
   const fetcher = options.fetcher ?? fetch;
   try {
     const response = await fetcher(RELEASE_API, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ComGu-Updater' }
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ComGu-Updater' },
+      signal: AbortSignal.timeout(METADATA_TIMEOUT_MS)
     });
-    if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-    const release = (await response.json()) as GitHubRelease;
+    const release = JSON.parse(await responseText(response, MAX_RELEASE_BYTES, 'Release metadata')) as GitHubRelease;
     if (release.draft === true || release.prerelease === true) throw new Error('unstable release');
     if (typeof release.tag_name !== 'string') throw new Error('missing release tag');
     const latestVersion = release.tag_name.startsWith('v') ? release.tag_name.slice(1) : release.tag_name;
@@ -131,6 +176,7 @@ export async function downloadUpdate(options: {
   assets: UpdateAsset[];
   stagingDir: string;
   fetcher?: Fetcher;
+  timeoutMs?: number;
 }): Promise<UpdateDownloadResult> {
   const installerName = installerAssetName(options.target);
   const installerAsset = exactAsset(options.assets, installerName);
@@ -139,30 +185,47 @@ export async function downloadUpdate(options: {
 
   const fetcher = options.fetcher ?? fetch;
   const installerPath = join(options.stagingDir, installerName);
+  const signal = AbortSignal.timeout(options.timeoutMs ?? DOWNLOAD_TIMEOUT_MS);
+  const checksumSignal = AbortSignal.any([signal, AbortSignal.timeout(METADATA_TIMEOUT_MS)]);
+  let temporaryDir: string | undefined;
+  let readingChecksum = true;
+  let failureMessage = 'Could not read the update checksum manifest.';
   try {
-    const [installerResponse, checksumResponse] = await Promise.all([
-      fetcher(installerAsset.url),
-      fetcher(checksumAsset.url)
-    ]);
-    if (!installerResponse.ok || !checksumResponse.ok) throw new Error('download failed');
-    const installer = Buffer.from(await installerResponse.arrayBuffer());
-    const checksumText = await checksumResponse.text();
+    const checksumResponse = await fetcher(checksumAsset.url, { signal: checksumSignal });
+    const checksumText = await responseText(checksumResponse, MAX_CHECKSUM_BYTES, 'Checksum manifest');
+    readingChecksum = false;
     const expected = checksumFor(checksumText, installerName);
-    if (!expected) throw new Error('checksum missing');
-    const actual = createHash('sha256').update(installer).digest('hex');
-    if (actual !== expected) {
-      await rm(installerPath, { force: true });
-      return { status: 'error', message: 'Downloaded installer failed SHA-256 verification.' };
-    }
+    if (!expected) throw new UpdateDownloadError('Checksum manifest has no unique entry for this installer.');
+
+    failureMessage = 'Could not create the installer staging directory.';
     await mkdir(options.stagingDir, { recursive: true });
-    await writeFile(installerPath, installer, { flag: 'w' });
-    if (options.target.platform === 'linux' && options.target.linuxFormat === 'appimage') {
-      await chmod(installerPath, 0o755);
+    temporaryDir = await mkdtemp(join(options.stagingDir, '.update-'));
+    const temporaryPath = join(temporaryDir, installerName);
+    failureMessage = 'Could not download the installer or write it to disk.';
+    const installerResponse = await fetcher(installerAsset.url, { signal });
+    const hash = createHash('sha256');
+    async function* verifiedChunks(): AsyncGenerator<Uint8Array> {
+      for await (const chunk of responseChunks(installerResponse, MAX_INSTALLER_BYTES, 'Installer')) {
+        hash.update(chunk);
+        yield chunk;
+      }
     }
+    await pipeline(Readable.from(verifiedChunks(), { objectMode: false }), createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }), { signal });
+    const actual = hash.digest('hex');
+    if (actual !== expected) throw new UpdateDownloadError('Downloaded installer failed SHA-256 verification.');
+
+    failureMessage = 'Could not finalize the verified installer on disk.';
+    if (options.target.platform === 'linux' && options.target.linuxFormat === 'appimage') {
+      await chmod(temporaryPath, 0o755);
+    }
+    signal.throwIfAborted();
+    await rename(temporaryPath, installerPath);
     return { status: 'downloaded', version: options.version, installerPath, sha256: actual };
-  } catch {
-    await rm(installerPath, { force: true }).catch(() => undefined);
-    return { status: 'error', message: 'Update download failed.' };
+  } catch (error) {
+    const timedOut = signal.aborted || (readingChecksum && checksumSignal.aborted);
+    return { status: 'error', message: timedOut ? 'Update download timed out.' : error instanceof UpdateDownloadError ? error.message : failureMessage };
+  } finally {
+    if (temporaryDir) await rm(temporaryDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -182,8 +245,9 @@ export async function installDownloadedUpdate(options: {
   launch: (installerPath: string) => Promise<void>;
 }): Promise<void> {
   // Installation is deliberately a separate explicit action. Checks never download and downloads never launch.
-  const installer = await readFile(options.installerPath);
-  const actual = createHash('sha256').update(installer).digest('hex');
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(options.installerPath)) hash.update(chunk);
+  const actual = hash.digest('hex');
   if (actual !== options.sha256.toLowerCase()) throw new Error('Staged installer failed SHA-256 verification.');
   await options.launch(options.installerPath);
 }

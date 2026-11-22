@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import bootstrapPackage from '../packages/comgu-cli/package.json';
 
 import {
   assetNameForTarget,
+  defaultNpmInstallRoot,
   installRelease,
   normalizeVersion,
   parseSha256Sums,
@@ -15,6 +17,24 @@ import {
 import { resolveCliTarget } from '../packages/comgu-cli/lib/platform.mjs';
 
 describe('ComGu CLI installer core', () => {
+  it('reports the npm bootstrap version without preparing an install root', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comgu-bootstrap-version-'));
+    try {
+      const bootstrap = path.resolve('packages/comgu-cli/bin/comgu-bootstrap.mjs');
+      const env = { ...process.env, LOCALAPPDATA: dir, XDG_CACHE_HOME: dir };
+      expect(execFileSync(process.execPath, [bootstrap, '--version'], { env, encoding: 'utf8', timeout: 5_000 }).trim()).toBe(bootstrapPackage.version);
+      expect(await fs.readdir(dir)).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the npm payload outside the global package prefix and shell-channel paths', () => {
+    expect(defaultNpmInstallRoot('win32')).toBe(path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ComGu', 'NpmCache'));
+    const cache = process.env.XDG_CACHE_HOME;
+    expect(defaultNpmInstallRoot('linux')).toBe(path.join(cache && path.isAbsolute(cache) ? cache : path.join(os.homedir(), '.cache'), 'comgu-cli'));
+  });
+
   it('maps supported platform and architecture pairs', () => {
     expect(resolveCliTarget('win32', 'x64')).toBe('win32-x64');
     expect(resolveCliTarget('win32', 'arm64')).toBe('win32-arm64');
@@ -51,6 +71,73 @@ describe('ComGu CLI installer core', () => {
     await expect(verifySha256(file, actual)).resolves.toBe(actual);
     await expect(verifySha256(file, '0'.repeat(64))).rejects.toThrow(/checksum mismatch/i);
     await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  async function linuxFixture(dir: string, arches: readonly ('x64' | 'arm64')[]) {
+    const files = new Map<string, Uint8Array>();
+    const sums: string[] = [];
+    for (const arch of arches) {
+      const fixture = path.join(dir, arch, 'ComGu-CLI');
+      await fs.mkdir(fixture, { recursive: true });
+      await fs.writeFile(path.join(fixture, 'comgu'), arch, { encoding: 'utf8', mode: 0o755 });
+      const asset = assetNameForTarget(resolveCliTarget('linux', arch));
+      const archive = path.join(dir, asset);
+      execFileSync('tar', ['-czf', archive, '-C', path.dirname(fixture), 'ComGu-CLI']);
+      const bytes = await fs.readFile(archive);
+      files.set(asset, bytes);
+      sums.push(`${createHash('sha256').update(bytes).digest('hex')}  ${asset}`);
+    }
+    files.set('SHA256SUMS.txt', Buffer.from(sums.join('\n')));
+    return (input: string | URL | Request) => {
+      const file = files.get(path.posix.basename(new URL(String(input)).pathname));
+      return file ? new Response(Uint8Array.from(file)) : new Response('not found', { status: 404 });
+    };
+  }
+
+  it.skipIf(process.platform !== 'linux')('keeps same-version x64 and arm64 payloads distinct in one cache', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comgu-installer-targets-'));
+    try {
+      const fixture = await linuxFixture(dir, ['x64', 'arm64']);
+      const options = {
+        version: '3.2.0', installRoot: path.join(dir, 'install'), platform: 'linux' as const,
+        releaseBaseUrl: 'https://fixture.invalid/release', fetchImpl: async (input: string | URL | Request) => fixture(input)
+      };
+      const x64 = await installRelease({ ...options, arch: 'x64' });
+      const arm64 = await installRelease({ ...options, arch: 'arm64' });
+
+      expect(await fs.readFile(x64.launcher, 'utf8')).toBe('x64');
+      expect(await fs.readFile(arm64.launcher, 'utf8')).toBe('arm64');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== 'linux')('reuses the verified winner when two Linux installs publish the same payload', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comgu-installer-concurrent-'));
+    try {
+      const fixture = await linuxFixture(dir, ['x64']);
+      let count = 0;
+      let ready!: () => void;
+      const bothStarted = new Promise<void>((resolve) => { ready = resolve; });
+      const options = {
+        version: '3.2.0', installRoot: path.join(dir, 'install'), platform: 'linux' as const, arch: 'x64' as const,
+        releaseBaseUrl: 'https://fixture.invalid/release',
+        fetchImpl: async (input: string | URL | Request) => {
+          if (String(input).endsWith('/SHA256SUMS.txt')) {
+            if (++count === 2) ready();
+            await bothStarted;
+          }
+          return fixture(input);
+        }
+      };
+      const results = await Promise.allSettled([installRelease(options), installRelease(options)]);
+      expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      for (const result of results) {
+        if (result.status === 'fulfilled') expect(await fs.readFile(result.value.launcher, 'utf8')).toBe('x64');
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   const hostIt = process.platform === 'win32' || process.platform === 'linux' ? it : it.skip;

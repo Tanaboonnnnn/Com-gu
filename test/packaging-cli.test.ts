@@ -45,6 +45,15 @@ describe('CLI packaging contract', () => {
     expect(bootstrapPackage.files).toEqual(['bin/', 'lib/', 'README.md']);
   });
 
+  it('locks the staged production tree and checks the bootstrap contract at release preflight', () => {
+    const build = readFileSync('scripts/build-cli.mjs', 'utf8');
+    expect(build).toContain("fs.copyFile(path.join(root, 'package-lock.json'), path.join(stage, 'package-lock.json'))");
+    expect(build).toContain("['ci', '--omit=dev'");
+    expect(build).not.toContain('--package-lock=false');
+    const publish = readFileSync('.github/workflows/publish.yml', 'utf8');
+    expect(publish.slice(publish.indexOf('  preflight:'), publish.indexOf('  candidate:'))).toContain('node scripts/verify-cli-installers.mjs');
+  });
+
   it('publishes npm through GitHub OIDC without a long-lived registry token', () => {
     const publish = readFileSync('.github/workflows/publish.yml', 'utf8');
     const npmJobStart = publish.indexOf('  npm-publish:');

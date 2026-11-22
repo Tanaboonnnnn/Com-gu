@@ -249,7 +249,11 @@ describe('settings migration', () => {
    */
   it('moves an untouched old default onto the new one', async () => {
     const config = defaultConfig();
-    await saveConfig({ ...config, compaction: { ...config.compaction, auto: false, autoTokens: 300_000 } });
+    await fs.writeFile(
+      path.join(dir, 'config.json'),
+      JSON.stringify({ ...config, compaction: { ...config.compaction, auto: false, autoTokens: 300_000 } }),
+      'utf8'
+    );
     const loaded = await loadConfig();
     expect(loaded.compaction.auto).toBe(true);
     expect(loaded.compaction.autoTokens).toBe(400_000);
@@ -264,7 +268,11 @@ describe('settings migration', () => {
    */
   it('moves the untouched 1.8 automatic default up to the wider window', async () => {
     const config = defaultConfig();
-    await saveConfig({ ...config, compaction: { ...config.compaction, auto: true, autoTokens: 300_000 } });
+    await fs.writeFile(
+      path.join(dir, 'config.json'),
+      JSON.stringify({ ...config, compaction: { ...config.compaction, auto: true, autoTokens: 300_000 } }),
+      'utf8'
+    );
     const loaded = await loadConfig();
     expect(loaded.compaction).toMatchObject({ auto: true, autoTokens: 400_000 });
   });
@@ -283,7 +291,11 @@ describe('settings migration', () => {
    */
   it('recalibrates an untouched meter pair and leaves a chosen one', async () => {
     const config = defaultConfig();
-    await saveConfig({ ...config, sessions: { ...config.sessions, advisoryTokens: 300_000, limitTokens: 400_000 } });
+    await fs.writeFile(
+      path.join(dir, 'config.json'),
+      JSON.stringify({ ...config, sessions: { ...config.sessions, advisoryTokens: 300_000, limitTokens: 400_000 } }),
+      'utf8'
+    );
     const moved = await loadConfig();
     expect(moved.sessions.advisoryTokens).toBe(400_000);
     expect(moved.sessions.limitTokens).toBe(Math.round((400_000 * 4) / 3));
@@ -300,6 +312,19 @@ describe('settings migration', () => {
     const loaded = await loadConfig();
     expect(loaded.compaction.auto).toBe(false);
     expect(loaded.compaction.autoTokens).toBe(250_000);
+  });
+
+  it.each([false, true])('preserves a current 300k threshold and auto-compaction setting (%s) across reload', async (auto) => {
+    const config = defaultConfig();
+    await saveConfig({
+      ...config,
+      sessions: { ...config.sessions, advisoryTokens: 300_000, limitTokens: 400_000 },
+      compaction: { auto, autoTokens: 300_000 }
+    });
+
+    const loaded = await loadConfig();
+    expect(loaded.compaction).toMatchObject({ auto, autoTokens: 300_000 });
+    expect(loaded.sessions).toMatchObject({ advisoryTokens: 300_000, limitTokens: 400_000 });
   });
 
   it('keeps an automatic compaction the user configured', async () => {
