@@ -550,10 +550,15 @@ class UnifiedExecProcess {
     const pid = this.child?.pid;
     if (pid === undefined) throw UnifiedExecError.processFailed('the process is no longer running');
     try {
-      // Windows cannot deliver a console control event to a child with no console, so
-      // Node's SIGINT is the closest available equivalent for a pipe session. POSIX pipe
-      // sessions are process-group leaders, so Ctrl-C reaches their descendants too.
-      process.kill(process.platform === 'win32' ? pid : -pid, 'SIGINT');
+      if (process.platform === 'win32') {
+        // A pipe child has no console for Ctrl-C, and a Node signal targets just its PID.
+        // Reuse bounded teardown for this managed process tree, including children without
+        // inherited pipes, rather than making an exited shell look like completed cleanup.
+        await this.terminate();
+        return;
+      }
+      // POSIX pipe sessions are process-group leaders; signal the whole group.
+      process.kill(-pid, 'SIGINT');
     } catch (error) {
       // The managed session can outlive the OS process for the tiny window before Node's
       // ChildProcess `exit` event reaches us. Ctrl+C in that window used to turn a successful

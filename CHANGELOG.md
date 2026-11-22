@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.3.5] - Unreleased
+
+- Stop the Windows non-PTY process tree when a terminal session is interrupted, not only the direct child.
+- Keep the v3.3.4 candidate's workspace, recording, installer, and Desktop reliability fixes.
+
 ## [3.3.4] - Unreleased
 
 - Preserve the current chat workspace and the latest persisted Run state.
