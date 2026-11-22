@@ -56,6 +56,20 @@ async function waitForFile(file: string): Promise<void> {
   throw new Error(`file was not created: ${file}`);
 }
 
+async function waitForProcessExit(pid: number, timeoutMs = 4_000): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  do {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
+      throw error;
+    }
+    if (performance.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (true);
+}
+
 describe('Codex unified exec runtime parity', () => {
   const managers: UnifiedExecProcessManager[] = [];
   const tempRoots: string[] = [];
@@ -412,9 +426,11 @@ describe('Codex unified exec runtime parity', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'clf-pipe-interrupt-parity-'));
     tempRoots.push(root);
     const ready = path.join(root, 'grandchild.pid');
+    const probe = path.join(root, 'post-cancel-probe');
     const survived = path.join(root, 'grandchild-survived.txt');
-    const grandchildScript = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(survived)}, 'survived'), 900); setInterval(() => {}, 1000);`;
-    const parentScript = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(${JSON.stringify(process.execPath)}, ['-e', ${JSON.stringify(grandchildScript)}], {stdio:'ignore'}); fs.writeFileSync(${JSON.stringify(ready)}, String(child.pid)); setInterval(() => {}, 1000);`;
+    // A slow runner must not make the leaf report success before cancellation even starts.
+    const grandchildScript = `const fs = require('node:fs'); setInterval(() => { if (fs.existsSync(${JSON.stringify(probe)})) fs.writeFileSync(${JSON.stringify(survived)}, 'survived'); }, 25);`;
+    const parentScript = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(${JSON.stringify(process.execPath)}, ['-e', ${JSON.stringify(grandchildScript)}], {stdio:'ignore'}); const ready = ${JSON.stringify(ready)}; fs.writeFileSync(ready + '.tmp', String(child.pid)); fs.renameSync(ready + '.tmp', ready); setInterval(() => {}, 1000);`;
 
     const instance = manager();
     managers.push(instance);
@@ -435,8 +451,11 @@ describe('Codex unified exec runtime parity', () => {
 
     await waitForProcess(instance, processId);
     await waitForFile(ready);
-    const grandchildPid = Number.parseInt(await readFile(ready, 'utf8'), 10);
+    const grandchildPid = Number((await readFile(ready, 'utf8')).trim());
+    if (!Number.isSafeInteger(grandchildPid) || grandchildPid <= 0) throw new Error('invalid grandchild PID');
+    let grandchildExited = false;
     try {
+      process.kill(grandchildPid, 0);
       const interrupted = await instance.writeStdin({
         processId,
         input: String.fromCharCode(3),
@@ -446,10 +465,23 @@ describe('Codex unified exec runtime parity', () => {
       });
       expect(interrupted.processId).toBeNull();
       await expect(initial).resolves.toMatchObject({ processId: null });
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
-      await expect(access(survived)).rejects.toBeDefined();
+      // Trigger the harmless marker only after both tool calls have returned. The liveness
+      // assertion catches a surviving leaf even if its JavaScript never gets scheduled.
+      await writeFile(probe, 'check after cancellation', 'utf8');
+      grandchildExited = await waitForProcessExit(grandchildPid);
+      const wroteAfterCancellation = await access(survived).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return false;
+          throw error;
+        }
+      );
+      expect({ grandchildExited, wroteAfterCancellation }, `grandchild PID ${grandchildPid}`).toEqual({
+        grandchildExited: true,
+        wroteAfterCancellation: false
+      });
     } finally {
-      if (Number.isInteger(grandchildPid) && grandchildPid > 0) {
+      if (!grandchildExited) {
         await terminateProcessTree(grandchildPid, true).catch(() => undefined);
       }
     }
