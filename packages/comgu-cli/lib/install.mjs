@@ -84,7 +84,11 @@ export async function extractCliArchive(archive, target, destination) {
   if (target.startsWith('win32-')) {
     const escapedArchive = archive.replace(/'/g, "''");
     const escapedDestination = destination.replace(/'/g, "''");
-    await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath '${escapedArchive}' -DestinationPath '${escapedDestination}' -Force`]);
+    // Extract into the empty stage without requiring .NET's newer overwrite overload.
+    const script = "$ErrorActionPreference = 'Stop'; "
+      + "if (-not ('System.IO.Compression.ZipFile' -as [type])) { Add-Type -AssemblyName System.IO.Compression.FileSystem }; "
+      + `[System.IO.Compression.ZipFile]::ExtractToDirectory('${escapedArchive}', '${escapedDestination}')`;
+    await run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script]);
   } else {
     await run('tar', ['-xzf', archive, '-C', destination]);
   }

@@ -20,6 +20,18 @@ describe('professional CLI install scripts', () => {
     expect(source).toMatch(/^:update\npowershell\.exe [^\n]+\nexit \/b %ERRORLEVEL%$/m);
   });
 
+  it('extracts verified Windows archives without the newer .NET overwrite overload', () => {
+    const powershell = readFileSync('install.ps1', 'utf8');
+    const bootstrap = readFileSync('packages/comgu-cli/lib/install.mjs', 'utf8');
+    for (const source of [powershell, bootstrap]) {
+      expect(source).toContain('Add-Type -AssemblyName System.IO.Compression.FileSystem');
+      expect(source).not.toContain('Expand-Archive');
+    }
+    expect(powershell).toContain('ZipFile]::ExtractToDirectory($archivePath, $stage)');
+    expect(bootstrap).toContain("ZipFile]::ExtractToDirectory('${escapedArchive}', '${escapedDestination}')");
+    expect(powershell.indexOf('SHA-256 mismatch')).toBeLessThan(powershell.indexOf('ZipFile]::ExtractToDirectory'));
+  });
+
   it('keeps the PowerShell installer fail-closed and user-scoped', () => {
     const source = readFileSync('install.ps1', 'utf8');
     expect(source).toContain("$ErrorActionPreference = 'Stop'");

@@ -69,7 +69,9 @@ try {
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
     if (Test-Path -LiteralPath $final) { Fail "incomplete installation at $final; remove that version directory and try again" }
     $stage = Join-Path $versionsDir ('.stage-' + [Guid]::NewGuid().ToString('N'))
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $stage -Force
+    # Windows PowerShell 5.1's .NET Framework only has the non-overwriting overload.
+    if (-not ('System.IO.Compression.ZipFile' -as [type])) { Add-Type -AssemblyName System.IO.Compression.FileSystem }
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $stage)
     $stagedLauncher = Join-Path $stage 'ComGu-CLI\comgu.cmd'
     if (-not (Test-Path -LiteralPath $stagedLauncher -PathType Leaf)) { Fail 'archive does not contain ComGu-CLI\comgu.cmd' }
     [IO.Directory]::Move($stage, $final)
