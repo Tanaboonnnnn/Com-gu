@@ -3421,27 +3421,54 @@ describe('exec sessions belong to the chat that opened them', () => {
     const fixture = await fs.mkdtemp(path.join(approved, 'status-fixture-'));
     const workdir = '/workspace/' + path.basename(fixture);
     const signal = (marker: string) => fs.writeFile(path.join(fixture, marker), 'yes');
-    // Keep the fixture in the managed shell itself. A live shell ID does not prove a
-    // nested Node child has started, and cold child startup varies on Windows ARM64.
+    // Keep the handshake inside the managed shell. A live shell ID does not prove a
+    // nested child has started. On Windows, .NET resolves relative paths against the
+    // process cwd, which need not match PowerShell's provider location. Use the same
+    // absolute native path as the test for both ends of every file handoff.
+    const nativeLiteral = (name: string) => "'" + path.join(fixture, name).replace(/'/g, "''") + "'";
     const mark = (marker: string) => IS_WINDOWS
-      ? "[IO.File]::WriteAllText('" + marker + "', 'yes')"
+      ? "[IO.File]::WriteAllText(" + nativeLiteral(marker) + ", 'yes')"
       : "printf '%s' yes > '" + marker + "'";
     const holdUntil = (marker: string) => IS_WINDOWS
-      ? "while (-not (Test-Path -LiteralPath '" + marker + "')) { Start-Sleep -Milliseconds 25 }"
+      ? "while (-not [IO.File]::Exists(" + nativeLiteral(marker) + ")) { [Threading.Thread]::Sleep(25) }"
       : "while [ ! -f '" + marker + "' ]; do sleep 0.025; done";
     const output = IS_WINDOWS
       ? "[Console]::Out.WriteLine('status-output-fixture'); [Console]::Out.Flush()"
       : "printf '%s\\n' status-output-fixture";
-    const firstCommand = [
-      mark('first-ready'), holdUntil('emit'), output, mark('written'), holdUntil('first-exit'), 'exit 7'
-    ].join('; ');
-    const secondCommand = [mark('second-ready'), holdUntil('second-exit'), 'exit 0'].join('; ');
+    const fixtureCommand = (ready: string, steps: string[]) => {
+      const body = [mark(ready), ...steps].join('; ');
+      if (!IS_WINDOWS) return body;
+      const location =
+        "'providerAtFixture=' + ($PWD.ProviderPath -eq " + nativeLiteral('') +
+        ") + ', processAtFixture=' + ([Environment]::CurrentDirectory -eq " + nativeLiteral('') + ")";
+      // Only controlled phase, booleans and exception type, never a native path or raw error.
+      return "$ErrorActionPreference='Stop'; try { " + body + " } catch { " +
+        "$diagnostic='status-fixture " + ready + ": ' + (" + location + ") + '; ' + $_.Exception.GetType().Name; " +
+        "try { [IO.File]::WriteAllText(" + nativeLiteral('fixture-error') + ", $diagnostic) } catch {}; " +
+        "[Console]::Error.WriteLine($diagnostic); exit 91 }";
+    };
+    const firstCommand = fixtureCommand('first-ready', [
+      holdUntil('emit'), output, mark('written'), holdUntil('first-exit'), 'exit 7'
+    ]);
+    const secondCommand = fixtureCommand('second-ready', [holdUntil('second-exit'), 'exit 0']);
+    const fixtureDiagnostic = /^status-fixture (first|second)-ready: providerAtFixture=(True|False), processAtFixture=(True|False); [A-Za-z0-9_]+$/m;
     const waitForMarker = async (id: number, marker: string) => {
+      const shellIsLive = () => unifiedExecManager.listProcesses().some((entry) => entry.processId === id);
+      const readDiagnostic = async () => {
+        if (!IS_WINDOWS) return null;
+        try {
+          const diagnostic = await fs.readFile(path.join(fixture, 'fixture-error'), 'utf8');
+          return diagnostic.match(fixtureDiagnostic)?.[0] ?? null;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+          throw error;
+        }
+      };
       try {
         await vi.waitUntil(async () => {
-          if (!unifiedExecManager.listProcesses().some((entry) => entry.processId === id)) {
-            throw new Error('Managed shell exited before its handoff');
-          }
+          const diagnostic = await readDiagnostic();
+          if (diagnostic !== null) throw new Error(diagnostic);
+          if (!shellIsLive()) throw new Error('Managed shell exited before its handoff');
           try {
             await fs.access(path.join(fixture, marker));
             return true;
@@ -3451,7 +3478,8 @@ describe('exec sessions belong to the chat that opened them', () => {
           }
         }, { timeout: 8_000, interval: 25 });
       } catch (cause) {
-        throw new Error('Command status fixture did not reach ' + marker, { cause });
+        throw new Error('Command status fixture did not reach ' + marker +
+          ' (shell ' + (shellIsLive() ? 'still registered' : 'not live') + ')', { cause });
       }
     };
     const random = vi.spyOn(Math, 'random');
@@ -3470,7 +3498,9 @@ describe('exec sessions belong to the chat that opened them', () => {
       const first = await start(firstCommand);
       expect(first.body.result?.isError, textOf(first)).not.toBe(true);
       const initial = first.body.result?.structuredContent;
-      expect(initial).toMatchObject({ session_id: 1_000, status_handle: expect.any(String) });
+      expect(initial, textOf(first).match(fixtureDiagnostic)?.[0]).toMatchObject({
+        session_id: 1_000, status_handle: expect.any(String)
+      });
       const id = initial.session_id;
       const handle = initial.status_handle;
       const args = { session_id: id, mode: 'status', status_handle: handle };
@@ -3525,7 +3555,9 @@ describe('exec sessions belong to the chat that opened them', () => {
       const finalPoll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 });
       expect(finalPoll.body.result?.structuredContent).toMatchObject({ exit_code: 7 });
       const next = await start(secondCommand);
-      expect(next.body.result?.structuredContent).toMatchObject({ session_id: id, status_handle: expect.any(String) });
+      expect(next.body.result?.structuredContent, textOf(next).match(fixtureDiagnostic)?.[0]).toMatchObject({
+        session_id: id, status_handle: expect.any(String)
+      });
       const newHandle = next.body.result.structuredContent.status_handle;
       await waitForMarker(id, 'second-ready');
       expect(newHandle).not.toBe(handle);
@@ -3549,7 +3581,7 @@ describe('exec sessions belong to the chat that opened them', () => {
         }
         await unifiedExecManager.terminateAllProcesses();
       } finally {
-        await fs.rm(fixture, { recursive: true, force: true });
+        await removeTempDir(fixture);
       }
     }
   });

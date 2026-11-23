@@ -1,6 +1,11 @@
 # Changelog
 
-## [3.3.6] - Unreleased
+## [3.3.7] - Unreleased
+
+- Ship read-only command status for verified same-chat terminal owners. Status does not send input or consume output. Unattributed chats remain unsupported.
+- Correct the Windows ARM64 release test harness to use absolute marker paths and report shell diagnostics if the fixture fails. Command-status runtime behavior is unchanged from the unpublished candidate.
+
+## [3.3.6] - Not published
 
 - Add a read-only `write_stdin` status mode for live terminal sessions issued an authenticated same-chat status handle. It reports command state without consuming output or sending input.
 - Unattributed chats cannot use status mode. Unknown status does not prove that a command exited, and ordinary output polling is unchanged.
