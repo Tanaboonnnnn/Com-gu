@@ -39,6 +39,7 @@ import { observeRequestCorrelation, resetCorrelationRegistryForTests } from '../
 import * as recorderRuntime from '../src/main/session/recorder.js';
 import { execOwner, noteExecOwner, resetExecOwnershipForTests } from '../src/main/codex/ownership.js';
 import { unifiedExecManager } from '../src/main/codex/manager.js';
+import { defaultUserShell, getShellByModelProvidedPath } from '../src/main/codex/shell.js';
 import { locateRipgrep } from '../src/main/ripgrep.js';
 import {
   bindConversation,
@@ -3411,7 +3412,10 @@ describe('exec sessions belong to the chat that opened them', () => {
     expect(textOf(owner)).toContain('Process exited with code 0');
   });
 
-  it('reports only same-chat command status without draining output or following a reused id', async () => {
+  // Diagnostic branch only: both native Windows cases run the same P1 assertions and
+  // handshake; differ only in which shell the existing production resolver selects.
+  const statusShellArms = IS_WINDOWS ? ['default', 'powershell'] : ['default'];
+  it.each(statusShellArms)('reports only same-chat command status without draining output or following a reused id [%s]', async (shellArm) => {
     await unifiedExecManager.terminateAllProcesses();
     const owner = 'wfr_execstatus_owner';
     const stranger = 'wfr_execstatus_stranger';
@@ -3447,7 +3451,10 @@ describe('exec sessions belong to the chat that opened them', () => {
         "try { [IO.File]::WriteAllText(" + nativeLiteral('fixture-error') + ", $diagnostic) } catch {}; " +
         "[Console]::Error.WriteLine($diagnostic); exit 91 }";
     };
-    const firstCommand = fixtureCommand('first-ready', [
+    const entryBeacon = IS_WINDOWS
+      ? "[Console]::Out.WriteLine('status-fixture-entry:' + $PSVersionTable.PSVersion.ToString()); [Console]::Out.Flush(); "
+      : '';
+    const firstCommand = entryBeacon + fixtureCommand('first-ready', [
       holdUntil('emit'), output, mark('written'), holdUntil('first-exit'), 'exit 7'
     ]);
     const secondCommand = fixtureCommand('second-ready', [holdUntil('second-exit'), 'exit 0']);
@@ -3483,28 +3490,74 @@ describe('exec sessions belong to the chat that opened them', () => {
       }
     };
     const random = vi.spyOn(Math, 'random');
+    const shell = shellArm === 'powershell' ? getShellByModelProvidedPath(shellArm) : defaultUserShell();
+    const executable = path.basename(shell?.shellPath ?? '').toLowerCase();
+    const trace = {
+      arm: shellArm, executable: /^(?:pwsh|powershell)(?:[.]exe)?$/.test(executable) ? executable : 'other',
+      version: null as string | null, initialResponseMs: null as number | null,
+      entryObservedMs: null as number | null, readyObservedMs: null as number | null,
+      exitObservedMs: null as number | null, exitCode: null as number | null
+    };
+    let startedAt = 0;
+    const elapsedMs = () => Math.round(performance.now() - startedAt);
+    const noteEntry = (reply: unknown) => {
+      const version = textOf(reply).match(/^status-fixture-entry:([0-9]+(?:[.][0-9]+){1,3})\r?$/m)?.[1];
+      if (version && trace.version === null) {
+        trace.version = version;
+        trace.entryObservedMs = elapsedMs();
+      }
+    };
     const start = (cmd: string) => {
       // Force only the first allocation candidate; a leaked reservation must fail the
       // assertion rather than trapping the allocator in a constant-RNG loop.
       random.mockReturnValueOnce(0);
       return asChat(owner, 'exec_command', {
-        cmd, ...(IS_WINDOWS ? { shell: 'powershell' } : {}),
+        cmd, ...(shellArm === 'powershell' ? { shell: shellArm } : {}),
         workdir, tty: false, yield_time_ms: 250
       });
     };
     const snapshot = (requestId: string, id: number, handle: string) =>
       asChat(requestId, 'write_stdin', { session_id: id, mode: 'status', status_handle: handle });
     try {
+      startedAt = performance.now();
       const first = await start(firstCommand);
-      expect(first.body.result?.isError, textOf(first)).not.toBe(true);
+      trace.initialResponseMs = elapsedMs();
+      noteEntry(first);
+      expect(first.body.result?.isError, textOf(first).match(fixtureDiagnostic)?.[0]).not.toBe(true);
       const initial = first.body.result?.structuredContent;
+      if (Number.isInteger(initial?.exit_code)) trace.exitCode = initial.exit_code;
       expect(initial, textOf(first).match(fixtureDiagnostic)?.[0]).toMatchObject({
         session_id: 1_000, status_handle: expect.any(String)
       });
       const id = initial.session_id;
       const handle = initial.status_handle;
       const args = { session_id: id, mode: 'status', status_handle: handle };
-      await waitForMarker(id, 'first-ready');
+      try {
+        await waitForMarker(id, 'first-ready');
+        trace.readyObservedMs = elapsedMs();
+      } catch (error) {
+        // Diagnose only. This never excuses a missed deadline, and uses at most one
+        // normal empty poll (the manager's 5s minimum) for the exact owned fixture.
+        if (IS_WINDOWS && trace.version === null) {
+          const diagnostic = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 }).catch(() => null);
+          if (diagnostic) {
+            noteEntry(diagnostic);
+            const code = diagnostic.body.result?.structuredContent?.exit_code;
+            if (Number.isInteger(code)) {
+              trace.exitCode = code;
+              trace.exitObservedMs = elapsedMs();
+            }
+          }
+        }
+        throw error;
+      }
+
+      if (IS_WINDOWS && trace.version === null) {
+        // A late startup frame belongs to setup, not the later output-retention
+        // assertion. The test has not released its emit marker yet.
+        noteEntry(await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 }));
+        expect(trace.version, 'PowerShell entry beacon before emit').not.toBeNull();
+      }
 
       const other = await snapshot(stranger, id, handle);
       const unidentified = await rawPost(endpoint.urls.core, JSON.stringify({
@@ -3548,7 +3601,10 @@ describe('exec sessions belong to the chat that opened them', () => {
 
       await signal('first-exit');
       await vi.waitFor(() => expect(unifiedExecManager.listProcesses()).toEqual([]), { timeout: 5_000 });
+      trace.exitObservedMs = elapsedMs();
       const ended = await snapshot(owner, id, handle);
+      const exitCode = ended.body.result?.structuredContent?.exit_code;
+      if (Number.isInteger(exitCode)) trace.exitCode = exitCode;
       expect(ended.body.result?.structuredContent).toEqual({
         command_status: 'exited', exit_code: 7, output: '', wall_time_seconds: 0
       });
@@ -3572,6 +3628,7 @@ describe('exec sessions belong to the chat that opened them', () => {
       const secondPoll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 });
       expect(secondPoll.body.result?.structuredContent).toMatchObject({ exit_code: 0 });
     } finally {
+      if (IS_WINDOWS) console.info('status-fixture-shell-ab ' + JSON.stringify(trace));
       random.mockRestore();
       try {
         // Unblock any partially completed fixture before falling back to owned cleanup.
