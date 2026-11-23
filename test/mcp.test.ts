@@ -3488,8 +3488,7 @@ describe('exec sessions belong to the chat that opened them', () => {
       // assertion rather than trapping the allocator in a constant-RNG loop.
       random.mockReturnValueOnce(0);
       return asChat(owner, 'exec_command', {
-        cmd, ...(IS_WINDOWS ? { shell: 'powershell' } : {}),
-        workdir, tty: false, yield_time_ms: 250
+        cmd, workdir, tty: false, yield_time_ms: 250
       });
     };
     const snapshot = (requestId: string, id: number, handle: string) =>
