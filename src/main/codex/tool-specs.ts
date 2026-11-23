@@ -23,7 +23,7 @@ export const EXEC_COMMAND_DESCRIPTION = IS_WINDOWS
 export const EXEC_COMMAND_CMD_DESCRIPTION = 'Shell command to execute.';
 
 export const EXEC_COMMAND_CMDS_DESCRIPTION =
-  'Sequential shell commands to run in one shell session. Use this for related checks instead of separate exec_command calls. Each command gets a labeled output section and exit code; all commands run after ordinary non-zero exits, and the overall exit code is the first non-zero code.';
+  'Related commands in one shell session. Each gets labeled output and an exit code. Ordinary nonzero exits do not stop the batch; it returns the first nonzero exit code.';
 
 export const EXEC_COMMAND_WORKDIR_DESCRIPTION = 'Working directory for the command. Defaults to the turn cwd.';
 
@@ -31,7 +31,7 @@ export const EXEC_COMMAND_TTY_DESCRIPTION =
   'True allocates a PTY for the command; false or omitted uses plain pipes.';
 
 export const EXEC_COMMAND_YIELD_TIME_DESCRIPTION = IS_WINDOWS
-  ? 'Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 250-30000 ms.'
+  ? 'Wait up to 10000 ms by default (range 250-30000 ms). If still running, return a session ID; otherwise return immediately.'
   : 'Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.';
 
 export const MAX_OUTPUT_TOKENS_DESCRIPTION =
@@ -41,7 +41,7 @@ export const EXEC_COMMAND_SHELL_DESCRIPTION = "Shell binary to launch. Defaults 
 
 export const EXEC_COMMAND_LOGIN_DESCRIPTION =
   IS_WINDOWS
-    ? 'True loads the shell profile; false disables it. Defaults to false on Windows for deterministic, faster commands.'
+    ? 'Load the shell profile. Defaults to false.'
     : 'True runs the shell with -l/-i semantics; false disables them. Defaults to true.';
 
 export const WRITE_STDIN_DESCRIPTION =

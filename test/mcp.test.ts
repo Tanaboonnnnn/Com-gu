@@ -3436,7 +3436,10 @@ describe('exec sessions belong to the chat that opened them', () => {
       // assertion rather than trapping the allocator in a constant-RNG loop.
       random.mockReturnValueOnce(0);
       return asChat(owner, 'exec_command', {
-        cmd: 'node ' + file, workdir: '/workspace', tty: false, yield_time_ms: 250
+        // PowerShell's -Command otherwise maps a nonzero native exit to 1.
+        cmd: IS_WINDOWS ? 'node ' + file + '; exit $LASTEXITCODE' : 'node ' + file,
+        ...(IS_WINDOWS ? { shell: 'powershell' } : {}),
+        workdir: '/workspace', tty: false, yield_time_ms: 250
       });
     };
     const snapshot = (requestId: string, id: number, handle: string) =>
