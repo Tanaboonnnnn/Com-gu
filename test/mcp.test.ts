@@ -3418,40 +3418,63 @@ describe('exec sessions belong to the chat that opened them', () => {
     const ownerChat = 'conv-execstatus-owner';
     expect(prove(owner, ownerChat)).toBe('stored');
     expect(prove(stranger, 'conv-execstatus-stranger')).toBe('stored');
-    const script = [
-      "const fs = require('node:fs'); let printed = false;",
-      "setInterval(() => {",
-      "  if (!printed && fs.existsSync('status-emit')) {",
-      "    printed = true;",
-      "    process.stdout.write('status-output-fixture\\n', () => fs.writeFileSync('status-written', 'yes'));",
-      "  }",
-      "  if (fs.existsSync('status-exit')) process.exit(7);",
-      "}, 20);"
-    ].join('\n');
-    await fs.writeFile(path.join(approved, 'status-fixture.cjs'), script);
-    await fs.writeFile(path.join(approved, 'status-second.cjs'), 'setInterval(() => {}, 1000)');
+    const fixture = await fs.mkdtemp(path.join(approved, 'status-fixture-'));
+    const workdir = '/workspace/' + path.basename(fixture);
+    const signal = (marker: string) => fs.writeFile(path.join(fixture, marker), 'yes');
+    // Keep the fixture in the managed shell itself. A live shell ID does not prove a
+    // nested Node child has started, and cold child startup varies on Windows ARM64.
+    const mark = (marker: string) => IS_WINDOWS
+      ? "[IO.File]::WriteAllText('" + marker + "', 'yes')"
+      : "printf '%s' yes > '" + marker + "'";
+    const holdUntil = (marker: string) => IS_WINDOWS
+      ? "while (-not (Test-Path -LiteralPath '" + marker + "')) { Start-Sleep -Milliseconds 25 }"
+      : "while [ ! -f '" + marker + "' ]; do sleep 0.025; done";
+    const output = IS_WINDOWS
+      ? "[Console]::Out.WriteLine('status-output-fixture'); [Console]::Out.Flush()"
+      : "printf '%s\\n' status-output-fixture";
+    const firstCommand = [
+      mark('first-ready'), holdUntil('emit'), output, mark('written'), holdUntil('first-exit'), 'exit 7'
+    ].join('; ');
+    const secondCommand = [mark('second-ready'), holdUntil('second-exit'), 'exit 0'].join('; ');
+    const waitForMarker = async (id: number, marker: string) => {
+      try {
+        await vi.waitUntil(async () => {
+          if (!unifiedExecManager.listProcesses().some((entry) => entry.processId === id)) {
+            throw new Error('Managed shell exited before its handoff');
+          }
+          try {
+            await fs.access(path.join(fixture, marker));
+            return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+            throw error;
+          }
+        }, { timeout: 8_000, interval: 25 });
+      } catch (cause) {
+        throw new Error('Command status fixture did not reach ' + marker, { cause });
+      }
+    };
     const random = vi.spyOn(Math, 'random');
-    const start = (file: string) => {
+    const start = (cmd: string) => {
       // Force only the first allocation candidate; a leaked reservation must fail the
       // assertion rather than trapping the allocator in a constant-RNG loop.
       random.mockReturnValueOnce(0);
       return asChat(owner, 'exec_command', {
-        // PowerShell's -Command otherwise maps a nonzero native exit to 1.
-        cmd: IS_WINDOWS ? 'node ' + file + '; exit $LASTEXITCODE' : 'node ' + file,
-        ...(IS_WINDOWS ? { shell: 'powershell' } : {}),
-        workdir: '/workspace', tty: false, yield_time_ms: 250
+        cmd, ...(IS_WINDOWS ? { shell: 'powershell' } : {}),
+        workdir, tty: false, yield_time_ms: 250
       });
     };
     const snapshot = (requestId: string, id: number, handle: string) =>
       asChat(requestId, 'write_stdin', { session_id: id, mode: 'status', status_handle: handle });
     try {
-      const first = await start('status-fixture.cjs');
+      const first = await start(firstCommand);
       expect(first.body.result?.isError, textOf(first)).not.toBe(true);
       const initial = first.body.result?.structuredContent;
       expect(initial).toMatchObject({ session_id: 1_000, status_handle: expect.any(String) });
       const id = initial.session_id;
       const handle = initial.status_handle;
       const args = { session_id: id, mode: 'status', status_handle: handle };
+      await waitForMarker(id, 'first-ready');
 
       const other = await snapshot(stranger, id, handle);
       const unidentified = await rawPost(endpoint.urls.core, JSON.stringify({
@@ -3464,8 +3487,8 @@ describe('exec sessions belong to the chat that opened them', () => {
         expect(failed(await asChat(owner, 'write_stdin', invalid))).toBe(true);
       }
 
-      await fs.writeFile(path.join(approved, 'status-emit'), 'yes');
-      await vi.waitFor(() => fs.access(path.join(approved, 'status-written')), { timeout: 5_000 });
+      await signal('emit');
+      await waitForMarker(id, 'written');
       const running = await snapshot(owner, id, handle);
       expect(running.body.result?.structuredContent).toEqual({ command_status: 'running', output: '', wall_time_seconds: 0 });
       const lateRequest = 'wfr_execstatus_late';
@@ -3493,7 +3516,7 @@ describe('exec sessions belong to the chat that opened them', () => {
       const poll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 2_000 });
       expect(textOf(poll)).toContain('status-output-fixture');
 
-      await fs.writeFile(path.join(approved, 'status-exit'), 'yes');
+      await signal('first-exit');
       await vi.waitFor(() => expect(unifiedExecManager.listProcesses()).toEqual([]), { timeout: 5_000 });
       const ended = await snapshot(owner, id, handle);
       expect(ended.body.result?.structuredContent).toEqual({
@@ -3501,9 +3524,10 @@ describe('exec sessions belong to the chat that opened them', () => {
       });
       const finalPoll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 });
       expect(finalPoll.body.result?.structuredContent).toMatchObject({ exit_code: 7 });
-      const next = await start('status-second.cjs');
+      const next = await start(secondCommand);
       expect(next.body.result?.structuredContent).toMatchObject({ session_id: id, status_handle: expect.any(String) });
       const newHandle = next.body.result.structuredContent.status_handle;
+      await waitForMarker(id, 'second-ready');
       expect(newHandle).not.toBe(handle);
       expect((await snapshot(owner, id, handle)).body.result?.structuredContent).toEqual({
         command_status: 'unknown', output: '', wall_time_seconds: 0
@@ -3511,9 +3535,22 @@ describe('exec sessions belong to the chat that opened them', () => {
       expect((await snapshot(owner, id, newHandle)).body.result?.structuredContent).toEqual({
         command_status: 'running', output: '', wall_time_seconds: 0
       });
+      await signal('second-exit');
+      await vi.waitUntil(() => unifiedExecManager.listProcesses().length === 0, { timeout: 5_000 });
+      const secondPoll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 });
+      expect(secondPoll.body.result?.structuredContent).toMatchObject({ exit_code: 0 });
     } finally {
       random.mockRestore();
-      await unifiedExecManager.terminateAllProcesses();
+      try {
+        // Unblock any partially completed fixture before falling back to owned cleanup.
+        await Promise.allSettled([signal('emit'), signal('first-exit'), signal('second-exit')]);
+        if (unifiedExecManager.listProcesses().length > 0) {
+          await vi.waitUntil(() => unifiedExecManager.listProcesses().length === 0, { timeout: 2_000 }).catch(() => {});
+        }
+        await unifiedExecManager.terminateAllProcesses();
+      } finally {
+        await fs.rm(fixture, { recursive: true, force: true });
+      }
     }
   });
 
