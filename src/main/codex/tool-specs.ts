@@ -45,7 +45,9 @@ export const EXEC_COMMAND_LOGIN_DESCRIPTION =
     : 'True runs the shell with -l/-i semantics; false disables them. Defaults to true.';
 
 export const WRITE_STDIN_DESCRIPTION =
-  'Writes characters to an existing unified exec session and returns recent output.';
+  'Writes characters to an existing unified exec session and returns recent output. ' +
+  'Set mode to status and pass the status_handle from exec_command to check a proven same-chat command without writing or consuming output. ' +
+  'Omit chars, yield_time_ms, and max_output_tokens in status mode. Unknown does not imply exit.';
 
 export const WRITE_STDIN_SESSION_ID_DESCRIPTION = 'Identifier of the running unified exec session.';
 

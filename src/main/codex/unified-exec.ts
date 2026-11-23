@@ -19,6 +19,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { HeadTailBuffer } from './head-tail-buffer.js';
 import {
   approxTokenCount,
@@ -640,6 +641,8 @@ export interface ExecCommandToolOutput {
   maxOutputTokens: number | undefined;
   /** The session id, present only while the process is still running. */
   processId: number | null;
+  /** Generation to bind to an exact owner before exposing MCP status. */
+  statusHandle?: string;
   exitCode: number | null;
   originalTokenCount: number | null;
   /** Bytes the 1 MiB collection cap dropped, before model-facing truncation. */
@@ -670,12 +673,13 @@ export function truncatedOutput(output: ExecCommandToolOutput, maxTokens: number
 }
 
 /** `ExecCommandToolOutput::response_text` — exactly what the model is handed. */
-export function execCommandResponseText(output: ExecCommandToolOutput): string {
+export function execCommandResponseText(output: ExecCommandToolOutput, statusHandle?: string): string {
   const sections: string[] = [];
   if (output.chunkId !== '') sections.push(`Chunk ID: ${output.chunkId}`);
   sections.push(`Wall time: ${(output.wallTimeMs / 1000).toFixed(4)} seconds`);
   if (output.exitCode !== null) sections.push(`Process exited with code ${output.exitCode}`);
   if (output.processId !== null) sections.push(`Process running with session ID ${output.processId}`);
+  if (statusHandle) sections.push(`Status handle: ${statusHandle}`);
   if (output.originalTokenCount !== null) sections.push(`Original token count: ${output.originalTokenCount}`);
   sections.push('Output:');
   sections.push(truncatedOutput(output, modelOutputMaxTokens(output)));
@@ -683,12 +687,13 @@ export function execCommandResponseText(output: ExecCommandToolOutput): string {
 }
 
 /** `ExecCommandToolOutput::code_mode_result`, which is also the tool's declared output schema. */
-export function execCommandStructuredOutput(output: ExecCommandToolOutput): Record<string, unknown> {
+export function execCommandStructuredOutput(output: ExecCommandToolOutput, statusHandle?: string): Record<string, unknown> {
   return {
     ...(output.chunkId === '' ? {} : { chunk_id: output.chunkId }),
     wall_time_seconds: output.wallTimeMs / 1000,
     ...(output.exitCode === null ? {} : { exit_code: output.exitCode }),
     ...(output.processId === null ? {} : { session_id: output.processId }),
+    ...(statusHandle ? { status_handle: statusHandle } : {}),
     ...(output.originalTokenCount === null ? {} : { original_token_count: output.originalTokenCount }),
     // This adapter emits structuredContent beside the text result, so both representations
     // must obey the same policy/default budget. Returning the retained raw buffer here made
@@ -698,6 +703,19 @@ export function execCommandStructuredOutput(output: ExecCommandToolOutput): Reco
 }
 
 // --------------------------------------------------------------------------- manager
+
+type TerminalAuthority = Readonly<{ conversationId: string; runId: string; scopeFingerprint: string }>;
+
+function sameTerminalAuthority(expected?: TerminalAuthority, supplied?: TerminalAuthority): boolean {
+  if (!expected || !supplied) return expected === supplied;
+  return expected.conversationId === supplied.conversationId &&
+    expected.runId === supplied.runId && expected.scopeFingerprint === supplied.scopeFingerprint;
+}
+
+export type CommandStatus =
+  | { state: 'running' }
+  | { state: 'exited'; exitCode: number | null }
+  | { state: 'unknown' };
 
 export interface ExecCommandRequest {
   command: string[];
@@ -714,11 +732,7 @@ export interface ExecCommandRequest {
   tty: boolean;
   sandbox?: Readonly<{
     roots: readonly string[];
-    authority: Readonly<{
-      conversationId: string;
-      runId: string;
-      scopeFingerprint: string;
-    }>;
+    authority: TerminalAuthority;
   }>;
 }
 
@@ -729,11 +743,7 @@ export interface WriteStdinRequest {
   maxOutputTokens: number | undefined;
   truncationPolicy: TruncationPolicy;
   maxWriteStdinYieldTimeMs?: number;
-  authority?: Readonly<{
-    conversationId: string;
-    runId: string;
-    scopeFingerprint: string;
-  }>;
+  authority?: TerminalAuthority;
 }
 
 export interface BackgroundTerminalInfo {
@@ -752,11 +762,9 @@ interface ProcessEntry {
   tty: boolean;
   initialExecCommandActive: boolean;
   lastUsed: number;
-  sandboxAuthority?: Readonly<{
-    conversationId: string;
-    runId: string;
-    scopeFingerprint: string;
-  }>;
+  statusHandle: string;
+  statusOwner?: string;
+  sandboxAuthority?: TerminalAuthority;
 }
 
 export class UnifiedExecProcessManager {
@@ -827,6 +835,7 @@ export class UnifiedExecProcessManager {
         hookCommand: request.hookCommand,
         tty: request.tty,
         initialExecCommandActive: true,
+        statusHandle: randomUUID(),
         lastUsed: start,
         ...(request.sandbox ? { sandboxAuthority: Object.freeze({ ...request.sandbox.authority }) } : {})
       });
@@ -867,38 +876,45 @@ export class UnifiedExecProcessManager {
       exitCode = process.exitCode();
     }
 
-    const response = {
+    const entry = responseProcessId === null ? undefined : this.processes.get(request.processId);
+    const liveEntry = entry?.process === process ? entry : undefined;
+    if (liveEntry) liveEntry.initialExecCommandActive = false;
+    return {
       chunkId,
       wallTimeMs,
       rawOutput,
       truncationPolicy: request.truncationPolicy,
       maxOutputTokens: request.maxOutputTokens,
       processId: responseProcessId,
+      ...(liveEntry ? { statusHandle: liveEntry.statusHandle } : {}),
       exitCode,
       originalTokenCount,
       outputOmittedBytes
     };
-    if (responseProcessId !== null) {
-      const entry = this.processes.get(request.processId);
-      if (entry?.process === process) entry.initialExecCommandActive = false;
-    }
-    return response;
+  }
+
+  /** Bind once, to the exact generation whose initial response is exposing this handle. */
+  bindStatusOwner(processId: number, handle: string, conversationId: string): boolean {
+    const entry = this.processes.get(processId);
+    if (!conversationId || !entry || entry.statusHandle !== handle ||
+        (entry.statusOwner !== undefined && entry.statusOwner !== conversationId)) return false;
+    entry.statusOwner = conversationId;
+    return true;
+  }
+
+  /** Snapshot only. No output drain, locks, session refresh, or termination. */
+  commandStatus(processId: number, handle: string, conversationId: string, authority?: TerminalAuthority): CommandStatus {
+    const entry = this.processes.get(processId);
+    if (!conversationId || !entry || entry.statusHandle !== handle || entry.statusOwner !== conversationId ||
+        !sameTerminalAuthority(entry.sandboxAuthority, authority)) return { state: 'unknown' };
+    return entry.process.hasExited() ? { state: 'exited', exitCode: entry.process.exitCode() } : { state: 'running' };
   }
 
   async writeStdin(request: WriteStdinRequest): Promise<ExecCommandToolOutput> {
     const entry = this.processes.get(request.processId);
     if (!entry) throw UnifiedExecError.unknownProcessId(request.processId);
 
-    const expected = entry.sandboxAuthority;
-    const supplied = request.authority;
-    const authorityMismatch =
-      Boolean(expected) !== Boolean(supplied) ||
-      (expected !== undefined &&
-        supplied !== undefined &&
-        (supplied.conversationId !== expected.conversationId ||
-          supplied.runId !== expected.runId ||
-          supplied.scopeFingerprint !== expected.scopeFingerprint));
-    if (authorityMismatch) {
+    if (!sameTerminalAuthority(entry.sandboxAuthority, request.authority)) {
       if (!entry.process.hasExited()) await entry.process.terminate();
       this.releaseProcessIfCurrent(request.processId, entry.process);
       throw UnifiedExecError.workspaceSessionStale();

@@ -439,6 +439,14 @@ empty `write_stdin` poll returns on first output instead of holding Codex's full
 window. Start at `tools-core.ts`
 → `unified-exec.ts` → `shell.ts` → `ownership.ts` → `exec-output.ts`.
 
+**Read-only command status.** Call `write_stdin` with `mode: "status"`, `session_id` and the
+`status_handle` from `exec_command`. Omit input and output options. A handle identifies one
+process generation and is issued only to an exact proven conversation. Status requires that
+conversation's current ownership and matching Run authority. It neither sends input nor drains
+output, renews the session, or stops the process. `exited` means the local manager observed the
+process exit and still holds its record. If the record was released, the ID was recycled, or
+ownership cannot be proven, the result is `unknown`, not evidence of exit or a reason to rerun.
+
 **`apply_patch`.** Model syntax is Codex V4A. MCP cannot expose a true freeform tool, so
 the raw patch rides inside the `patch` string while the grammar lives in the description.
 Engine under `apply-patch/`; the wrapper adds capability checks (per hunk kind — add needs

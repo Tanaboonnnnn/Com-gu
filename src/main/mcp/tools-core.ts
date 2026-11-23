@@ -59,6 +59,7 @@ import {
   applyUnifiedExecEnv,
   execCommandResponseText,
   execCommandStructuredOutput,
+  type CommandStatus,
   type ExecCommandToolOutput
 } from '../codex/unified-exec.js';
 import {
@@ -205,13 +206,15 @@ const unifiedExecOutputSchema = z
   .object({
     chunk_id: z.string().optional().describe('Chunk identifier included when the response reports one.'),
     wall_time_seconds: z.number().describe('Elapsed wall time spent waiting for output in seconds.'),
-    exit_code: z.number().optional().describe('Process exit code when the command finished during this call.'),
+    exit_code: z.number().optional().describe('Process exit code when known.'),
     session_id: z
       .number()
       .optional()
       .describe('Session identifier to pass to write_stdin when the process is still running.'),
+    status_handle: z.uuid().optional().describe('Opaque generation handle for same-chat status checks.'),
+    command_status: z.enum(['running', 'exited', 'unknown']).optional(),
     original_token_count: z.number().optional().describe('Approximate token count before output truncation.'),
-    output: z.string().describe('Command output text, possibly truncated.')
+    output: z.string().describe('Command output text, possibly truncated; empty for a status snapshot.')
   })
   .strict();
 
@@ -220,6 +223,19 @@ const machineScopedUnifiedExecOutputSchema = unifiedExecOutputSchema.extend({
     .object({ id: z.string(), name: z.string() })
     .describe('Stable local machine identity for multi-machine attribution.')
 });
+
+function commandStatusResult(status: CommandStatus): ToolResult {
+  const exitCode = status.state === 'exited' ? status.exitCode : null;
+  return {
+    content: [{ type: 'text', text: `Command status: ${status.state}${exitCode === null ? '' : ` (exit code ${exitCode})`}` }],
+    structuredContent: {
+      command_status: status.state,
+      ...(exitCode === null ? {} : { exit_code: exitCode }),
+      output: '',
+      wall_time_seconds: 0
+    }
+  };
+}
 
 /** Whether the one-time note about a discovered toolchain has already been logged. */
 let toolchainLogged = false;
@@ -802,6 +818,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             });
             // Which chat may later write to this session id. Codex gets this for free from a
             // per-conversation manager; see codex/ownership.ts for why one is needed here.
+            let statusHandle: string | undefined;
             if (output.processId === null) {
               forgetExecOwner(processId);
             } else {
@@ -823,8 +840,14 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
                 );
               }
               noteExecOwner(output.processId, principal);
+              // Anonymous or transport-only principals retain legacy polling, but do not
+              // receive a handle that cannot be queried with exact conversation evidence.
+              if (owner && output.statusHandle &&
+                  unifiedExecManager.bindStatusOwner(output.processId, output.statusHandle, owner)) {
+                statusHandle = output.statusHandle;
+              }
             }
-            const responseText = execCommandResponseText(output);
+            const responseText = execCommandResponseText(output, statusHandle);
             // A search that found nothing exits 1 and has not failed. Recording it as an
             // error made a session's error count meaningless; see exec-hints.ts for why this
             // cannot launder a real failure. `benign` only ever *withholds* the error mark —
@@ -872,7 +895,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             ];
             return {
               content: [{ type: 'text' as const, text: withExecNotes(responseText, notes) }],
-              structuredContent: execCommandStructuredOutput(output)
+              structuredContent: execCommandStructuredOutput(output, statusHandle)
             };
           } catch (error) {
             const detail = error instanceof UnifiedExecError ? error.debug() : friendlyError(error);
@@ -888,18 +911,33 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
         inputSchema: z
           .object({
             session_id: int32Number.describe(WRITE_STDIN_SESSION_ID_DESCRIPTION),
+            mode: z.literal('status').optional().describe('Read status only; omit for standard stdin and output polling.'),
+            status_handle: z.uuid().optional().describe('Handle returned by exec_command; required for status mode.'),
             chars: z.string().optional().describe(WRITE_STDIN_CHARS_DESCRIPTION),
             yield_time_ms: unsignedIntegerNumber.optional().describe(WRITE_STDIN_YIELD_TIME_DESCRIPTION),
             max_output_tokens: unsignedIntegerNumber.optional().describe(MAX_OUTPUT_TOKENS_DESCRIPTION)
           })
-          .strict(),
+          .strict()
+          .superRefine((input, ctx) => {
+            if (input.mode === 'status') {
+              if (input.status_handle === undefined) {
+                ctx.addIssue({ code: 'custom', path: ['status_handle'], message: 'Status mode requires status_handle.' });
+              }
+              for (const field of ['chars', 'yield_time_ms', 'max_output_tokens'] as const) {
+                if (input[field] !== undefined) {
+                  ctx.addIssue({ code: 'custom', path: [field], message: 'Not used in status mode.' });
+                }
+              }
+            } else if (input.status_handle !== undefined) {
+              ctx.addIssue({ code: 'custom', path: ['status_handle'], message: 'status_handle requires status mode.' });
+            }
+          }),
         outputSchema: ctx.machine ? machineScopedUnifiedExecOutputSchema : unifiedExecOutputSchema
       },
       async (input) =>
         reg.guarded('command', 'write_stdin', async () => {
-          // A session id is a small integer that means nothing outside the chat that was given
-          // it, and every chat reaches the same manager here. Refuse only what is proven to
-          // belong elsewhere; an unproven caller keeps working exactly as before.
+          // Both modes resolve the same exact request evidence before inspecting a session.
+          // Browser evidence can arrive after the dispatcher's first look.
           const caller = currentCaller();
           let asking = provenConversation(caller.requestId, caller.conversationId);
           const call = currentCall();
@@ -909,6 +947,21 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             });
             if (asking) call.caller.conversationId = asking;
           }
+          if (input.mode === 'status') {
+            if (!asking || !input.status_handle || execOwnershipDenied(input.session_id, asking)) {
+              return commandStatusResult({ state: 'unknown' });
+            }
+            try {
+              const scope = swarmRunning() ? currentRunTerminalSandbox(effectiveRootsForCall(ctx)) : undefined;
+              return commandStatusResult(unifiedExecManager.commandStatus(
+                input.session_id, input.status_handle, asking, scope?.authority
+              ));
+            } catch {
+              // A lost or inaccessible scope must not reveal whether the process still exists.
+              return commandStatusResult({ state: 'unknown' });
+            }
+          }
+          // Only the ordinary stdin/output path retains the legacy anonymous and transport principals.
           const principal = execCallerPrincipal(asking, call?.caller.transportKey ?? caller.transportKey);
           if (ctx.runtimeProfile === 'cli' && principal === null) {
             return fail(

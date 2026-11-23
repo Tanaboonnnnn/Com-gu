@@ -36,6 +36,7 @@ import { resetWorkspaces, setWorkspaceFor } from '../src/main/workspace.js';
 import { DEFAULT_CAPABILITIES, type Capabilities, type Root } from '../src/shared/types.js';
 import { emptyEvidence, noteExec, noteOutcome, runInCallContext, type CallContext } from '../src/main/mcp/call-context.js';
 import { observeRequestCorrelation, resetCorrelationRegistryForTests } from '../src/main/session/correlation.js';
+import * as recorderRuntime from '../src/main/session/recorder.js';
 import { execOwner, noteExecOwner, resetExecOwnershipForTests } from '../src/main/codex/ownership.js';
 import { unifiedExecManager } from '../src/main/codex/manager.js';
 import { locateRipgrep } from '../src/main/ripgrep.js';
@@ -3101,6 +3102,8 @@ describe('exec_command and write_stdin', () => {
 
     expect(Object.keys(stdin.inputSchema.properties)).toEqual([
       'session_id',
+      'mode',
+      'status_handle',
       'chars',
       'yield_time_ms',
       'max_output_tokens'
@@ -3406,6 +3409,109 @@ describe('exec sessions belong to the chat that opened them', () => {
     expect(owner.body.result?.isError).not.toBe(true);
     expect(textOf(owner)).toContain('echo=bye');
     expect(textOf(owner)).toContain('Process exited with code 0');
+  });
+
+  it('reports only same-chat command status without draining output or following a reused id', async () => {
+    await unifiedExecManager.terminateAllProcesses();
+    const owner = 'wfr_execstatus_owner';
+    const stranger = 'wfr_execstatus_stranger';
+    const ownerChat = 'conv-execstatus-owner';
+    expect(prove(owner, ownerChat)).toBe('stored');
+    expect(prove(stranger, 'conv-execstatus-stranger')).toBe('stored');
+    const script = [
+      "const fs = require('node:fs'); let printed = false;",
+      "setInterval(() => {",
+      "  if (!printed && fs.existsSync('status-emit')) {",
+      "    printed = true;",
+      "    process.stdout.write('status-output-fixture\\n', () => fs.writeFileSync('status-written', 'yes'));",
+      "  }",
+      "  if (fs.existsSync('status-exit')) process.exit(7);",
+      "}, 20);"
+    ].join('\n');
+    await fs.writeFile(path.join(approved, 'status-fixture.cjs'), script);
+    await fs.writeFile(path.join(approved, 'status-second.cjs'), 'setInterval(() => {}, 1000)');
+    const random = vi.spyOn(Math, 'random');
+    const start = (file: string) => {
+      // Force only the first allocation candidate; a leaked reservation must fail the
+      // assertion rather than trapping the allocator in a constant-RNG loop.
+      random.mockReturnValueOnce(0);
+      return asChat(owner, 'exec_command', {
+        cmd: 'node ' + file, workdir: '/workspace', tty: false, yield_time_ms: 250
+      });
+    };
+    const snapshot = (requestId: string, id: number, handle: string) =>
+      asChat(requestId, 'write_stdin', { session_id: id, mode: 'status', status_handle: handle });
+    try {
+      const first = await start('status-fixture.cjs');
+      expect(first.body.result?.isError, textOf(first)).not.toBe(true);
+      const initial = first.body.result?.structuredContent;
+      expect(initial).toMatchObject({ session_id: 1_000, status_handle: expect.any(String) });
+      const id = initial.session_id;
+      const handle = initial.status_handle;
+      const args = { session_id: id, mode: 'status', status_handle: handle };
+
+      const other = await snapshot(stranger, id, handle);
+      const unidentified = await rawPost(endpoint.urls.core, JSON.stringify({
+        jsonrpc: '2.0', id: nextId++, method: 'tools/call', params: { name: 'write_stdin', arguments: args }
+      }));
+      for (const result of [other.body.result?.structuredContent, decode(unidentified).result?.structuredContent]) {
+        expect(result).toEqual({ command_status: 'unknown', output: '', wall_time_seconds: 0 });
+      }
+      for (const invalid of [{ ...args, chars: '' }, { session_id: id, mode: 'status' }, { session_id: id, status_handle: handle }]) {
+        expect(failed(await asChat(owner, 'write_stdin', invalid))).toBe(true);
+      }
+
+      await fs.writeFile(path.join(approved, 'status-emit'), 'yes');
+      await vi.waitFor(() => fs.access(path.join(approved, 'status-written')), { timeout: 5_000 });
+      const running = await snapshot(owner, id, handle);
+      expect(running.body.result?.structuredContent).toEqual({ command_status: 'running', output: '', wall_time_seconds: 0 });
+      const lateRequest = 'wfr_execstatus_late';
+      const awaitOrigin = recorderRuntime.awaitFreshCallOrigin;
+      let waits = 0;
+      const lateOrigin = vi.spyOn(recorderRuntime, 'awaitFreshCallOrigin').mockImplementation(async (...params) => {
+        if (params[3]?.requestId === lateRequest) {
+          if (++waits === 1) return null; // The dispatch wait completes before the matching page report.
+          expect(prove(lateRequest, ownerChat)).toBe('stored');
+        }
+        return awaitOrigin(...params);
+      });
+      try {
+        const late = await snapshot(lateRequest, id, handle);
+        expect(late.body.result?.structuredContent).toEqual({
+          command_status: 'running', output: '', wall_time_seconds: 0
+        });
+      } finally {
+        lateOrigin.mockRestore();
+      }
+      expect(unifiedExecManager.commandStatus(id, handle, 'conv-execstatus-stranger')).toEqual({ state: 'unknown' });
+      expect(unifiedExecManager.commandStatus(id, handle, ownerChat, {
+        conversationId: ownerChat, runId: 'other-run', scopeFingerprint: 'different-authority'
+      })).toEqual({ state: 'unknown' });
+      const poll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 2_000 });
+      expect(textOf(poll)).toContain('status-output-fixture');
+
+      await fs.writeFile(path.join(approved, 'status-exit'), 'yes');
+      await vi.waitFor(() => expect(unifiedExecManager.listProcesses()).toEqual([]), { timeout: 5_000 });
+      const ended = await snapshot(owner, id, handle);
+      expect(ended.body.result?.structuredContent).toEqual({
+        command_status: 'exited', exit_code: 7, output: '', wall_time_seconds: 0
+      });
+      const finalPoll = await asChat(owner, 'write_stdin', { session_id: id, yield_time_ms: 250 });
+      expect(finalPoll.body.result?.structuredContent).toMatchObject({ exit_code: 7 });
+      const next = await start('status-second.cjs');
+      expect(next.body.result?.structuredContent).toMatchObject({ session_id: id, status_handle: expect.any(String) });
+      const newHandle = next.body.result.structuredContent.status_handle;
+      expect(newHandle).not.toBe(handle);
+      expect((await snapshot(owner, id, handle)).body.result?.structuredContent).toEqual({
+        command_status: 'unknown', output: '', wall_time_seconds: 0
+      });
+      expect((await snapshot(owner, id, newHandle)).body.result?.structuredContent).toEqual({
+        command_status: 'running', output: '', wall_time_seconds: 0
+      });
+    } finally {
+      random.mockRestore();
+      await unifiedExecManager.terminateAllProcesses();
+    }
   });
 
   it('does not let a stale owner inherit a recycled process id during the new exec yield', async () => {
