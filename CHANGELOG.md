@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.3.6] - Unreleased
+
+- Add a read-only `write_stdin` status mode for live terminal sessions issued an authenticated same-chat status handle. It reports command state without consuming output or sending input.
+- Unattributed chats cannot use status mode. Unknown status does not prove that a command exited, and ordinary output polling is unchanged.
+
 ## [3.3.5] - Unreleased
 
 - Stop the Windows non-PTY process tree when a terminal session is interrupted, not only the direct child.
